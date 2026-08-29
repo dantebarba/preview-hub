@@ -26,16 +26,20 @@ preview stack:
 
 ## Quickstart
 
-From the `hub/` directory:
+Install the launcher (see [Install the launcher](#install-the-launcher)), then run
+the hub with the CLI. The only runtime dependencies are **docker** (to run the hub
+and read the socket) and, to publish it on your tailnet, **tailscale**:
 
 ```sh
-docker compose up -d
+preview hub up        # pulls ghcr.io/dantebarba/preview-hub and runs it
+preview hub expose    # serve it on your tailnet on a dedicated HTTPS port
 ```
 
-The hub listens on `HUB_PORT` (default `8788`) and reads the Docker socket
-read-only to discover previews. Copy `.env.example` to `.env` if you want to
-override the port or the poll interval; both have safe defaults, so `.env` is
-optional.
+`preview hub up` runs the hub container with the Docker socket mounted **read-only**
+so it can discover previews, publishes `HUB_PORT` (default `8788`), and sets
+`restart: unless-stopped`. Manage it with `preview hub {down,status,logs}`. The
+published image is `ghcr.io/dantebarba/preview-hub:latest` (override with
+`PREVIEW_HUB_IMAGE`).
 
 Verify it locally:
 
@@ -44,11 +48,25 @@ curl http://127.0.0.1:8788/health      # -> ok
 curl http://127.0.0.1:8788/api/previews
 ```
 
+<details>
+<summary>Alternative: run from a clone with docker compose</summary>
+
+From the `hub/` directory:
+
+```sh
+docker compose up -d
+```
+
+Copy `.env.example` to `.env` to override the port or poll interval; both have
+safe defaults, so `.env` is optional.
+</details>
+
 ## Serve it over Tailscale (one time)
 
-Publish the hub on your tailnet so the PWA has a stable, installable URL you can
-reach from your phone. Serve it on **its own HTTPS port** so it gets a clean root
-origin, independent of anything already mapped on `/`:
+The easiest way is `preview hub expose`, which runs the command below on a dedicated
+port for you. To do it by hand: publish the hub on your tailnet so the PWA has a
+stable, installable URL you can reach from your phone. Serve it on **its own HTTPS
+port** so it gets a clean root origin, independent of anything already mapped on `/`:
 
 ```sh
 tailscale serve --bg --https=8443 http://127.0.0.1:8788

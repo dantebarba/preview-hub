@@ -417,15 +417,127 @@ cmd_killall() {
   plog "killall done: $n recorded preview(s) stopped. (named volumes kept.)"
 }
 
+## ── hub: run the discovery hub itself ───────────────────────────────────────
+## The hub is machine-global, not per-project, so these commands need no .preview/ — only
+## docker (to run the image and read the socket) and, for `expose`, tailscale. The image is
+## pulled on demand; nothing from this repo needs to be checked out.
+hub_image()   { printf '%s' "${PREVIEW_HUB_IMAGE:-ghcr.io/dantebarba/preview-hub:latest}"; }
+hub_name()    { printf '%s' "${PREVIEW_HUB_NAME:-preview-hub}"; }
+hub_port()    { printf '%s' "${PREVIEW_HUB_PORT:-8788}"; }
+hub_ts_port() { printf '%s' "${PREVIEW_HUB_TS_PORT:-8443}"; }
+
+## Resolve the host's docker socket path (honoring a unix:// DOCKER_HOST) so the hub
+## container can be handed the socket it needs to query the other running containers.
+hub_docker_sock() {
+  case "${DOCKER_HOST:-}" in
+    unix://*) printf '%s' "${DOCKER_HOST#unix://}" ;;
+    *)        printf '/var/run/docker.sock' ;;
+  esac
+}
+
+hub_running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$(hub_name)"; }
+
+## Run the hub container from its published image, mounting the docker socket READ-ONLY so
+## it can discover running previews. Idempotent: a no-op when already running.
+hub_up() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub up'"
+  local name port sock image
+  name="$(hub_name)"; port="$(hub_port)"; sock="$(hub_docker_sock)"; image="$(hub_image)"
+  if hub_running; then plog "hub already running -> http://127.0.0.1:$port/"; return 0; fi
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  [ -S "$sock" ] || pwarn "docker socket '$sock' not found — the hub will show no previews until it can read a socket"
+  plog "starting hub '$name' ($image) on :$port, socket $sock (ro)..."
+  docker run -d \
+    --name "$name" \
+    --restart unless-stopped \
+    -p "$port:$port" \
+    -e HUB_PORT="$port" \
+    -e POLL_INTERVAL_MS="${PREVIEW_HUB_POLL_MS:-10000}" \
+    -v "$sock:/var/run/docker.sock:ro" \
+    "$image" >/dev/null \
+    || die "failed to start the hub (is the image published and public? try 'docker pull $image')"
+  plog "hub up -> http://127.0.0.1:$port/"
+  plog "expose it on your tailnet:  preview hub expose"
+}
+
+## Stop and remove the hub container.
+hub_down() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub down'"
+  if docker rm -f "$(hub_name)" >/dev/null 2>&1; then plog "hub stopped and removed."; else plog "hub was not running."; fi
+}
+
+## Report whether the hub is up, plus its local and tailnet exposure.
+hub_status() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub status'"
+  if hub_running; then
+    plog "hub: up -> http://127.0.0.1:$(hub_port)/"
+    if ts_port_mapped "$(hub_ts_port)"; then plog "  tailscale: exposed on :$(hub_ts_port)"; else plog "  tailscale: not exposed (run: preview hub expose)"; fi
+  else
+    plog "hub: down (run: preview hub up)"
+  fi
+}
+
+## Serve the hub on a dedicated tailnet HTTPS port (opt-in; never touches other mappings).
+hub_expose() {
+  command -v tailscale >/dev/null 2>&1 || die "tailscale is required for 'preview hub expose'"
+  local port="${1:-$(hub_ts_port)}"
+  [ "$port" = "$(hub_port)" ] && die "the tailnet HTTPS port ($port) must differ from the hub's published host port ($(hub_port))"
+  plog "exposing hub on the tailnet: https :$port -> http://127.0.0.1:$(hub_port)"
+  tailscale serve --bg --https="$port" "http://127.0.0.1:$(hub_port)" >/dev/null
+  plog "hub is reachable on your tailnet at port :$port"
+}
+
+## Follow the hub container logs.
+hub_logs() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub logs'"
+  docker logs -f "$(hub_name)"
+}
+
+hub_usage() {
+  cat >&2 <<'EOF'
+usage: preview hub {up|down|status|expose|logs}
+
+  up            run the hub container (pulls the image if needed), mounting the docker
+                socket read-only so it can discover the running previews
+  down          stop and remove the hub container
+  status        whether the hub is running, plus its local / tailnet URLs
+  expose [port] tailscale-serve the hub on a dedicated HTTPS port (default 8443)
+  logs          follow the hub container logs
+
+env:
+  PREVIEW_HUB_IMAGE    image to run (default: ghcr.io/dantebarba/preview-hub:latest)
+  PREVIEW_HUB_PORT     published host port (default: 8788)
+  PREVIEW_HUB_TS_PORT  tailnet HTTPS port for `expose` (default: 8443)
+  PREVIEW_HUB_NAME     container name (default: preview-hub)
+EOF
+}
+
+## Dispatch the `hub` command group. Needs no project .preview/ — it is machine-global.
+cmd_hub() {
+  PREVIEW_SLUG="hub"
+  local sub="${1:-}"; [ "$#" -gt 0 ] && shift || true
+  case "$sub" in
+    up)     hub_up "$@" ;;
+    down)   hub_down ;;
+    status) hub_status ;;
+    expose) hub_expose "$@" ;;
+    logs)   hub_logs ;;
+    -h|--help|help|"") hub_usage ;;
+    *) hub_usage; return 2 ;;
+  esac
+}
+
 ## Print usage.
 usage() {
   cat >&2 <<'EOF'
 usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
+       preview hub {up|down|status|expose|logs}
 
   start    bring up this checkout's preview, expose it over Tailscale, print its URL
   stop     tear down this checkout's preview (also fired by the auto-stop watchdog)
   status   this checkout's preview plus every preview recorded on this machine
   killall  tear down every recorded preview and sweep strays (named volumes kept)
+  hub ...  run the discovery hub itself (its own container); see 'preview hub --help'
 
 env:
   PREVIEW_ID       override the identity (default: current git branch / short SHA)
@@ -438,6 +550,7 @@ EOF
 main() {
   case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
+    hub) shift; cmd_hub "$@"; exit $? ;;
     start|stop|status|killall) ;;
     *) usage; exit 2 ;;
   esac
