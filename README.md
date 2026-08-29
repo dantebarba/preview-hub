@@ -107,8 +107,12 @@ the location with `PREVIEW_BIN_DIR`, or pin a version with `PREVIEW_VERSION`:
 
 ```sh
 curl -fsSL https://github.com/dantebarba/preview-hub/releases/latest/download/install.sh \
-  | PREVIEW_BIN_DIR="$HOME/bin" PREVIEW_VERSION=v0.1.0 sh
+  | PREVIEW_BIN_DIR="$HOME/bin" PREVIEW_VERSION=v0.1.1 sh
 ```
+
+Once installed, `preview hub {up,down,status,expose,logs}` runs the hub itself and
+`preview {start,stop,status,killall}` drives a project's previews — see
+`preview --help`, `preview hub --help`, and [`docs/participate.md`](docs/participate.md).
 
 Then confirm it is on your `PATH`:
 
@@ -160,13 +164,27 @@ services:
 
 ## Configuration
 
-All configuration comes from the environment (see `.env.example`):
+All configuration comes from the environment. The **hub server** (the container,
+whether started by `preview hub up` or docker compose) reads:
 
 | Variable           | Default                       | Purpose                         |
 | ------------------ | ----------------------------- | ------------------------------- |
 | `HUB_PORT`         | `8788`                        | Host and container HTTP port    |
 | `POLL_INTERVAL_MS` | `10000`                       | How often the PWA polls the API |
 | `DOCKER_HOST`      | `unix:///var/run/docker.sock` | Docker endpoint to query        |
+
+The **`preview hub` CLI** reads (all optional):
+
+| Variable              | Default                                | Purpose                                     |
+| --------------------- | -------------------------------------- | ------------------------------------------- |
+| `PREVIEW_HUB_IMAGE`   | `ghcr.io/dantebarba/preview-hub:latest`| Image `preview hub up` runs                 |
+| `PREVIEW_HUB_PORT`    | `8788`                                 | Published host port for the hub container   |
+| `PREVIEW_HUB_TS_PORT` | `8443`                                 | Tailnet HTTPS port for `preview hub expose` |
+| `PREVIEW_HUB_NAME`    | `preview-hub`                          | Hub container name                          |
+
+The **per-project launcher** (`preview start` …) is configured by each project's
+`.preview/config.sh`, plus `PREVIEW_ID`, `PREVIEW_DIR`, and `TIMEOUT_SECONDS`; see
+[`docs/participate.md`](docs/participate.md).
 
 ## Before publishing: scan for secrets and identity
 
