@@ -14,8 +14,8 @@
     </radialGradient>
   </defs>
 
-  <rect width="512" height="512" rx="116" fill="url(#tile)"/>
-  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+  <rect width="512" height="512" fill="url(#tile)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
 
   <g>
     <rect x="112" y="140" width="212" height="150" rx="26" fill="#1e2233" stroke="#ffffff" stroke-opacity="0.06"/>
