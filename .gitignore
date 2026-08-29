@@ -1,0 +1,18 @@
+# Local environment and secrets
+.env
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# Runtime preview state
+.preview-state/
+
+# Local, machine-specific state
+*.local
+
+# macOS
+.DS_Store

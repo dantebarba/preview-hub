@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+#
+# preview — a project-agnostic Tailscale preview engine.
+#
+# Bring up ONE isolated preview stack per checkout, expose it privately over Tailscale,
+# and stamp the labels the Preview Hub discovers it by. The engine owns only the
+# machinery; every project-specific decision lives in a `.preview/` directory the engine
+# discovers by walking up from the current directory:
+#
+#   .preview/config.sh   values (project name, which compose service carries the labels,
+#                        what host:port Tailscale proxies to, ...). Sourced.
+#   .preview/hooks.sh    optional bash functions (on_build/on_up/on_healthcheck/on_down)
+#                        the engine calls at the right moments. Sourced.
+#
+#   preview start      # bring up this checkout's preview, expose it, print its URL
+#   preview stop       # tear it down (also fired automatically by the watchdog)
+#   preview status     # this checkout's preview + every preview recorded on the machine
+#   preview killall    # tear down every recorded preview and sweep strays
+#
+# ── One preview per identity, deterministically ──────────────────────────────
+# The identity is the checked-out git branch (short SHA when detached), overridable with
+# PREVIEW_ID. Everything derives from it, so the same identity always gets the same URL and
+# `stop` needs no lookup — it just recomputes:
+#
+#   ports    sha256(PREVIEW_ID) picks a block of 4 consecutive ports in 40000-59999:
+#            PREVIEW_PORT_0 is the Tailscale HTTPS port (== base), _1.._3 are the app's.
+#            One block per preview, so port families never overlap across previews.
+#   project  docker compose project "<prefix>-<slug>", fully isolated (own volumes/network).
+#   state    <shared .git dir>/preview-hub/<slug>/ — under the SHARED git dir so worktrees
+#            and `killall` all see the same set of previews.
+#
+# Two identities hashing to the same block is possible but rare; it is detected and FAILS
+# LOUDLY on `start` (never silently shared — a shared block means a shared stack). Override
+# with PREVIEW_ID=<name> to re-hash.
+#
+# Nothing machine-specific is baked in: the tailnet host is resolved at runtime from
+# `tailscale status`, and the advertised URL exists only as a runtime Docker label.
+set -euo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+PORT_RANGE_START=40000
+PORT_BUCKETS=5000
+
+## Print an informational line, tagged with the current slug, to stdout.
+plog() { printf '\033[36m[preview:%s]\033[0m %s\n' "${PREVIEW_SLUG:-preview}" "$*"; }
+
+## Print a warning line, tagged with the current slug, to stderr.
+pwarn() { printf '\033[33m[preview:%s]\033[0m %s\n' "${PREVIEW_SLUG:-preview}" "$*" >&2; }
+
+## Warn and exit non-zero.
+die() { pwarn "$*"; exit 1; }
+
+## True when a shell function of the given name is defined (i.e. a hook was provided).
+has_hook() { declare -F "$1" >/dev/null 2>&1; }
+
+## Lowercase, collapse everything outside [a-z0-9_-] to '-', trim leading/trailing '-'.
+slugify() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^-+//; s/-+$//'; }
+
+## Every compose call for this preview goes through here so the project isolation and the
+## generated labels override are always applied. Exposed to sourced hooks (on_up MUST use it).
+dc() { docker compose -p "$PREVIEW_COMPOSE_PROJECT" -f "$PREVIEW_COMPOSE_FILE" -f "$PREVIEW_LABELS_OVERRIDE" "$@"; }
+
+## True when a local process is LISTENing on the given TCP port. Uses whichever probe is
+## available (lsof, then ss, then nc) so the collision guard is not silently disabled on a
+## host without lsof.
+port_in_use() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE ":$1([[:space:]]|$)"
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$1" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+## True when Tailscale currently serves HTTPS on the given port (matches the served URL,
+## not a backend proxy target, so an app port on 127.0.0.1 never counts as mapped).
+ts_port_mapped() { tailscale serve status 2>/dev/null | grep -qE "https://[^[:space:]]*:$1([^0-9]|$)"; }
+
+## True when the given docker compose project has at least one running container.
+compose_running() { [ -n "$(docker compose -p "$1" -f "$PREVIEW_COMPOSE_FILE" ps -q 2>/dev/null || true)" ]; }
+
+## True when the pid file exists and names a live process.
+pid_alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+
+## Locate the `.preview/` directory (PREVIEW_DIR override, else walk up from $PWD) and set
+## PREVIEW_DIR (absolute path to it) and PREVIEW_ROOT (the project root that contains it).
+discover_preview_dir() {
+  if [ -n "${PREVIEW_DIR:-}" ]; then
+    [ -d "$PREVIEW_DIR" ] || die "PREVIEW_DIR '$PREVIEW_DIR' is not a directory"
+  else
+    local d="$PWD"
+    while :; do
+      if [ -d "$d/.preview" ]; then PREVIEW_DIR="$d/.preview"; break; fi
+      [ "$d" = "/" ] && break
+      d="$(dirname "$d")"
+    done
+    [ -n "${PREVIEW_DIR:-}" ] || die "no .preview/ directory found from '$PWD' upward; run inside a project that defines one, or set PREVIEW_DIR"
+  fi
+  PREVIEW_DIR="$(cd "$PREVIEW_DIR" && pwd)"
+  PREVIEW_ROOT="$(cd "$PREVIEW_DIR/.." && pwd)"
+}
+
+## Resolve the identity (branch, or short SHA when detached, or PREVIEW_ID override) and its
+## slug. Sets PREVIEW_BRANCH, PREVIEW_ID, PREVIEW_SLUG.
+resolve_identity() {
+  local branch
+  branch="$(git -C "$PREVIEW_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+  [ "$branch" = "HEAD" ] && branch="$(git -C "$PREVIEW_ROOT" rev-parse --short HEAD 2>/dev/null || echo detached)"
+  PREVIEW_BRANCH="$branch"
+  PREVIEW_ID="${PREVIEW_ID:-$branch}"
+  PREVIEW_SLUG="$(slugify "$PREVIEW_ID")"
+  [ -n "$PREVIEW_SLUG" ] || PREVIEW_SLUG="detached"
+}
+
+## Derive the deterministic 4-port block from sha256(PREVIEW_ID). Sets PREVIEW_BASE, TS_PORT
+## and PREVIEW_PORT_0..3 (PREVIEW_PORT_0 == TS_PORT == PREVIEW_BASE).
+compute_ports() {
+  local hash
+  hash="$(printf '%s' "$PREVIEW_ID" \
+    | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null || openssl dgst -sha256 2>/dev/null; } \
+    | grep -oE '[0-9a-f]{64}' | head -n1 | cut -c1-8)"
+  [ -n "$hash" ] || die "could not hash PREVIEW_ID (need one of: shasum, sha256sum, openssl)"
+  PREVIEW_BASE=$(( PORT_RANGE_START + (16#$hash % PORT_BUCKETS) * 4 ))
+  TS_PORT=$PREVIEW_BASE
+  PREVIEW_PORT_0=$PREVIEW_BASE
+  PREVIEW_PORT_1=$(( PREVIEW_BASE + 1 ))
+  PREVIEW_PORT_2=$(( PREVIEW_BASE + 2 ))
+  PREVIEW_PORT_3=$(( PREVIEW_BASE + 3 ))
+}
+
+## Name the worktree: the toplevel's basename for a LINKED worktree (git-dir != common-dir),
+## otherwise "Root Worktree". Sets PREVIEW_WORKTREE.
+resolve_worktree() {
+  local gd cd
+  gd="$(git -C "$PREVIEW_ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  cd="$(git -C "$PREVIEW_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$gd" ] && [ -n "$cd" ] && [ "$gd" != "$cd" ]; then
+    PREVIEW_WORKTREE="$(basename "$(git -C "$PREVIEW_ROOT" rev-parse --show-toplevel 2>/dev/null || echo "$PREVIEW_ROOT")")"
+  else
+    PREVIEW_WORKTREE="Root Worktree"
+  fi
+}
+
+## Source .preview/config.sh (required) then .preview/hooks.sh (optional) into this shell,
+## with the identity and port env already exported so config may reference $PREVIEW_PORT_1.
+load_config() {
+  [ -f "$PREVIEW_DIR/config.sh" ] || die "missing $PREVIEW_DIR/config.sh"
+  . "$PREVIEW_DIR/config.sh"
+  if [ -f "$PREVIEW_DIR/hooks.sh" ]; then
+    . "$PREVIEW_DIR/hooks.sh"
+  fi
+}
+
+## Validate required config, apply defaults, and derive the compose project and state paths.
+finalize_config() {
+  : "${PREVIEW_PROJECT:?PREVIEW_PROJECT must be set in .preview/config.sh}"
+  : "${PREVIEW_LABEL_SERVICE:?PREVIEW_LABEL_SERVICE must be set in .preview/config.sh}"
+  : "${PREVIEW_SERVE_TARGET:?PREVIEW_SERVE_TARGET must be set in .preview/config.sh}"
+  PREVIEW_DESC="${PREVIEW_DESC:-}"
+  PREVIEW_COMPOSE_FILE="${PREVIEW_COMPOSE_FILE:-docker-compose.yml}"
+  case "$PREVIEW_COMPOSE_FILE" in
+    /*) ;;
+    *) PREVIEW_COMPOSE_FILE="$PREVIEW_ROOT/$PREVIEW_COMPOSE_FILE" ;;
+  esac
+  PREVIEW_COMPOSE_PROJECT_PREFIX="${PREVIEW_COMPOSE_PROJECT_PREFIX:-$(slugify "$PREVIEW_PROJECT")}"
+  PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$PREVIEW_SLUG"
+
+  local git_common
+  git_common="$(git -C "$PREVIEW_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$PREVIEW_ROOT/.git")"
+  STATE_ROOT="$git_common/preview-hub"
+  STATE_DIR="$STATE_ROOT/$PREVIEW_SLUG"
+  PREVIEW_STATE_DIR="$STATE_DIR"
+  PREVIEW_LABELS_OVERRIDE="$STATE_DIR/labels.yml"
+}
+
+## Resolve identity, ports, worktree, config and derived paths for every command. Exports the
+## contract's PREVIEW_* variables so the compose files, hooks and re-invoked children see them.
+setup() {
+  TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-21600}"
+  discover_preview_dir
+  resolve_identity
+  compute_ports
+  resolve_worktree
+  export PREVIEW_ID PREVIEW_SLUG PREVIEW_BRANCH PREVIEW_WORKTREE PREVIEW_ROOT PREVIEW_DIR
+  export PREVIEW_BASE TS_PORT PREVIEW_PORT_0 PREVIEW_PORT_1 PREVIEW_PORT_2 PREVIEW_PORT_3
+  load_config
+  finalize_config
+  export PREVIEW_PROJECT PREVIEW_DESC PREVIEW_COMPOSE_FILE PREVIEW_COMPOSE_PROJECT_PREFIX
+  export PREVIEW_COMPOSE_PROJECT PREVIEW_STATE_DIR PREVIEW_LABELS_OVERRIDE
+  export -f dc plog pwarn
+}
+
+## Resolve this machine's Tailscale DNS name at runtime (never hardcoded) and set PREVIEW_URL.
+## Prefers python3's JSON parse of `tailscale status --json`, falls back to a text parse of the
+## same output; fails loudly when neither yields a host.
+resolve_url() {
+  local host=""
+  if command -v python3 >/dev/null 2>&1; then
+    host="$(tailscale status --json 2>/dev/null \
+      | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("Self") or {}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
+  fi
+  if [ -z "$host" ]; then
+    host="$(tailscale status --json 2>/dev/null \
+      | grep -oE '"DNSName"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | head -n1 | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+    host="${host%.}"
+  fi
+  [ -n "$host" ] || die "could not resolve this machine's Tailscale DNS name (is 'tailscale' up with MagicDNS enabled?)"
+  PREVIEW_URL="https://$host:$TS_PORT/"
+  export PREVIEW_URL
+}
+
+## Write the compose override that adds the five preview.* labels to PREVIEW_LABEL_SERVICE.
+## Label values are written as ${PREVIEW_LABEL_*} interpolations, resolved by compose at `dc`
+## time, so no runtime value (URL, branch, ...) is ever persisted into the file.
+write_labels_override() {
+  mkdir -p "$STATE_DIR"
+  {
+    printf 'services:\n'
+    printf '  %s:\n' "$PREVIEW_LABEL_SERVICE"
+    printf '    labels:\n'
+    printf '      preview.url: "${PREVIEW_LABEL_URL}"\n'
+    printf '      preview.project: "${PREVIEW_LABEL_PROJECT}"\n'
+    printf '      preview.branch: "${PREVIEW_LABEL_BRANCH}"\n'
+    printf '      preview.worktree: "${PREVIEW_LABEL_WORKTREE}"\n'
+    printf '      preview.desc: "${PREVIEW_LABEL_DESC}"\n'
+  } >"$PREVIEW_LABELS_OVERRIDE"
+}
+
+## Fail loudly when this identity has no recorded state yet but its port block or Tailscale
+## mapping is already busy — sharing would mean sharing another preview's stack.
+collision_guard() {
+  [ -d "$STATE_DIR" ] && return 0
+  local p busy=""
+  for p in "$PREVIEW_PORT_0" "$PREVIEW_PORT_1" "$PREVIEW_PORT_2" "$PREVIEW_PORT_3"; do
+    port_in_use "$p" && busy="$busy $p"
+  done
+  ts_port_mapped "$TS_PORT" && busy="$busy tailscale:$TS_PORT"
+  if [ -n "$busy" ]; then
+    pwarn "port block $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )) for '$PREVIEW_ID' is already in use:$busy"
+    pwarn "another preview likely hashed to the same block, or a stray process holds it."
+    pwarn "run 'preview status' to see live previews, or set PREVIEW_ID=<name> to re-hash."
+    exit 1
+  fi
+}
+
+## Kill the auto-stop watchdog AND its child `sleep` for a state dir (killing only the parent
+## orphans the sleep, which then lingers harmlessly for hours), and drop its bookkeeping.
+stop_watchdog() {
+  local dir="$1" w
+  if pid_alive "$dir/watchdog.pid"; then
+    w="$(cat "$dir/watchdog.pid")"
+    pkill -P "$w" 2>/dev/null || true
+    kill "$w" 2>/dev/null || true
+  fi
+  rm -f "$dir/watchdog.pid" "$dir/deadline"
+}
+
+## (Re)arm the detached auto-stop watchdog: after TIMEOUT_SECONDS it re-invokes this engine as
+## `stop` with the identity and .preview location pinned, so it stops exactly this preview even
+## if the checkout has since switched branches. Resets the timer on every start.
+reset_watchdog() {
+  stop_watchdog "$STATE_DIR"
+  echo "$(( $(date +%s) + TIMEOUT_SECONDS ))" >"$STATE_DIR/deadline"
+  nohup bash -c 'sleep "$1" && PREVIEW_ID="$2" PREVIEW_DIR="$3" "$4" stop' _ \
+    "$TIMEOUT_SECONDS" "$PREVIEW_ID" "$PREVIEW_DIR" "$SELF" >/dev/null 2>&1 &
+  echo $! >"$STATE_DIR/watchdog.pid"
+  disown -a 2>/dev/null || true
+}
+
+## Best-effort teardown of an orphan state dir whose identity file is missing (e.g. a removed
+## worktree): no on_down context is available, so it only releases the recorded port and stack.
+teardown_dir() {
+  local dir="$1" slug base
+  slug="$(basename "$dir")"
+  base="$(cat "$dir/base" 2>/dev/null || true)"
+  plog "tearing down orphan state '$slug'..."
+  stop_watchdog "$dir"
+  [ -n "$base" ] && tailscale serve --https="$base" off >/dev/null 2>&1 || true
+  docker compose -p "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
+  rm -rf "$dir"
+}
+
+## List every docker compose project name known to the engine (compose ls), python3 if present
+## else a text parse.
+list_compose_projects() {
+  local json
+  json="$(docker compose ls -a --format json 2>/dev/null || true)"
+  [ -n "$json" ] || return 0
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$json" | python3 -c 'import sys,json;[print(p["Name"]) for p in json.load(sys.stdin)]' 2>/dev/null || true
+  else
+    printf '%s' "$json" | grep -oE '"Name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/'
+  fi
+}
+
+## List every Tailscale-served port inside the preview range 40000-59999.
+mapped_preview_ports() {
+  tailscale serve status 2>/dev/null | grep -oE ':[0-9]{5}' | tr -d ':' \
+    | awk '$1>=40000 && $1<=59999' | sort -u
+}
+
+## start: expose this checkout's preview and print its URL.
+cmd_start() {
+  collision_guard
+  resolve_url
+  mkdir -p "$STATE_DIR"
+  export PREVIEW_LABEL_URL="$PREVIEW_URL" \
+         PREVIEW_LABEL_PROJECT="$PREVIEW_PROJECT" \
+         PREVIEW_LABEL_BRANCH="$PREVIEW_BRANCH" \
+         PREVIEW_LABEL_WORKTREE="$PREVIEW_WORKTREE" \
+         PREVIEW_LABEL_DESC="$PREVIEW_DESC"
+  write_labels_override
+
+  plog "starting '$PREVIEW_ID' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT'"
+  if has_hook on_build; then plog "on_build..."; on_build; fi
+  if has_hook on_up; then plog "on_up..."; on_up; else plog "bringing services up..."; dc up -d; fi
+  if has_hook on_healthcheck; then plog "on_healthcheck..."; on_healthcheck; fi
+
+  plog "exposing over Tailscale on :$TS_PORT -> http://$PREVIEW_SERVE_TARGET"
+  tailscale serve --bg --https="$TS_PORT" "http://$PREVIEW_SERVE_TARGET" >/dev/null
+
+  reset_watchdog
+  printf '%s\n' "$PREVIEW_ID" >"$STATE_DIR/id"
+  printf '%s\n' "$PREVIEW_ROOT" >"$STATE_DIR/root"
+  printf '%s\n' "$PREVIEW_BASE" >"$STATE_DIR/base"
+  printf '%s\n' "$PREVIEW_URL" >"$STATE_DIR/url"
+
+  echo
+  plog "preview is up:  $PREVIEW_URL"
+  plog "auto-stops in $(( TIMEOUT_SECONDS / 3600 ))h (or run: preview stop)"
+}
+
+## stop: tear down this checkout's preview. Order: on_down (best effort) -> Tailscale off for
+## the recorded base -> compose down (named volumes kept) -> remove the state dir.
+cmd_stop() {
+  local base="$TS_PORT"
+  [ -f "$STATE_DIR/base" ] && base="$(cat "$STATE_DIR/base")"
+  plog "stopping '$PREVIEW_ID'..."
+  stop_watchdog "$STATE_DIR"
+  if has_hook on_down; then on_down || pwarn "on_down hook reported an error; continuing teardown"; fi
+  tailscale serve --https="$base" off >/dev/null 2>&1 || true
+  docker compose -p "$PREVIEW_COMPOSE_PROJECT" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
+  rm -rf "$STATE_DIR"
+  plog "stopped. (named volumes kept; other tailscale mappings untouched.)"
+}
+
+## status: this checkout's preview plus every preview recorded on the machine.
+cmd_status() {
+  plog "this checkout: '$PREVIEW_ID' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT', worktree '$PREVIEW_WORKTREE'"
+  if [ -d "$STATE_DIR" ]; then
+    local url; url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)')"
+    if compose_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  docker: up"; else plog "  docker: down"; fi
+    if ts_port_mapped "$TS_PORT"; then plog "  tailscale serve: up -> $url"; else plog "  tailscale serve (:$TS_PORT): down"; fi
+    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
+      local left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
+    else
+      plog "  auto-stop watchdog: down"
+    fi
+  else
+    plog "  not running"
+  fi
+
+  plog "all previews on this machine:"
+  local dir id url any=0
+  for dir in "$STATE_ROOT"/*/; do
+    [ -d "$dir" ] || continue
+    any=1
+    dir="${dir%/}"
+    id="$(cat "$dir/id" 2>/dev/null || basename "$dir")"
+    url="$(cat "$dir/url" 2>/dev/null || echo '(starting)')"
+    if compose_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
+      plog "  • $id  $url  [up]"
+    else
+      plog "  • $id  $url  [down]"
+    fi
+  done
+  [ "$any" -eq 1 ] || plog "  (none)"
+}
+
+## killall: stop every recorded preview (re-invoking `stop` per identity so on_down runs with
+## the right context), then sweep strays — compose projects under our prefix and Tailscale
+## mappings inside 40000-59999. Named volumes are kept; `tailscale serve reset` is never used.
+cmd_killall() {
+  local dir id n=0
+  for dir in "$STATE_ROOT"/*/; do
+    [ -d "$dir" ] || continue
+    dir="${dir%/}"
+    id="$(cat "$dir/id" 2>/dev/null || true)"
+    if [ -n "$id" ]; then
+      PREVIEW_ID="$id" PREVIEW_DIR="$PREVIEW_DIR" "$SELF" stop || pwarn "failed to stop '$id' cleanly"
+    else
+      teardown_dir "$dir"
+    fi
+    n=$(( n + 1 ))
+  done
+
+  local proj port
+  for proj in $(list_compose_projects); do
+    case "$proj" in
+      "$PREVIEW_COMPOSE_PROJECT_PREFIX"-*)
+        plog "sweeping stray compose project '$proj'..."
+        docker compose -p "$proj" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
+        ;;
+    esac
+  done
+  for port in $(mapped_preview_ports); do
+    plog "sweeping stray tailscale mapping :$port..."
+    tailscale serve --https="$port" off >/dev/null 2>&1 || true
+  done
+
+  plog "killall done: $n recorded preview(s) stopped. (named volumes kept.)"
+}
+
+## Print usage.
+usage() {
+  cat >&2 <<'EOF'
+usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
+
+  start    bring up this checkout's preview, expose it over Tailscale, print its URL
+  stop     tear down this checkout's preview (also fired by the auto-stop watchdog)
+  status   this checkout's preview plus every preview recorded on this machine
+  killall  tear down every recorded preview and sweep strays (named volumes kept)
+
+env:
+  PREVIEW_ID       override the identity (default: current git branch / short SHA)
+  PREVIEW_DIR      path to the .preview directory (default: found by walking up from $PWD)
+  TIMEOUT_SECONDS  auto-stop delay in seconds (default: 21600 = 6h)
+EOF
+}
+
+## Validate the subcommand before touching a project, then run it.
+main() {
+  case "${1:-}" in
+    -h|--help|help) usage; exit 0 ;;
+    start|stop|status|killall) ;;
+    *) usage; exit 2 ;;
+  esac
+  setup
+  case "$1" in
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    status)  cmd_status ;;
+    killall) cmd_killall ;;
+  esac
+}
+
+main "$@"

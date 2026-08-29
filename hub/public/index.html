@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Preview Hub</title>
+  <meta name="description" content="Live preview deployments across your projects, in one place.">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="topbar" aria-hidden="true"></div>
+
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="2.5" y="4" width="13" height="9.5" rx="2.6" fill="var(--surface-3)" stroke="var(--border-strong)" stroke-width="1"/>
+            <rect x="6" y="7.5" width="13.5" height="10" rx="2.8" fill="url(#brandmark)"/>
+            <circle cx="9.3" cy="10.8" r="1.25" fill="#46c98a"/>
+            <rect x="11.6" y="10" width="5.4" height="1.5" rx="0.75" fill="#ffffff" opacity="0.9"/>
+            <rect x="8.1" y="13.3" width="9" height="1.35" rx="0.67" fill="#ffffff" opacity="0.5"/>
+            <defs>
+              <linearGradient id="brandmark" x1="6" y1="7.5" x2="19.5" y2="17.5" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#8b95ff"/>
+                <stop offset="1" stop-color="#5a67e8"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        <span class="brand__name">Preview Hub</span>
+      </div>
+
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="status__dot" data-state="idle" aria-hidden="true"></span>
+        <span class="status__text" id="status-text">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="app" id="app"></main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

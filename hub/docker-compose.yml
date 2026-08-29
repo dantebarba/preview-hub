@@ -1,0 +1,11 @@
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${HUB_PORT:-8788}:${HUB_PORT:-8788}"
+    environment:
+      HUB_PORT: "${HUB_PORT:-8788}"
+      POLL_INTERVAL_MS: "${POLL_INTERVAL_MS:-10000}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
