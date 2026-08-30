@@ -493,13 +493,25 @@ hub_logs() {
   docker logs -f "$(hub_name)"
 }
 
+## Pull the newest hub image from the registry and recreate the container from it.
+hub_update() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub update'"
+  local image; image="$(hub_image)"
+  plog "pulling the latest hub image ($image)..."
+  docker pull "$image" >/dev/null 2>&1 || die "failed to pull $image (is the package public? try 'docker pull $image')"
+  docker rm -f "$(hub_name)" >/dev/null 2>&1 || true
+  hub_up
+  plog "hub updated to the latest image."
+}
+
 hub_usage() {
   cat >&2 <<'EOF'
-usage: preview hub {up|down|status|expose|logs}
+usage: preview hub {up|down|update|status|expose|logs}
 
   up            run the hub container (pulls the image if needed), mounting the docker
                 socket read-only so it can discover the running previews
   down          stop and remove the hub container
+  update        pull the newest hub image from GitHub and recreate the container
   status        whether the hub is running, plus its local / tailnet URLs
   expose [port] tailscale-serve the hub on a dedicated HTTPS port (default 8443)
   logs          follow the hub container logs
@@ -519,6 +531,7 @@ cmd_hub() {
   case "$sub" in
     up)     hub_up "$@" ;;
     down)   hub_down ;;
+    update) hub_update ;;
     status) hub_status ;;
     expose) hub_expose "$@" ;;
     logs)   hub_logs ;;
@@ -527,17 +540,40 @@ cmd_hub() {
   esac
 }
 
+## Replace the installed `preview` CLI with the newest release from GitHub. Refuses when the
+## on-PATH `preview` is a symlink to a checkout (a dev install), since that should be updated
+## with `git pull` rather than overwritten.
+self_update() {
+  command -v curl >/dev/null 2>&1 || die "curl is required for 'preview self-update'"
+  local url target tmp
+  url="https://github.com/dantebarba/preview-hub/releases/latest/download/preview"
+  target="$(command -v preview 2>/dev/null || printf '%s' "$SELF")"
+  if [ -L "$target" ]; then
+    die "'$target' is a symlink to a checkout (dev install) — update it with 'git pull' there, or install a standalone copy via the install.sh one-liner in the README."
+  fi
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT INT TERM
+  plog "downloading the latest preview CLI from GitHub..."
+  curl -fSL --proto '=https' --tlsv1.2 "$url" -o "$tmp" || die "download failed"
+  head -n1 "$tmp" | grep -q '^#!.*bash' || die "downloaded file is not the preview launcher"
+  chmod +x "$tmp"
+  mv "$tmp" "$target"
+  trap - EXIT INT TERM
+  plog "updated preview -> $target"
+}
+
 ## Print usage.
 usage() {
   cat >&2 <<'EOF'
 usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
-       preview hub {up|down|status|expose|logs}
+       preview hub {up|down|update|status|expose|logs}
+       preview self-update
 
-  start    bring up this checkout's preview, expose it over Tailscale, print its URL
-  stop     tear down this checkout's preview (also fired by the auto-stop watchdog)
-  status   this checkout's preview plus every preview recorded on this machine
-  killall  tear down every recorded preview and sweep strays (named volumes kept)
-  hub ...  run the discovery hub itself (its own container); see 'preview hub --help'
+  start        bring up this checkout's preview, expose it over Tailscale, print its URL
+  stop         tear down this checkout's preview (also fired by the auto-stop watchdog)
+  status       this checkout's preview plus every preview recorded on this machine
+  killall      tear down every recorded preview and sweep strays (named volumes kept)
+  hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
+  self-update  replace this CLI with the newest release from GitHub
 
 env:
   PREVIEW_ID       override the identity (default: current git branch / short SHA)
@@ -551,6 +587,7 @@ main() {
   case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
     hub) shift; cmd_hub "$@"; exit $? ;;
+    self-update) self_update; exit $? ;;
     start|stop|status|killall) ;;
     *) usage; exit 2 ;;
   esac

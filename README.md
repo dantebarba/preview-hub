@@ -131,6 +131,14 @@ chmod +x ~/.local/bin/preview
 Working from a clone instead? [`launcher/install.sh`](launcher/install.sh)
 symlinks the repo copy into `~/.local/bin`.
 
+### Updating
+
+- **Update the hub** to the newest published image: `preview hub update` — pulls
+  `ghcr.io/dantebarba/preview-hub:latest` from GitHub and recreates the container.
+- **Update the CLI** itself: `preview self-update` — refetches the latest `preview`
+  from the newest release and replaces it in place. (If you installed from a clone,
+  it's a symlink, so `self-update` will point you to `git pull` instead.)
+
 ## How a project participates
 
 Any project can join by stamping the labels above on its preview containers. The
