@@ -29,7 +29,7 @@ Declares what the launcher needs to know about your stack:
 
 ```sh
 PREVIEW_PROJECT="Acme Widgets"
-PREVIEW_DESC="Widget catalog and checkout"
+PREVIEW_DESC="${PREVIEW_DESC:-Widget catalog and checkout}"
 
 PREVIEW_COMPOSE_FILE="docker-compose.yml"
 PREVIEW_COMPOSE_PROJECT_PREFIX="acme-widgets"
@@ -42,11 +42,22 @@ PREVIEW_SERVE_TARGET="127.0.0.1:${PREVIEW_PORT_1}"
 | Variable                         | Required | Default                     | Meaning |
 | -------------------------------- | -------- | --------------------------- | ------- |
 | `PREVIEW_PROJECT`                | **yes**  | —                           | Project name; becomes the hub grouping key and `preview.project`. |
-| `PREVIEW_DESC`                   | no       | empty                       | Short description; becomes `preview.desc`. |
+| `PREVIEW_DESC`                   | no       | empty                       | Short description; becomes `preview.desc`. Write it as `${PREVIEW_DESC:-...}` so a caller can override it per run (see below). |
 | `PREVIEW_COMPOSE_FILE`           | no       | `docker-compose.yml`        | The compose file the launcher layers the labels override on top of. |
 | `PREVIEW_COMPOSE_PROJECT_PREFIX` | no       | a slug of the project name  | Prefix for the isolated compose project name. |
 | `PREVIEW_LABEL_SERVICE`          | **yes**  | —                           | Which compose service carries the `preview.*` labels. It **must** be a service that `on_up` actually brings up. |
 | `PREVIEW_SERVE_TARGET`           | **yes**  | —                           | The local `host:port` that Tailscale proxies to. May reference the port-block variables, e.g. `${PREVIEW_PORT_1}`. |
+
+**Per-run description.** Write `PREVIEW_DESC` as `${PREVIEW_DESC:-<default>}` and a caller can
+override it for a single `start` to say what *this* preview is for — what changed, or what to
+test — which shows up as the card's subtext in the hub:
+
+```sh
+PREVIEW_DESC="Login screen revamp — check the demo button" preview start
+```
+
+This is handy for a CI job or an agent that knows what it just built; omit it and the preview
+falls back to the config default.
 
 ### `.preview/hooks.sh`
 

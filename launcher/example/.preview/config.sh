@@ -6,7 +6,10 @@
 #
 # The engine reads these:
 #   PREVIEW_PROJECT                 (required) human project name; the hub's grouping key.
-#   PREVIEW_DESC                    (optional) short description shown in the hub.
+#   PREVIEW_DESC                    (optional) short description shown in the hub. Use the
+#                                   ${PREVIEW_DESC:-...} form so a caller can override it per
+#                                   run — e.g. `PREVIEW_DESC="what to test" preview start` —
+#                                   to say what a specific preview is for.
 #   PREVIEW_COMPOSE_FILE            (optional) compose file to use; default docker-compose.yml.
 #   PREVIEW_COMPOSE_PROJECT_PREFIX  (optional) docker compose project prefix; default a slug
 #                                   of PREVIEW_PROJECT. The engine appends the branch/worktree.
@@ -17,7 +20,7 @@
 
 PREVIEW_PROJECT="Acme Widgets"
 
-PREVIEW_DESC="Acme Widgets storefront — preview build"
+PREVIEW_DESC="${PREVIEW_DESC:-Acme Widgets storefront — preview build}"
 
 PREVIEW_COMPOSE_FILE="docker-compose.yml"
 
