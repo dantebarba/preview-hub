@@ -3,11 +3,13 @@
  *
  * Precaches the app shell under a versioned cache so the PWA opens offline, and
  * drops older cache versions on activate. API traffic is always network-only so
- * preview data is never stale; shell assets are served cache-first with a
- * network fallback, and navigations fall back to the cached shell when offline.
+ * preview data is never stale; shell assets are served network-first (refreshing
+ * the cache on every online load, so a new build reaches clients without a cache
+ * bump) and fall back to the cache — then to the cached shell for navigations —
+ * when offline.
  */
 
-const CACHE = "preview-hub-v1";
+const CACHE = "preview-hub-v2";
 
 const SCOPE_PATH = new URL("./", self.location).pathname;
 
@@ -41,15 +43,15 @@ async function dropOldCaches() {
   await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)));
 }
 
-async function cacheFirst(request) {
+async function networkFirst(request) {
   const cache = await caches.open(CACHE);
-  const cached = await cache.match(request, { ignoreSearch: true });
-  if (cached) return cached;
   try {
     const response = await fetch(request);
     if (response.ok && response.type === "basic") cache.put(request, response.clone());
     return response;
   } catch (error) {
+    const cached = await cache.match(request, { ignoreSearch: true });
+    if (cached) return cached;
     if (request.mode === "navigate") {
       const fallback = await cache.match("index.html");
       if (fallback) return fallback;
@@ -78,5 +80,5 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  event.respondWith(cacheFirst(request));
+  event.respondWith(networkFirst(request));
 });
