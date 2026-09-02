@@ -1,0 +1,14 @@
+# The whole mockup preview: one ephemeral nginx serving the built sample pages, the
+# generated menu (at /) and the gallery, bound to loopback on the engine's
+# PREVIEW_PORT_1 (Tailscale proxies to it). Menu and gallery are separate read-only
+# mounts so a capture pass or a manifest edit shows up without a rebuild.
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:${PREVIEW_PORT_1}:80"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./public/menu:/usr/share/nginx/menu:ro
+      - ./public/gallery:/usr/share/nginx/html/gallery:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
