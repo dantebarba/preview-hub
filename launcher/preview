@@ -42,6 +42,10 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 PORT_RANGE_START=40000
 PORT_BUCKETS=5000
 
+PREVIEW_REPO="${PREVIEW_REPO:-dantebarba/preview-hub}"
+PREVIEW_VERSION="${PREVIEW_VERSION:-v0.2.0}"
+PREVIEW_SCAFFOLD_BASE_URL="${PREVIEW_SCAFFOLD_BASE_URL:-https://raw.githubusercontent.com/$PREVIEW_REPO/$PREVIEW_VERSION/launcher/example}"
+
 ## Print an informational line, tagged with the current slug, to stdout.
 plog() { printf '\033[36m[preview:%s]\033[0m %s\n' "${PREVIEW_SLUG:-preview}" "$*"; }
 
@@ -540,6 +544,108 @@ cmd_hub() {
   esac
 }
 
+## ── init: scaffold a project's preview files ────────────────────────────────
+## `preview init` drops the three files a project needs into the current repo — the two
+## `.preview/` config files and the `preview` Claude skill — and reports on the runtime
+## dependencies the engine will need. It needs no existing .preview/; it creates one.
+
+## Warn (never fail) about the runtime tools the engine relies on, so a fresh project learns
+## what is missing before its first `start` rather than at `start` time.
+init_check_deps() {
+  local missing=0
+  command -v docker >/dev/null 2>&1 || { pwarn "missing 'docker' — required to build and run previews"; missing=1; }
+  docker compose version >/dev/null 2>&1 || { pwarn "missing 'docker compose' — required to run the preview stack"; missing=1; }
+  command -v tailscale >/dev/null 2>&1 || { pwarn "missing 'tailscale' — required to expose previews on your tailnet"; missing=1; }
+  if ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+    pwarn "missing a SHA-256 tool (shasum / sha256sum / openssl) — required to derive preview ports"
+    missing=1
+  fi
+  [ "$missing" -eq 0 ] && plog "dependency check: all runtime tools present" \
+    || pwarn "install the missing tools above before running 'preview start'"
+}
+
+## Fetch one scaffold file into place. Prefers a local launcher/example/ copy beside this
+## script (dev / symlink install, offline-safe); otherwise pulls it from PREVIEW_SCAFFOLD_BASE_URL
+## (default: the pinned release tag on GitHub, so the scaffold matches the installed engine).
+## Skips an existing file unless force is set; downloads to a temp file and moves it into place
+## only on success.
+init_place() {
+  local dest="$1" rel="$2" force="$3" src_local="$4"
+  if [ -e "$dest" ] && [ "$force" -ne 1 ]; then
+    plog "skip $dest (exists; pass --force to overwrite)"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  if [ -n "$src_local" ] && [ -f "$src_local/$rel" ]; then
+    cp "$src_local/$rel" "$dest"
+    plog "wrote $dest (from local example)"
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || die "curl is required to fetch scaffold files for 'preview init'"
+  local url tmp
+  url="$PREVIEW_SCAFFOLD_BASE_URL/$rel"
+  tmp="$(mktemp)"
+  if curl -fSL --proto '=https' --tlsv1.2 "$url" -o "$tmp" 2>/dev/null; then
+    mv "$tmp" "$dest"
+    plog "wrote $dest (from $PREVIEW_VERSION)"
+  else
+    rm -f "$tmp"
+    die "failed to fetch $rel from $url"
+  fi
+}
+
+## init: scaffold .preview/config.sh, .preview/hooks.sh and the preview skill into the current
+## repo (git toplevel, else $PWD), after checking runtime dependencies.
+cmd_init() {
+  PREVIEW_SLUG="init"
+  local force=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -f|--force) force=1 ;;
+      -h|--help) init_usage; return 0 ;;
+      *) init_usage; return 2 ;;
+    esac
+    shift
+  done
+
+  local root src_local=""
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -d "$(dirname "$SELF")/example" ] && src_local="$(dirname "$SELF")/example"
+
+  plog "initializing preview in $root"
+  init_check_deps
+  init_place "$root/.preview/config.sh"              ".preview/config.sh"              "$force" "$src_local"
+  init_place "$root/.preview/hooks.sh"               ".preview/hooks.sh"               "$force" "$src_local"
+  init_place "$root/.claude/skills/preview/SKILL.md" ".claude/skills/preview/SKILL.md" "$force" "$src_local"
+
+  plog "done. next: edit .preview/config.sh for your app, then run 'preview start'"
+}
+
+init_usage() {
+  cat >&2 <<'EOF'
+usage: preview init [--force]
+
+  Scaffold the files a project needs to be previewable, into the current repo
+  (git toplevel, else the current directory):
+
+    .preview/config.sh                  project settings (edit these for your app)
+    .preview/hooks.sh                   build / up / healthcheck / down lifecycle hooks
+    .claude/skills/preview/SKILL.md     the 'preview' Claude skill
+
+  Also checks that the engine's runtime tools (docker, docker compose, tailscale,
+  a SHA-256 tool) are present, warning about any that are missing.
+
+options:
+  -f, --force   overwrite files that already exist (default: skip them)
+
+env:
+  PREVIEW_REPO               owner/repo the scaffold is fetched from (default: dantebarba/preview-hub)
+  PREVIEW_VERSION            release tag / ref to fetch the scaffold from (default: pinned)
+  PREVIEW_SCAFFOLD_BASE_URL  full base URL to fetch scaffold files from, overriding the two above
+                             (e.g. a private mirror; each file is fetched as <base>/<relative-path>)
+EOF
+}
+
 ## Replace the installed `preview` CLI with the newest release from GitHub. Refuses when the
 ## on-PATH `preview` is a symlink to a checkout (a dev install), since that should be updated
 ## with `git pull` rather than overwritten.
@@ -565,9 +671,11 @@ self_update() {
 usage() {
   cat >&2 <<'EOF'
 usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
+       preview init [--force]
        preview hub {up|down|update|status|expose|logs}
        preview self-update
 
+  init         scaffold a project's .preview/ files and preview skill; see 'preview init --help'
   start        bring up this checkout's preview, expose it over Tailscale, print its URL
   stop         tear down this checkout's preview (also fired by the auto-stop watchdog)
   status       this checkout's preview plus every preview recorded on this machine
@@ -586,6 +694,7 @@ EOF
 main() {
   case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
+    init) shift; cmd_init "$@"; exit $? ;;
     hub) shift; cmd_hub "$@"; exit $? ;;
     self-update) self_update; exit $? ;;
     start|stop|status|killall) ;;

@@ -114,6 +114,23 @@ Once installed, `preview hub {up,down,status,expose,logs}` runs the hub itself a
 `preview {start,stop,status,killall}` drives a project's previews — see
 `preview --help`, `preview hub --help`, and [`docs/participate.md`](docs/participate.md).
 
+### Onboard a project
+
+From inside a repo, `preview init` scaffolds everything a project needs to be
+previewable — `.preview/config.sh`, `.preview/hooks.sh`, and the `preview` Claude
+skill — and warns about any missing runtime tools (docker, docker compose,
+tailscale, a SHA-256 tool):
+
+```sh
+preview init          # writes the files, skipping any that already exist
+preview init --force  # overwrite existing files
+```
+
+It fetches the templates from the release tag matching your installed CLI (so the
+scaffold always matches the engine), or copies them from the clone when you
+installed from source. Then edit `.preview/config.sh` for your app and run
+`preview start`.
+
 Then confirm it is on your `PATH`:
 
 ```sh
@@ -152,6 +169,23 @@ wires up a per-branch Tailscale URL. See:
   contract in full.
 - [`launcher/`](launcher/) — the preview engine that brings a stack up with the
   right labels and isolation.
+- [`launcher/example/.claude/skills/`](launcher/example/.claude/skills/) — two
+  Claude Code skills a project can copy in: `preview`, which decides when to run
+  the launcher, and `mockup`, which turns a UI mockup into a preview of its own.
+
+### Mockups as previews
+
+A design question is cheaper to settle on a phone than in prose. The bundled
+`/mockup` skill builds a sample page from a project's **real components** into a
+static site, serves it from an ephemeral `nginx:alpine` container and hands it
+to the launcher under its own identity (`mockup-<branch>`), so it gets a
+Tailscale URL, a card on the hub and the 6h watchdog like any other preview. The
+card opens on a generated menu that links every variant, state and, when
+captured, a gallery of stills and slow-motion GIFs of transitions. `/mockup stop`
+removes the container, its image and every file it created. Everything lives in
+a self-ignoring `.mockup/` scratch directory; no tracked file is touched, and
+nothing about the project's framework is shipped with the skill — the build
+recipe is inferred per project. See [`docs/participate.md`](docs/participate.md#mockups-as-previews).
 
 A minimal, synthetic example — one service in a project's preview compose file.
 The values are supplied at runtime (the launcher exports them; stamp them from
