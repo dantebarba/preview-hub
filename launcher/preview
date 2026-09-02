@@ -688,13 +688,16 @@ self_update() {
   plog "updated preview -> $target"
 }
 
-## Print usage.
+## Print usage, headed by the version this launcher was stamped with.
 usage() {
-  cat >&2 <<'EOF'
+  cat >&2 <<EOF
+preview $PREVIEW_VERSION
+
 usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
        preview self-update
+       preview --version
 
   init         scaffold a project's .preview/ files and Claude skills; see 'preview init --help'
   start        bring up this checkout's preview, expose it over Tailscale, print its URL
@@ -703,10 +706,11 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   killall      tear down every recorded preview and sweep strays (named volumes kept)
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
   self-update  replace this CLI with the newest release from GitHub
+  --version    print the version this launcher was stamped with
 
 env:
   PREVIEW_ID       override the identity (default: current git branch / short SHA)
-  PREVIEW_DIR      path to the .preview directory (default: found by walking up from $PWD)
+  PREVIEW_DIR      path to the .preview directory (default: found by walking up from \$PWD)
   TIMEOUT_SECONDS  auto-stop delay in seconds (default: 21600 = 6h)
 EOF
 }
@@ -715,6 +719,7 @@ EOF
 main() {
   case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
+    -V|--version|version) printf 'preview %s\n' "$PREVIEW_VERSION"; exit 0 ;;
     init) shift; cmd_init "$@"; exit $? ;;
     hub) shift; cmd_hub "$@"; exit $? ;;
     self-update) self_update; exit $? ;;
