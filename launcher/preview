@@ -545,9 +545,24 @@ cmd_hub() {
 }
 
 ## ── init: scaffold a project's preview files ────────────────────────────────
-## `preview init` drops the three files a project needs into the current repo — the two
-## `.preview/` config files and the `preview` Claude skill — and reports on the runtime
-## dependencies the engine will need. It needs no existing .preview/; it creates one.
+## `preview init` drops the files a project needs into the current repo — the two
+## `.preview/` config files plus the `preview` and `mockup` Claude skills — and reports on
+## the runtime dependencies the engine will need. It needs no existing .preview/; it creates one.
+
+## Every file of the mockup skill, relative to the example root. Listed explicitly because the
+## release-tag fallback fetches files one by one and cannot enumerate a directory.
+MOCKUP_SKILL_FILES="
+.claude/skills/mockup/SKILL.md
+.claude/skills/mockup/scripts/mockup.sh
+.claude/skills/mockup/scripts/site.py
+.claude/skills/mockup/assets/helpers.ts
+.claude/skills/mockup/assets/build.sh
+.claude/skills/mockup/assets/docker-compose.yml
+.claude/skills/mockup/assets/playwright.config.ts
+.claude/skills/mockup/assets/nginx.conf
+.claude/skills/mockup/assets/preview/hooks.sh
+.claude/skills/mockup/assets/preview/config.sh
+"
 
 ## Warn (never fail) about the runtime tools the engine relies on, so a fresh project learns
 ## what is missing before its first `start` rather than at `start` time.
@@ -587,6 +602,7 @@ init_place() {
   tmp="$(mktemp)"
   if curl -fSL --proto '=https' --tlsv1.2 "$url" -o "$tmp" 2>/dev/null; then
     mv "$tmp" "$dest"
+    case "$dest" in *.sh) chmod +x "$dest" ;; esac
     plog "wrote $dest (from $PREVIEW_VERSION)"
   else
     rm -f "$tmp"
@@ -594,8 +610,8 @@ init_place() {
   fi
 }
 
-## init: scaffold .preview/config.sh, .preview/hooks.sh and the preview skill into the current
-## repo (git toplevel, else $PWD), after checking runtime dependencies.
+## init: scaffold .preview/config.sh, .preview/hooks.sh and the preview and mockup skills into
+## the current repo (git toplevel, else $PWD), after checking runtime dependencies.
 cmd_init() {
   PREVIEW_SLUG="init"
   local force=0
@@ -617,6 +633,10 @@ cmd_init() {
   init_place "$root/.preview/config.sh"              ".preview/config.sh"              "$force" "$src_local"
   init_place "$root/.preview/hooks.sh"               ".preview/hooks.sh"               "$force" "$src_local"
   init_place "$root/.claude/skills/preview/SKILL.md" ".claude/skills/preview/SKILL.md" "$force" "$src_local"
+  local rel
+  for rel in $MOCKUP_SKILL_FILES; do
+    init_place "$root/$rel" "$rel" "$force" "$src_local"
+  done
 
   plog "done. next: edit .preview/config.sh for your app, then run 'preview start'"
 }
@@ -631,6 +651,7 @@ usage: preview init [--force]
     .preview/config.sh                  project settings (edit these for your app)
     .preview/hooks.sh                   build / up / healthcheck / down lifecycle hooks
     .claude/skills/preview/SKILL.md     the 'preview' Claude skill
+    .claude/skills/mockup/              the '/mockup' Claude skill (mockups as previews)
 
   Also checks that the engine's runtime tools (docker, docker compose, tailscale,
   a SHA-256 tool) are present, warning about any that are missing.
@@ -675,7 +696,7 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview hub {up|down|update|status|expose|logs}
        preview self-update
 
-  init         scaffold a project's .preview/ files and preview skill; see 'preview init --help'
+  init         scaffold a project's .preview/ files and Claude skills; see 'preview init --help'
   start        bring up this checkout's preview, expose it over Tailscale, print its URL
   stop         tear down this checkout's preview (also fired by the auto-stop watchdog)
   status       this checkout's preview plus every preview recorded on this machine

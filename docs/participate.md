@@ -163,8 +163,8 @@ back to a clean slate when several previews have accumulated.
 
 [`launcher/example/.claude/skills/mockup/`](../launcher/example/.claude/skills/mockup/)
 is a Claude Code skill (user-invoked only, via `/mockup`) that makes a UI mockup a
-preview of its own. Copy the directory into your project's `.claude/skills/`; it
-needs nothing else from you.
+preview of its own. `preview init` scaffolds it into your project's `.claude/skills/`
+alongside the `preview` skill; it needs nothing else from you.
 
 How it fits the engine: the skill scaffolds `<frontend>/.mockup/`, a scratch directory
 that gitignores itself and carries its own `.preview/` (a `config.sh`, a `hooks.sh`

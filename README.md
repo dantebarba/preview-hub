@@ -117,8 +117,8 @@ Once installed, `preview hub {up,down,status,expose,logs}` runs the hub itself a
 ### Onboard a project
 
 From inside a repo, `preview init` scaffolds everything a project needs to be
-previewable — `.preview/config.sh`, `.preview/hooks.sh`, and the `preview` Claude
-skill — and warns about any missing runtime tools (docker, docker compose,
+previewable — `.preview/config.sh`, `.preview/hooks.sh`, and the `preview` and
+`mockup` Claude skills — and warns about any missing runtime tools (docker, docker compose,
 tailscale, a SHA-256 tool):
 
 ```sh
