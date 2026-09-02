@@ -13,6 +13,24 @@ permissions:
   packages: write
 
 jobs:
+  release-assets:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the release tag into the launcher
+        run: |
+          sed -i "s/\${PREVIEW_VERSION:-0.0.0-dev}/\${PREVIEW_VERSION:-${GITHUB_REF_NAME}}/" launcher/preview
+          grep -n 'PREVIEW_VERSION=' launcher/preview
+
+      - name: Upload preview launcher and installer to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" launcher/preview scripts/install.sh --clobber
+
   build-push:
     runs-on: ubuntu-latest
     steps:

@@ -43,7 +43,7 @@ PORT_RANGE_START=40000
 PORT_BUCKETS=5000
 
 PREVIEW_REPO="${PREVIEW_REPO:-dantebarba/preview-hub}"
-PREVIEW_VERSION="${PREVIEW_VERSION:-v0.2.0}"
+PREVIEW_VERSION="${PREVIEW_VERSION:-0.0.0-dev}"
 PREVIEW_SCAFFOLD_BASE_URL="${PREVIEW_SCAFFOLD_BASE_URL:-https://raw.githubusercontent.com/$PREVIEW_REPO/$PREVIEW_VERSION/launcher/example}"
 
 ## Print an informational line, tagged with the current slug, to stdout.
