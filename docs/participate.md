@@ -133,6 +133,18 @@ database admin UI, a websocket endpoint) via `PREVIEW_SERVE_TARGET` and your com
 Because the block is contiguous and computed, you never guess or hard-code a port — you
 reference `${PREVIEW_PORT_1}` and friends.
 
+## Host names your server must accept
+
+Before the hooks run, the engine also exports:
+
+- `PREVIEW_URL` — this preview's tailnet URL.
+- `PREVIEW_ALLOWED_HOSTS` — the host names a server that checks `Host` must accept,
+  comma-separated: this machine's tailnet host and, when `PREVIEW_SHARE_DOMAIN` is set,
+  `.<domain>` for the share name (a leading `.` means the domain and its subdomains).
+  Vite's `allowedHosts` and Django's `ALLOWED_HOSTS` read that syntax as is, so read the
+  variable instead of naming a domain in your project; see the README's
+  [Servers that check Host](../README.md#servers-that-check-host).
+
 ## One preview per branch (determinism)
 
 The port block and the compose project name are **derived deterministically from the

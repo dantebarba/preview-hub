@@ -9,6 +9,7 @@
 #   PREVIEW_URL, PREVIEW_BRANCH, PREVIEW_WORKTREE, PREVIEW_SLUG, PREVIEW_ID
 #   PREVIEW_ROOT, PREVIEW_STATE_DIR, PREVIEW_COMPOSE_PROJECT
 #   PREVIEW_BASE / TS_PORT and the port block PREVIEW_PORT_0..PREVIEW_PORT_3
+#   PREVIEW_ALLOWED_HOSTS, the host names a server that checks Host must accept
 #
 # It also exposes three helpers to these hooks:
 #   dc ...    docker compose scoped to this preview's project + compose + labels override.
