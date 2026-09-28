@@ -104,3 +104,25 @@ The hub also reads the standard `com.docker.compose.project` label to deduplicat
 may put the `preview.*` labels on more than one container, but each compose project appears
 in the hub at most once. The same label scopes the hub's **Stop** action: stopping a card
 stops every running container of that compose project.
+
+## Share labels
+
+A preview published on the internet with `preview share` gets a second container next to
+its stack: the forwarder `<compose project>-share`, which serves the preview's backend on
+the address the edge host proxies to. It never carries `preview.url`, so it is never a
+preview of its own; the hub reads its labels only to attach the share to the preview of the
+same compose project. The launcher stamps them at runtime, never from a committed file:
+
+| Label                   | Meaning |
+| ----------------------- | ------- |
+| `preview.share.project` | Compose project of the shared preview (its `com.docker.compose.project`). The hub filters forwarders on its presence. |
+| `preview.share.label`   | Public label the share is published under. |
+| `preview.share.host`    | Public host name, `<label>.<domain>`. Empty until the edge has accepted the share. |
+| `preview.share.expires` | Expiry, seconds since the epoch (UTC). Empty until the edge has accepted the share. |
+
+The key is never a label: it lives only in the link `preview share` prints and in the
+launcher's state, so nothing that reads the Docker socket can show it. The hub adds
+`share: { host, expires }` to a preview while its forwarder is running with a host and an
+expiry in the future, and shows the host and the time it expires; it cannot share or
+unshare. A forwarder outlives an expired share until `preview shares`, `preview status` or
+`preview stop` removes it, which is why the hub checks the expiry itself.

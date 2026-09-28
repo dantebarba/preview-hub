@@ -76,6 +76,56 @@ or the auto-stop watchdog runs. `preview start` brings a hub-stopped preview bac
 Anyone who can reach the hub can stop previews, and the Docker socket grants full
 control of the engine whether or not it is mounted `:ro`; keep the hub on your tailnet.
 
+## Sharing a preview on the internet
+
+A running preview can be published to someone outside the tailnet, under its own name,
+behind a key, for a limited time:
+
+```sh
+preview share [--hours N] [--yes]   # N from 1 to 72, default 4
+preview unshare
+preview shares                      # every share, from any directory
+```
+
+`share` and `unshare` act on the current checkout's preview, resolved like `preview stop`
+(`PREVIEW_ID`, `.preview/`). `share` prints a link `https://<label>.<domain>/?k=<key>` and
+the expiry in local time; the label is built from the project and the identity (lowercase,
+anything outside `[a-z0-9-]` becomes `-`, at most 63 characters). Sharing again replaces
+the key and the expiry, so the link printed before stops working. `shares` lists label,
+link and time left, marking the shares whose preview is not running on this machine.
+
+The launcher runs no tunnel, proxy or DNS itself. It asks an **edge host** that owns all
+of that, over SSH, with a key the edge binds to its `share` command (verbs `add`, `remove`,
+`list`); the edge proxies a guest to an address of this machine. While a preview is shared,
+a forwarder container (`<compose project>-share`, `alpine/socat` on the host network)
+serves the preview's `PREVIEW_SERVE_TARGET` on that one address at the preview's base
+port, never on `0.0.0.0`. `share` fails when that address is not one of this machine's.
+
+- `share` refuses a preview that is not running, and warns and asks for confirmation
+  (skip it with `--yes`) when the preview's containers mount a `.env` / `.envrc` or read
+  one through `env_file`: the guest will be talking to a process that holds credentials.
+- It warns when the project uses Vite, whose dev server refuses the public `Host` until it
+  is listed in `server.allowedHosts`.
+- `preview stop`, `killall` and the auto-stop watchdog unshare first.
+- The edge removes a share when it expires; `preview shares` and `preview status` then
+  stop the forwarder it left behind.
+- The hub shows a shared preview's public host and expiry, never the key, and cannot share
+  or unshare.
+
+Configure it with environment variables, or with `KEY=VALUE` lines in
+`~/.config/preview/share.env` (the environment wins). Put them in the file when the
+auto-stop watchdog must be able to unshare: it only sees the environment of `preview start`.
+
+| Variable               | Default                        | Purpose |
+| ---------------------- | ------------------------------ | ------- |
+| `PREVIEW_SHARE_SSH`    | — (required)                   | SSH destination of the edge, `user@host` |
+| `PREVIEW_SHARE_ADDR`   | — (required)                   | Address of this machine the edge proxies to; the forwarder binds only there |
+| `PREVIEW_SHARE_KEY`    | `~/.ssh/share_key`             | SSH key bound to the edge's `share` command |
+| `PREVIEW_SHARE_IMAGE`  | `alpine/socat:latest`          | Forwarder image |
+| `PREVIEW_SHARE_CONFIG` | `~/.config/preview/share.env`  | Where the settings above are read from |
+
+`share` needs `ssh` and `python3` besides docker.
+
 ## Serve it over Tailscale (one time)
 
 The easiest way is `preview hub expose`, which runs the command below on a dedicated
@@ -125,8 +175,9 @@ curl -fsSL https://github.com/dantebarba/preview-hub/releases/latest/download/in
   | PREVIEW_BIN_DIR="$HOME/bin" PREVIEW_VERSION=v0.1.1 sh
 ```
 
-Once installed, `preview hub {up,down,status,expose,logs}` runs the hub itself and
-`preview {start,stop,status,killall}` drives a project's previews — see
+Once installed, `preview hub {up,down,status,expose,logs}` runs the hub itself,
+`preview {start,stop,status,killall}` drives a project's previews and
+`preview {share,unshare,shares}` publishes one on the internet — see
 `preview --help`, `preview hub --help`, and [`docs/participate.md`](docs/participate.md).
 
 ### Onboard a project
@@ -241,7 +292,8 @@ The **`preview hub` CLI** reads (all optional):
 
 The **per-project launcher** (`preview start` …) is configured by each project's
 `.preview/config.sh`, plus `PREVIEW_ID`, `PREVIEW_DIR`, and `TIMEOUT_SECONDS`; see
-[`docs/participate.md`](docs/participate.md).
+[`docs/participate.md`](docs/participate.md). `preview share` reads the `PREVIEW_SHARE_*`
+variables of [Sharing a preview on the internet](#sharing-a-preview-on-the-internet).
 
 ## Before publishing: scan for secrets and identity
 
