@@ -143,7 +143,9 @@ Before the hooks run, the engine also exports:
   `.<domain>` for the share name (a leading `.` means the domain and its subdomains).
   Vite's `allowedHosts` and Django's `ALLOWED_HOSTS` read that syntax as is, so read the
   variable instead of naming a domain in your project; see the README's
-  [Servers that check Host](../README.md#servers-that-check-host).
+  [Servers that check Host](../README.md#servers-that-check-host). A server in a
+  container sees it only when your compose file passes it through, e.g.
+  `environment: [PREVIEW_ALLOWED_HOSTS]`.
 
 ## One preview per branch (determinism)
 

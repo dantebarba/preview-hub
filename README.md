@@ -109,8 +109,9 @@ port, never on `0.0.0.0`. `share` fails when that address is not one of this mac
   (skip it with `--yes`) when the preview's containers mount a `.env` / `.envrc`, read one
   through `env_file`, or compose reads the project directory's `.env`: the guest will be
   talking to a process that holds credentials.
-- It warns when the public host is outside `PREVIEW_SHARE_DOMAIN`: the preview's server was
-  not told to accept it (see [Servers that check Host](#servers-that-check-host)).
+- It warns when the preview did not start with the public host in `PREVIEW_ALLOWED_HOSTS`,
+  so a server that checks `Host` would refuse it (see
+  [Servers that check Host](#servers-that-check-host)).
 - `preview stop`, `killall` and the auto-stop watchdog unshare first.
 - The edge removes a share when it expires; `preview shares` and `preview status` then
   stop the forwarder it left behind.
@@ -142,11 +143,12 @@ has to accept the tailnet name `tailscale serve` forwards and the public name th
 forwards. `preview start` exports both as `PREVIEW_ALLOWED_HOSTS` before the hooks run: a
 comma-separated list of this machine's tailnet host and, when `PREVIEW_SHARE_DOMAIN` is
 set, `.<domain>`, where a leading `.` means the domain and its subdomains. Read it instead
-of naming a domain in the project:
+of naming a domain in the project (`server` is `vite` dev, `preview` is `vite preview`):
 
 ```js
 // vite.config.ts
-preview: { allowedHosts: (process.env.PREVIEW_ALLOWED_HOSTS ?? '').split(',').filter(Boolean) }
+const allowedHosts = (process.env.PREVIEW_ALLOWED_HOSTS ?? '').split(',').filter(Boolean)
+export default defineConfig({ server: { allowedHosts }, preview: { allowedHosts } })
 ```
 
 ```python
@@ -154,8 +156,10 @@ preview: { allowedHosts: (process.env.PREVIEW_ALLOWED_HOSTS ?? '').split(',').fi
 ALLOWED_HOSTS = ["localhost", *filter(None, os.environ.get("PREVIEW_ALLOWED_HOSTS", "").split(","))]
 ```
 
-Set `PREVIEW_SHARE_DOMAIN` before `preview start`: a preview started without it does not
-accept the share name until it is restarted.
+A server in a container sees the variable only when the compose file passes it through,
+e.g. `environment: [PREVIEW_ALLOWED_HOSTS]`. Set `PREVIEW_SHARE_DOMAIN` before
+`preview start`: a preview started without it does not accept the share name until it is
+restarted, and `preview share` says so.
 
 ### Sharing from the hub
 
