@@ -436,9 +436,10 @@ body[data-loading] .topbar::before {
   transition: none;
 }
 
-.slot[data-open] > .card:hover {
+.slot[data-open] > .card,
+.slot[data-dragging] > .card {
   transform: none;
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
 }
 
 .slot[data-stopping] > .card {
@@ -447,12 +448,13 @@ body[data-loading] .topbar::before {
 
 .slot__stop {
   position: absolute;
-  inset: 0 0 0 auto;
-  width: calc(var(--action-w) - 0.5rem);
+  inset: 0;
+  padding: 0 0 0 calc(100% - var(--action-w));
   border: 0;
   border-radius: var(--r-card);
   background: var(--danger);
   color: #fff;
+  text-align: center;
   font: inherit;
   font-size: 0.82rem;
   font-weight: 600;
