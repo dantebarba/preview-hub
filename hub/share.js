@@ -27,6 +27,7 @@ import {
   inspectPreview,
   edgeOf,
   stopPreview,
+  SHARE_HOST,
 } from "./docker.js";
 
 const DEFAULT_KEY = "/run/preview-share/key";
@@ -35,7 +36,6 @@ const DEFAULT_IMAGE = "alpine/socat:latest";
 const MIN_HOURS = 1;
 const MAX_HOURS = 72;
 const FORWARDER_SETTLE_MS = 1000;
-const SHARE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 const CREDENTIAL_FILE = /^\.env(rc)?$|^\.env\.(?!example$|sample$|template$|dist$)[^/]+$/;
 
 const EDGE_STATUS = {
@@ -248,7 +248,8 @@ export function createSharing({ config, edge, docker }) {
    * Share a preview for `hours`. Without `confirm`, a preview whose containers
    * bind-mount a `.env` / `.envrc` is not shared and { needsConfirm, files } is
    * returned instead. Mirrors the launcher: start the forwarder, `add`, drop
-   * the forwarder when `add` fails, then recreate it with the host and expiry.
+   * the forwarder when `add` fails, then recreate it with the host and expiry,
+   * removing the share again when the answer is unexpected or that fails.
    */
   async function share(id, hours, confirm) {
     requireEnabled();
@@ -267,14 +268,16 @@ export function createSharing({ config, edge, docker }) {
     const existed = (await sharedLabel(project)) !== null;
     if (!existed) await docker.start(name, edgeInfo, project, { host: "", expires: "" });
 
-    let answer;
+    let added;
     try {
-      answer = parseAdd(await edge("add", edgeInfo.label, edgeInfo.port, duration));
+      added = await edge("add", edgeInfo.label, edgeInfo.port, duration);
     } catch (err) {
       if (!existed) await docker.remove(name);
       throw err;
     }
+    let answer;
     try {
+      answer = parseAdd(added);
       await docker.start(name, edgeInfo, project, answer);
     } catch (err) {
       await edge("remove", edgeInfo.label).catch(() => {});
@@ -331,12 +334,22 @@ export function createSharing({ config, edge, docker }) {
     return { url: match.url, expires: Number(match.expires) };
   }
 
-  /** Stop a preview, retracting its share first so none outlives it. */
+  /**
+   * Stop a preview, retracting its share first so none outlives it. A failed
+   * retraction does not keep the preview running: it is reported as a warning.
+   */
   async function stop(id) {
     const container = await docker.inspectPreview(id);
     if (!container) return { status: "not-found" };
     const project = container.Config.Labels["com.docker.compose.project"] || "";
-    const retracted = project ? await retract(project) : { unshared: false };
+    let retracted = { unshared: false };
+    if (project) {
+      try {
+        retracted = await retract(project);
+      } catch (err) {
+        retracted = { unshared: false, warning: `could not retract the share: ${err.message}` };
+      }
+    }
     const stopped = await docker.stopPreview(id);
     return retracted.warning ? { ...stopped, warning: retracted.warning } : stopped;
   }

@@ -44,7 +44,7 @@ function dockerEndpoint() {
 }
 
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/;
-const SHARE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+export const SHARE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 const EDGE_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const EDGE_TARGET = /^[A-Za-z0-9.:[\]-]+:\d{1,5}$/;
 const EDGE_PORT_MIN = 40000;
@@ -68,10 +68,6 @@ export async function fetchContainers(labels) {
 }
 
 /**
- * Turn one raw Docker container object into a preview record, or null when it
- * lacks the required `preview.url` label.
- */
-/**
  * Read where a preview can be shared from out of its `preview.edge.*` labels:
  * { label, port, target }, or null when any is missing or malformed.
  */
@@ -85,6 +81,10 @@ export function edgeOf(labels) {
   return { label, port, target };
 }
 
+/**
+ * Turn one raw Docker container object into a preview record, or null when it
+ * lacks the required `preview.url` label.
+ */
 function toPreview(container) {
   const labels = (container && container.Labels) || {};
   const url = labels["preview.url"];
