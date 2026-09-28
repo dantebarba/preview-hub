@@ -441,8 +441,8 @@ hub_docker_sock() {
 
 hub_running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$(hub_name)"; }
 
-## Run the hub container from its published image, mounting the docker socket READ-ONLY so
-## it can discover running previews. Idempotent: a no-op when already running.
+## Run the hub container from its published image, mounting the docker socket so it can
+## discover running previews and stop them from the UI. Idempotent: a no-op when already running.
 hub_up() {
   command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub up'"
   local name port sock image
@@ -450,14 +450,14 @@ hub_up() {
   if hub_running; then plog "hub already running -> http://127.0.0.1:$port/"; return 0; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   [ -S "$sock" ] || pwarn "docker socket '$sock' not found — the hub will show no previews until it can read a socket"
-  plog "starting hub '$name' ($image) on :$port, socket $sock (ro)..."
+  plog "starting hub '$name' ($image) on :$port, socket $sock..."
   docker run -d \
     --name "$name" \
     --restart unless-stopped \
     -p "$port:$port" \
     -e HUB_PORT="$port" \
     -e POLL_INTERVAL_MS="${PREVIEW_HUB_POLL_MS:-10000}" \
-    -v "$sock:/var/run/docker.sock:ro" \
+    -v "$sock:/var/run/docker.sock" \
     "$image" >/dev/null \
     || die "failed to start the hub (is the image published and public? try 'docker pull $image')"
   plog "hub up -> http://127.0.0.1:$port/"
@@ -513,7 +513,7 @@ hub_usage() {
 usage: preview hub {up|down|update|status|expose|logs}
 
   up            run the hub container (pulls the image if needed), mounting the docker
-                socket read-only so it can discover the running previews
+                socket so it can discover and stop the running previews
   down          stop and remove the hub container
   update        pull the newest hub image from GitHub and recreate the container
   status        whether the hub is running, plus its local / tailnet URLs
