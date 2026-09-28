@@ -109,8 +109,8 @@ port, never on `0.0.0.0`. `share` fails when that address is not one of this mac
   (skip it with `--yes`) when the preview's containers mount a `.env` / `.envrc`, read one
   through `env_file`, or compose reads the project directory's `.env`: the guest will be
   talking to a process that holds credentials.
-- It warns when the project uses Vite, whose dev server refuses the public `Host` until it
-  is listed in `server.allowedHosts`.
+- It warns when the public host is outside `PREVIEW_SHARE_DOMAIN`: the preview's server was
+  not told to accept it (see [Servers that check Host](#servers-that-check-host)).
 - `preview stop`, `killall` and the auto-stop watchdog unshare first.
 - The edge removes a share when it expires; `preview shares` and `preview status` then
   stop the forwarder it left behind.
@@ -130,9 +130,32 @@ auto-stop watchdog must be able to unshare: it only sees the environment of `pre
 | `PREVIEW_SHARE_KEY`    | `~/.ssh/share_key`             | SSH key bound to the edge's `share` command |
 | `PREVIEW_SHARE_IMAGE`  | `alpine/socat:latest`          | Forwarder image |
 | `PREVIEW_SHARE_KNOWN_HOSTS` | `~/.ssh/known_hosts`      | known_hosts `preview hub up` hands to the hub |
+| `PREVIEW_SHARE_DOMAIN` | —                              | The edge's domain; `preview start` adds `.<domain>` to `PREVIEW_ALLOWED_HOSTS` |
 | `PREVIEW_SHARE_CONFIG` | `~/.config/preview/share.env`  | Where the settings above are read from |
 
 `share` needs `ssh` and `python3` besides docker.
+
+### Servers that check Host
+
+A server that refuses an unknown `Host` (Vite dev and preview, Django `ALLOWED_HOSTS`, …)
+has to accept the tailnet name `tailscale serve` forwards and the public name the edge
+forwards. `preview start` exports both as `PREVIEW_ALLOWED_HOSTS` before the hooks run: a
+comma-separated list of this machine's tailnet host and, when `PREVIEW_SHARE_DOMAIN` is
+set, `.<domain>`, where a leading `.` means the domain and its subdomains. Read it instead
+of naming a domain in the project:
+
+```js
+// vite.config.ts
+preview: { allowedHosts: (process.env.PREVIEW_ALLOWED_HOSTS ?? '').split(',').filter(Boolean) }
+```
+
+```python
+# settings.py
+ALLOWED_HOSTS = ["localhost", *filter(None, os.environ.get("PREVIEW_ALLOWED_HOSTS", "").split(","))]
+```
+
+Set `PREVIEW_SHARE_DOMAIN` before `preview start`: a preview started without it does not
+accept the share name until it is restarted.
 
 ### Sharing from the hub
 

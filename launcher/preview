@@ -38,6 +38,10 @@
 #
 # Nothing machine-specific is baked in: the tailnet host is resolved at runtime from
 # `tailscale status`, and the advertised URL exists only as a runtime Docker label.
+#
+# Besides the identity, port and path variables, `start` exports PREVIEW_URL and
+# PREVIEW_ALLOWED_HOSTS (the host names a server that checks Host must accept) before the
+# hooks run, so every process they start inherits both.
 set -euo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -221,6 +225,17 @@ resolve_url() {
   export PREVIEW_URL
 }
 
+## Export PREVIEW_ALLOWED_HOSTS: the tailnet host of PREVIEW_URL, plus .PREVIEW_SHARE_DOMAIN when
+## set, comma-separated. A leading '.' means the domain and its subdomains, the syntax Vite's
+## allowedHosts and Django's ALLOWED_HOSTS read, so a server that checks Host names no domain.
+## The share name is a suffix because the server starts before the label of a share is decided.
+export_allowed_hosts() {
+  local host="${PREVIEW_URL#https://}"
+  PREVIEW_ALLOWED_HOSTS="${host%%[:/]*}"
+  [ -z "${PREVIEW_SHARE_DOMAIN#.}" ] || PREVIEW_ALLOWED_HOSTS+=",.${PREVIEW_SHARE_DOMAIN#.}"
+  export PREVIEW_ALLOWED_HOSTS
+}
+
 ## Write the compose override that adds the five preview.* labels, plus the three preview.edge.*
 ## labels the hub needs to share the preview, to PREVIEW_LABEL_SERVICE.
 ## Label values are written as ${PREVIEW_LABEL_*} interpolations, resolved by compose at `dc`
@@ -328,6 +343,8 @@ mapped_preview_ports() {
 cmd_start() {
   collision_guard
   resolve_url
+  share_load_config
+  export_allowed_hosts
   mkdir -p "$STATE_DIR"
   local edge_label
   edge_label="$(share_label)"
@@ -493,7 +510,7 @@ SHARE_CONFIG_FILE="${PREVIEW_SHARE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/pre
 SHARE_DEFAULT_HOURS=4
 SHARE_MAX_HOURS=72
 
-## Fill PREVIEW_SHARE_SSH / _KEY / _ADDR / _IMAGE / _KNOWN_HOSTS from the user's share config file (plain
+## Fill PREVIEW_SHARE_SSH / _KEY / _ADDR / _IMAGE / _KNOWN_HOSTS / _DOMAIN from the user's share config file (plain
 ## KEY=VALUE lines, never sourced), without overriding a value already set in the environment,
 ## then apply the defaults. Idempotent.
 share_load_config() {
@@ -504,7 +521,7 @@ share_load_config() {
       key="${line%%=*}"
       value="${line#*=}"
       case "$key" in
-        PREVIEW_SHARE_SSH|PREVIEW_SHARE_KEY|PREVIEW_SHARE_ADDR|PREVIEW_SHARE_IMAGE|PREVIEW_SHARE_KNOWN_HOSTS) ;;
+        PREVIEW_SHARE_SSH|PREVIEW_SHARE_KEY|PREVIEW_SHARE_ADDR|PREVIEW_SHARE_IMAGE|PREVIEW_SHARE_KNOWN_HOSTS|PREVIEW_SHARE_DOMAIN) ;;
         *) continue ;;
       esac
       [ -n "${!key:-}" ] && continue
@@ -517,6 +534,7 @@ share_load_config() {
   PREVIEW_SHARE_KEY="${PREVIEW_SHARE_KEY:-$HOME/.ssh/share_key}"
   PREVIEW_SHARE_IMAGE="${PREVIEW_SHARE_IMAGE:-alpine/socat:latest}"
   PREVIEW_SHARE_KNOWN_HOSTS="${PREVIEW_SHARE_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}"
+  PREVIEW_SHARE_DOMAIN="${PREVIEW_SHARE_DOMAIN:-}"
 }
 
 ## Print why the edge cannot be called from here (missing tool, setting or key), or nothing
@@ -880,9 +898,17 @@ cmd_share() {
   plog "shared:  $url"
   plog "expires: $(fmt_epoch "$expires") (in $(time_left "$expires")); retract with: preview unshare"
   plog "anyone holding the link gets in until then."
+  share_warn_host "$host"
+}
+
+## Warn when the share name is outside PREVIEW_SHARE_DOMAIN: the preview then started without it
+## in PREVIEW_ALLOWED_HOSTS, and a server that checks Host (Vite, Django) refuses the guest.
+share_warn_host() {
+  local host="$1" domain="${PREVIEW_SHARE_DOMAIN#.}"
+  [ -n "$domain" ] && [[ "$host" == *".$domain" ]] && return 0
+  pwarn "set PREVIEW_SHARE_DOMAIN=${host#*.} and restart the preview so its server accepts the share name"
   if share_uses_vite; then
-    pwarn "a Vite dev server refuses requests for an unknown Host: allow '$host' in server.allowedHosts"
-    pwarn "(a built bundle served by another server is not affected)."
+    pwarn "a Vite server refuses an unknown Host: read allowedHosts from PREVIEW_ALLOWED_HOSTS"
   fi
 }
 
@@ -945,6 +971,8 @@ env (or KEY=VALUE lines in \$PREVIEW_SHARE_CONFIG, default ~/.config/preview/sha
   PREVIEW_SHARE_KEY    SSH key bound to the edge's share command (default: ~/.ssh/share_key)
   PREVIEW_SHARE_IMAGE  forwarder image (default: alpine/socat:latest)
   PREVIEW_SHARE_KNOWN_HOSTS  known_hosts 'preview hub up' hands to the hub (default: ~/.ssh/known_hosts)
+  PREVIEW_SHARE_DOMAIN the edge's domain; 'preview start' adds .<domain> to PREVIEW_ALLOWED_HOSTS
+                       so a server that checks Host accepts the share name (optional)
 EOF
 }
 
