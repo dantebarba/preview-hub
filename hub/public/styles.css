@@ -387,6 +387,21 @@ body[data-loading] .topbar::before {
   border-color: transparent;
 }
 
+.chip--share {
+  color: var(--accent);
+  background: var(--accent-weak);
+  border-color: transparent;
+}
+
+.card__share {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card__desc {
   margin: 0;
   font-size: 0.82rem;

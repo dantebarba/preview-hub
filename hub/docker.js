@@ -6,6 +6,11 @@
  * project contributes at most one record, groups the records by `preview.project`
  * and sorts them into the exact shape the hub serves at GET /api/previews.
  *
+ * A preview the launcher has shared on the internet also has a forwarder
+ * container carrying `preview.share.*` labels; its public host and expiry are
+ * attached to the preview as `share`. The key is never in a label, so the hub
+ * cannot show it.
+ *
  * Docker access is best-effort: an unreachable engine or a non-OK response yields
  * an empty list (logged to stderr) rather than a thrown error, so the PWA can
  * still render an empty state.
@@ -38,6 +43,7 @@ function dockerEndpoint() {
 }
 
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/;
+const SHARE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 function dockerFetch(path, init = {}) {
   const { url, unix } = dockerEndpoint();
@@ -108,6 +114,45 @@ function groupPreviews(previews) {
 }
 
 /**
+ * Map each compose project to the share its forwarder container describes,
+ * { host, expires } with expires in epoch seconds. Forwarders still waiting
+ * for the edge (no host or expiry yet), with a malformed host, or whose share
+ * has expired by `now` are left out.
+ */
+export function sharesByProject(forwarders, now = Date.now()) {
+  const shares = new Map();
+  for (const container of Array.isArray(forwarders) ? forwarders : []) {
+    const labels = (container && container.Labels) || {};
+    const project = labels["preview.share.project"];
+    const host = labels["preview.share.host"] || "";
+    const expires = Number(labels["preview.share.expires"]);
+    if (!project || !SHARE_HOST.test(host)) continue;
+    if (!Number.isInteger(expires) || expires * 1000 <= now) continue;
+    shares.set(project, { host, expires });
+  }
+  return shares;
+}
+
+/**
+ * Attach its share to every preview record whose compose project has one.
+ */
+export function withShares(previews, shares) {
+  return previews.map((preview) => {
+    const share = preview.composeProject && shares.get(preview.composeProject);
+    return share ? { ...preview, share } : preview;
+  });
+}
+
+async function fetchShares() {
+  try {
+    return sharesByProject(await fetchContainers(["preview.share.project"]));
+  } catch (err) {
+    console.error("[preview-hub] docker share query failed:", err?.message ?? err);
+    return new Map();
+  }
+}
+
+/**
  * List active previews grouped and sorted per the hub backend contract.
  * Returns [] on any Docker error.
  */
@@ -120,7 +165,8 @@ export async function listPreviews() {
     return [];
   }
   if (!Array.isArray(containers)) return [];
-  return groupPreviews(containers.map(toPreview).filter(Boolean));
+  const previews = containers.map(toPreview).filter(Boolean);
+  return groupPreviews(withShares(previews, await fetchShares()));
 }
 
 async function inspectContainer(id) {
