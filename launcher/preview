@@ -221,7 +221,8 @@ resolve_url() {
   export PREVIEW_URL
 }
 
-## Write the compose override that adds the five preview.* labels to PREVIEW_LABEL_SERVICE.
+## Write the compose override that adds the five preview.* labels, plus the three preview.edge.*
+## labels the hub needs to share the preview, to PREVIEW_LABEL_SERVICE.
 ## Label values are written as ${PREVIEW_LABEL_*} interpolations, resolved by compose at `dc`
 ## time, so no runtime value (URL, branch, ...) is ever persisted into the file.
 write_labels_override() {
@@ -235,6 +236,9 @@ write_labels_override() {
     printf '      preview.branch: "${PREVIEW_LABEL_BRANCH}"\n'
     printf '      preview.worktree: "${PREVIEW_LABEL_WORKTREE}"\n'
     printf '      preview.desc: "${PREVIEW_LABEL_DESC}"\n'
+    printf '      preview.edge.label: "${PREVIEW_LABEL_EDGE_LABEL}"\n'
+    printf '      preview.edge.port: "${PREVIEW_LABEL_EDGE_PORT}"\n'
+    printf '      preview.edge.target: "${PREVIEW_LABEL_EDGE_TARGET}"\n'
   } >"$PREVIEW_LABELS_OVERRIDE"
 }
 
@@ -325,11 +329,16 @@ cmd_start() {
   collision_guard
   resolve_url
   mkdir -p "$STATE_DIR"
+  local edge_label
+  edge_label="$(share_label)"
   export PREVIEW_LABEL_URL="$PREVIEW_URL" \
          PREVIEW_LABEL_PROJECT="$PREVIEW_PROJECT" \
          PREVIEW_LABEL_BRANCH="$PREVIEW_BRANCH" \
          PREVIEW_LABEL_WORKTREE="$PREVIEW_WORKTREE" \
-         PREVIEW_LABEL_DESC="$PREVIEW_DESC"
+         PREVIEW_LABEL_DESC="$PREVIEW_DESC" \
+         PREVIEW_LABEL_EDGE_LABEL="$edge_label" \
+         PREVIEW_LABEL_EDGE_PORT="$PREVIEW_BASE" \
+         PREVIEW_LABEL_EDGE_TARGET="${PREVIEW_SERVE_TARGET%%/*}"
   write_labels_override
 
   plog "starting '$PREVIEW_ID' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT'"
@@ -382,21 +391,24 @@ cmd_status() {
     else
       plog "  auto-stop watchdog: down"
     fi
-    local host="" expires=""
+    local host="" expires="" recorded=""
+    if share_forwarder_exists; then
+      host="$(share_forwarder_label host)"
+      expires="$(share_forwarder_label expires)"
+    fi
     if [ -f "$STATE_DIR/share.json" ] && command -v python3 >/dev/null 2>&1; then
-      { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
-      if [[ "$expires" =~ ^[0-9]+$ ]] && [ "$expires" -le "$(date +%s)" ]; then
+      recorded="$(json_fields expires <"$STATE_DIR/share.json" 2>/dev/null || true)"
+      if [[ "$recorded" =~ ^[0-9]+$ ]] && [ "$recorded" -le "$(date +%s)" ]; then
         rm -f "$STATE_DIR/share.json"
       fi
     fi
-    if [ ! -f "$STATE_DIR/share.json" ]; then
-      plog "  shared: no"
-    elif ! share_forwarder_exists; then
-      pwarn "  shared, but its forwarder is gone: run 'preview share' to restore it or 'preview unshare'"
-    elif [ -n "$host" ]; then
+    if [ -n "$host" ]; then
       plog "  shared: https://$host/ until $(fmt_epoch "$expires") ($(time_left "$expires") left)"
+    elif [ -f "$STATE_DIR/share.json" ] && ! share_forwarder_exists && share_still_listed; then
+      pwarn "  shared, but its forwarder is gone: run 'preview share' to restore it or 'preview unshare'"
     else
-      plog "  shared: yes"
+      rm -f "$STATE_DIR/share.json"
+      plog "  shared: no"
     fi
   else
     plog "  not running"
@@ -411,7 +423,7 @@ cmd_status() {
     id="$(cat "$dir/id" 2>/dev/null || basename "$dir")"
     url="$(cat "$dir/url" 2>/dev/null || echo '(starting)')"
     shared=""
-    if [ -f "$dir/share.json" ] && share_forwarder_exists "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
+    if share_forwarder_exists "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
       shared=" [shared]"
     fi
     if compose_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
@@ -479,7 +491,7 @@ SHARE_CONFIG_FILE="${PREVIEW_SHARE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/pre
 SHARE_DEFAULT_HOURS=4
 SHARE_MAX_HOURS=72
 
-## Fill PREVIEW_SHARE_SSH / _KEY / _ADDR / _IMAGE from the user's share config file (plain
+## Fill PREVIEW_SHARE_SSH / _KEY / _ADDR / _IMAGE / _KNOWN_HOSTS from the user's share config file (plain
 ## KEY=VALUE lines, never sourced), without overriding a value already set in the environment,
 ## then apply the defaults. Idempotent.
 share_load_config() {
@@ -490,7 +502,7 @@ share_load_config() {
       key="${line%%=*}"
       value="${line#*=}"
       case "$key" in
-        PREVIEW_SHARE_SSH|PREVIEW_SHARE_KEY|PREVIEW_SHARE_ADDR|PREVIEW_SHARE_IMAGE) ;;
+        PREVIEW_SHARE_SSH|PREVIEW_SHARE_KEY|PREVIEW_SHARE_ADDR|PREVIEW_SHARE_IMAGE|PREVIEW_SHARE_KNOWN_HOSTS) ;;
         *) continue ;;
       esac
       [ -n "${!key:-}" ] && continue
@@ -502,6 +514,7 @@ share_load_config() {
   PREVIEW_SHARE_ADDR="${PREVIEW_SHARE_ADDR:-}"
   PREVIEW_SHARE_KEY="${PREVIEW_SHARE_KEY:-$HOME/.ssh/share_key}"
   PREVIEW_SHARE_IMAGE="${PREVIEW_SHARE_IMAGE:-alpine/socat:latest}"
+  PREVIEW_SHARE_KNOWN_HOSTS="${PREVIEW_SHARE_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}"
 }
 
 ## Print why the edge cannot be called from here (missing tool, setting or key), or nothing
@@ -633,6 +646,11 @@ share_forwarder_start() {
   return 1
 }
 
+## Print the preview.share.<field> label of this preview's forwarder (empty when it has none).
+share_forwarder_label() {
+  docker inspect -f "{{index .Config.Labels \"preview.share.$1\"}}" "$(share_forwarder_name)" 2>/dev/null || true
+}
+
 ## Remove this preview's forwarder container, if any.
 share_forwarder_stop() { docker rm -f "$(share_forwarder_name)" >/dev/null 2>&1 || true; }
 
@@ -750,6 +768,16 @@ share_retract() {
 
 ## True when this preview has a share recorded or a forwarder left running.
 share_active() { [ -f "$STATE_DIR/share.json" ] || share_forwarder_exists; }
+
+## True unless the edge, when reachable, no longer lists this preview's recorded share (it was
+## unshared from the hub, or expired).
+share_still_listed() {
+  local listed
+  share_load_config
+  [ -z "$(share_config_problem)" ] || return 0
+  listed="$(share_remote list 2>/dev/null)" || return 0
+  printf '%s' "$listed" | share_list_labels 2>/dev/null | grep -qxF "$(share_recorded_label)"
+}
 
 ## Print one label per line from the JSON array `list` answered, on stdin.
 share_list_labels() { python3 -c 'import json,sys; [print(s.get("label","")) for s in json.load(sys.stdin)]'; }
@@ -914,6 +942,7 @@ env (or KEY=VALUE lines in \$PREVIEW_SHARE_CONFIG, default ~/.config/preview/sha
   PREVIEW_SHARE_ADDR   address of this machine the edge proxies to (required)
   PREVIEW_SHARE_KEY    SSH key bound to the edge's share command (default: ~/.ssh/share_key)
   PREVIEW_SHARE_IMAGE  forwarder image (default: alpine/socat:latest)
+  PREVIEW_SHARE_KNOWN_HOSTS  known_hosts 'preview hub up' hands to the hub (default: ~/.ssh/known_hosts)
 EOF
 }
 
@@ -937,6 +966,36 @@ hub_docker_sock() {
 
 hub_running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$(hub_name)"; }
 
+## Set HUB_SHARE_ARGS to the docker run arguments that let the hub share previews: the edge's
+## SSH destination, the bind address and forwarder image as env, the share key and known_hosts
+## mounted read-only, and the edge's address as this host resolves it (a private zone the
+## container's DNS may not see). Empty, and a non-zero status, when sharing is not configured.
+hub_share_args() {
+  local edge_host edge_ip
+  HUB_SHARE_ARGS=()
+  share_load_config
+  [ -z "$(share_config_problem)" ] && [ -n "$PREVIEW_SHARE_ADDR" ] && [ -f "$PREVIEW_SHARE_KNOWN_HOSTS" ] || return 1
+  HUB_SHARE_ARGS=(
+    -e PREVIEW_SHARE_SSH="$PREVIEW_SHARE_SSH"
+    -e PREVIEW_SHARE_ADDR="$PREVIEW_SHARE_ADDR"
+    -e PREVIEW_SHARE_IMAGE="$PREVIEW_SHARE_IMAGE"
+    -e PREVIEW_SHARE_KEY=/run/preview-share/key
+    -e PREVIEW_SHARE_KNOWN_HOSTS=/run/preview-share/known_hosts
+    -v "$PREVIEW_SHARE_KEY:/run/preview-share/key:ro"
+    -v "$PREVIEW_SHARE_KNOWN_HOSTS:/run/preview-share/known_hosts:ro"
+  )
+  edge_host="${PREVIEW_SHARE_SSH#*@}"
+  edge_ip="$(getent ahostsv4 "$edge_host" 2>/dev/null | awk 'NR == 1 { print $1 }' || true)"
+  if [ -n "$edge_ip" ] && [ "$edge_ip" != "$edge_host" ]; then
+    HUB_SHARE_ARGS+=(--add-host "$edge_host:$edge_ip")
+  fi
+}
+
+## True when the running hub container was started with the share settings.
+hub_shares() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$(hub_name)" 2>/dev/null | grep -q '^PREVIEW_SHARE_SSH='
+}
+
 ## Run the hub container from its published image, mounting the docker socket so it can
 ## discover running previews and stop them from the UI. Idempotent: a no-op when already running.
 hub_up() {
@@ -946,6 +1005,11 @@ hub_up() {
   if hub_running; then plog "hub already running -> http://127.0.0.1:$port/"; return 0; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   [ -S "$sock" ] || pwarn "docker socket '$sock' not found — the hub will show no previews until it can read a socket"
+  if hub_share_args; then
+    plog "sharing from the hub: on (edge $PREVIEW_SHARE_SSH, forwarders bind $PREVIEW_SHARE_ADDR)"
+  else
+    plog "sharing from the hub: off (set PREVIEW_SHARE_SSH and PREVIEW_SHARE_ADDR, see 'preview share --help')"
+  fi
   plog "starting hub '$name' ($image) on :$port, socket $sock..."
   docker run -d \
     --name "$name" \
@@ -954,6 +1018,7 @@ hub_up() {
     -e HUB_PORT="$port" \
     -e POLL_INTERVAL_MS="${PREVIEW_HUB_POLL_MS:-10000}" \
     -v "$sock:/var/run/docker.sock" \
+    ${HUB_SHARE_ARGS[@]+"${HUB_SHARE_ARGS[@]}"} \
     "$image" >/dev/null \
     || die "failed to start the hub (is the image published and public? try 'docker pull $image')"
   plog "hub up -> http://127.0.0.1:$port/"
@@ -971,6 +1036,7 @@ hub_status() {
   command -v docker >/dev/null 2>&1 || die "docker is required for 'preview hub status'"
   if hub_running; then
     plog "hub: up -> http://127.0.0.1:$(hub_port)/"
+    if hub_shares; then plog "  sharing: on"; else plog "  sharing: off (configure it, then: preview hub update)"; fi
     if ts_port_mapped "$(hub_ts_port)"; then plog "  tailscale: exposed on :$(hub_ts_port)"; else plog "  tailscale: not exposed (run: preview hub expose)"; fi
   else
     plog "hub: down (run: preview hub up)"
@@ -1021,6 +1087,11 @@ env:
   PREVIEW_HUB_PORT     published host port (default: 8788)
   PREVIEW_HUB_TS_PORT  tailnet HTTPS port for `expose` (default: 8443)
   PREVIEW_HUB_NAME     container name (default: preview-hub)
+
+sharing: when the share settings of 'preview share --help' resolve (PREVIEW_SHARE_SSH,
+PREVIEW_SHARE_ADDR, the key and PREVIEW_SHARE_KNOWN_HOSTS, default ~/.ssh/known_hosts),
+'up' hands them to the hub, whose cards can then share, unshare and copy the link.
+Anyone who can reach the hub can then publish previews: keep it on your tailnet.
 EOF
 }
 
