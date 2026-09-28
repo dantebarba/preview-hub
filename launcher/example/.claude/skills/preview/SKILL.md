@@ -77,6 +77,8 @@ auto-stop timer), surface that too.
 
 ## Guardrails
 
+- Never run `preview share` unless the user asks for it: it publishes the preview on the
+  internet. `preview unshare` retracts it; `preview stop` retracts it too.
 - Never run `tailscale serve reset` — it would wipe the user's other Tailscale serve
   mappings. The CLI only ever toggles ports in its own dedicated range.
 - Customize build/up/health/down in `.preview/hooks.sh` and project settings in
