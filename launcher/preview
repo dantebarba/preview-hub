@@ -41,7 +41,8 @@
 #
 # Besides the identity, port and path variables, `start` exports PREVIEW_URL and
 # PREVIEW_ALLOWED_HOSTS (the host names a server that checks Host must accept) before the
-# hooks run, so every process they start inherits both.
+# hooks run, so every process they start inherits both. A container sees them only when the
+# compose file passes them through `environment:`.
 set -euo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -371,6 +372,7 @@ cmd_start() {
   printf '%s\n' "$PREVIEW_ROOT" >"$STATE_DIR/root"
   printf '%s\n' "$PREVIEW_BASE" >"$STATE_DIR/base"
   printf '%s\n' "$PREVIEW_URL" >"$STATE_DIR/url"
+  printf '%s\n' "$PREVIEW_ALLOWED_HOSTS" >"$STATE_DIR/allowed_hosts"
 
   echo
   plog "preview is up:  $PREVIEW_URL"
@@ -901,14 +903,37 @@ cmd_share() {
   share_warn_host "$host"
 }
 
-## Warn when the share name is outside PREVIEW_SHARE_DOMAIN: the preview then started without it
-## in PREVIEW_ALLOWED_HOSTS, and a server that checks Host (Vite, Django) refuses the guest.
+## True when a comma-separated allowed-hosts list admits the host: an entry equal to it, or a
+## '.domain' entry the host is or ends with.
+hosts_admit() {
+  local host="$2" entry
+  local -a entries
+  IFS=',' read -r -a entries <<<"$1"
+  for entry in "${entries[@]}"; do
+    case "$entry" in
+      '') ;;
+      .*) [[ "$host" == "${entry#.}" || "$host" == *"$entry" ]] && return 0 ;;
+      *) [ "$host" = "$entry" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+## Warn when the running preview started with a PREVIEW_ALLOWED_HOSTS that does not admit the
+## share name, so a server that checks Host (Vite, Django) would refuse the guest. Says what to
+## change: PREVIEW_SHARE_DOMAIN when it does not cover the name, else only a restart.
 share_warn_host() {
-  local host="$1" domain="${PREVIEW_SHARE_DOMAIN#.}"
-  [ -n "$domain" ] && [[ "$host" == *".$domain" ]] && return 0
-  pwarn "set PREVIEW_SHARE_DOMAIN=${host#*.} and restart the preview so its server accepts the share name"
+  local host="$1" domain="${PREVIEW_SHARE_DOMAIN#.}" started=""
+  [ -f "$STATE_DIR/allowed_hosts" ] && started="$(cat "$STATE_DIR/allowed_hosts")"
+  hosts_admit "$started" "$host" && return 0
+  pwarn "this preview did not start with '$host' in PREVIEW_ALLOWED_HOSTS; a server that checks Host (Vite, Django) refuses it."
+  if [ -n "$domain" ] && hosts_admit ".$domain" "$host"; then
+    pwarn "restart the preview (preview start) so its server accepts the share name."
+  else
+    pwarn "set PREVIEW_SHARE_DOMAIN=${host#*.} and restart the preview so its server accepts the share name."
+  fi
   if share_uses_vite; then
-    pwarn "a Vite server refuses an unknown Host: read allowedHosts from PREVIEW_ALLOWED_HOSTS"
+    pwarn "a Vite server must read allowedHosts from PREVIEW_ALLOWED_HOSTS."
   fi
 }
 
