@@ -254,12 +254,16 @@ collision_guard() {
 
 ## Kill the auto-stop watchdog AND its child `sleep` for a state dir (killing only the parent
 ## orphans the sleep, which then lingers harmlessly for hours), and drop its bookkeeping.
+## When the watchdog is this very process or its parent, it is the watchdog firing `stop`
+## itself (bash may exec the last command of its `sleep && stop`), so nothing is killed.
 stop_watchdog() {
   local dir="$1" w
   if pid_alive "$dir/watchdog.pid"; then
     w="$(cat "$dir/watchdog.pid")"
-    pkill -P "$w" 2>/dev/null || true
-    kill "$w" 2>/dev/null || true
+    if [ "$w" != "$$" ] && [ "$w" != "$PPID" ]; then
+      pkill -P "$w" 2>/dev/null || true
+      kill "$w" 2>/dev/null || true
+    fi
   fi
   rm -f "$dir/watchdog.pid" "$dir/deadline"
 }
