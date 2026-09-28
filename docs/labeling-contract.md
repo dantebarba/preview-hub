@@ -103,15 +103,30 @@ becomes one preview entry:
 The hub also reads the standard `com.docker.compose.project` label to deduplicate: a stack
 may put the `preview.*` labels on more than one container, but each compose project appears
 in the hub at most once. The same label scopes the hub's **Stop** action: stopping a card
-stops every running container of that compose project.
+stops every running container of that compose project, after retracting its share.
+
+## Edge labels
+
+The launcher also stamps three runtime labels on the same service, telling the hub how the
+preview can be shared (`preview share` computes the same values itself). A preview without
+them is still listed; the hub just cannot share it (`shareable: false`).
+
+| Label                 | Meaning |
+| --------------------- | ------- |
+| `preview.edge.label`  | Public label the preview is shared under: the slug of project and identity, `[a-z0-9-]`, at most 63 characters. |
+| `preview.edge.port`   | Port the forwarder listens on, on the share address: the preview's base port (40000-59999). |
+| `preview.edge.target` | `host:port` the forwarder forwards to: the preview's `PREVIEW_SERVE_TARGET`. |
 
 ## Share labels
 
-A preview published on the internet with `preview share` gets a second container next to
+A preview published on the internet, with `preview share` or from the hub, gets a second container next to
 its stack: the forwarder `<compose project>-share`, which serves the preview's backend on
 the address the edge host proxies to. It never carries `preview.url`, so it is never a
 preview of its own; the hub reads its labels only to attach the share to the preview of the
-same compose project. The launcher stamps them at runtime, never from a committed file:
+same compose project. The launcher and the hub create it identically — name, labels, and
+`socat TCP-LISTEN:<edge port>,bind=<share address>,fork,reuseaddr TCP:<edge target>` on
+the host network — so either side sees and retracts a share the other made. The labels
+are stamped at runtime, never from a committed file:
 
 | Label                   | Meaning |
 | ----------------------- | ------- |
@@ -120,10 +135,9 @@ same compose project. The launcher stamps them at runtime, never from a committe
 | `preview.share.host`    | Public host name, `<label>.<domain>`. Empty until the edge has accepted the share. |
 | `preview.share.expires` | Expiry, seconds since the epoch (UTC). Empty until the edge has accepted the share. |
 
-The key is never a label: it lives only in the link `preview share` prints and in the
-launcher's state, so nothing that reads the Docker socket can show it. The hub adds
-`share: { host, expires }` to a preview while its forwarder is running with a host and an
-expiry in the future, and shows the host and the time it expires; it cannot share or
-unshare; its **Stop** also stops the forwarder of the same compose project, leaving the share
-for the launcher to retract. A forwarder outlives an expired share until `preview shares`, `preview status` or
-`preview stop` removes it, which is why the hub checks the expiry itself.
+The key is never a label: it lives only in the link, which `preview share` prints and the
+hub fetches from the edge's `list` on **Copy link**, and in the launcher's state. The hub
+adds `share: { host, expires }` to a preview while its forwarder is running with a host
+and an expiry in the future. A forwarder outlives an expired share until `preview shares`,
+`preview status` or `preview stop` removes it, which is why the hub checks the expiry
+itself.
