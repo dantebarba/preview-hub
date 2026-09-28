@@ -283,7 +283,9 @@ body[data-loading] .topbar::before {
     border-color 120ms ease,
     background-color 120ms ease,
     transform 120ms ease,
-    box-shadow 120ms ease;
+    box-shadow 120ms ease,
+    opacity 160ms ease,
+    translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .card::before {
@@ -405,6 +407,73 @@ body[data-loading] .topbar::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-card);
+}
+
+.slot > .card {
+  flex: 1 1 auto;
+  touch-action: pan-y;
+}
+
+.slot[data-open],
+.slot[data-dragging],
+.slot[data-closing] {
+  overflow: hidden;
+}
+
+.slot[data-open] > .card {
+  translate: calc(var(--action-w) * -1) 0;
+}
+
+.slot[data-dragging] > .card {
+  translate: var(--dx, 0) 0;
+  transition: none;
+}
+
+.slot[data-open] > .card:hover {
+  transform: none;
+  box-shadow: var(--shadow-card);
+}
+
+.slot[data-stopping] > .card {
+  opacity: 0.55;
+}
+
+.slot__stop {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: calc(var(--action-w) - 0.5rem);
+  border: 0;
+  border-radius: var(--r-card);
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.slot[data-open] > .slot__stop,
+.slot[data-dragging] > .slot__stop,
+.slot[data-closing] > .slot__stop {
+  visibility: visible;
+}
+
+.slot__stop:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -4px;
+}
+
+.slot__stop:disabled {
+  cursor: progress;
+  opacity: 0.8;
 }
 
 .empty {

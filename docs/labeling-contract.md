@@ -102,4 +102,5 @@ becomes one preview entry:
 
 The hub also reads the standard `com.docker.compose.project` label to deduplicate: a stack
 may put the `preview.*` labels on more than one container, but each compose project appears
-in the hub at most once.
+in the hub at most once. The same label scopes the hub's **Stop** action: stopping a card
+stops every running container of that compose project.

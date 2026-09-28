@@ -9,6 +9,10 @@
  * Docker access is best-effort: an unreachable engine or a non-OK response yields
  * an empty list (logged to stderr) rather than a thrown error, so the PWA can
  * still render an empty state.
+ *
+ * stopPreview() stops every running container of one preview's compose project,
+ * refusing any container that does not carry `preview.url`, so the hub can only
+ * ever stop preview stacks.
  */
 
 const DEFAULT_SOCKET = "/var/run/docker.sock";
@@ -33,11 +37,17 @@ function dockerEndpoint() {
   return { url: "http://localhost", unix: socket || DEFAULT_SOCKET };
 }
 
-async function fetchContainers() {
+const CONTAINER_ID = /^[a-f0-9]{12,64}$/;
+
+function dockerFetch(path, init = {}) {
   const { url, unix } = dockerEndpoint();
-  const filters = encodeURIComponent(JSON.stringify({ label: ["preview.url"] }));
-  const target = `${url.replace(/\/$/, "")}/containers/json?filters=${filters}`;
-  const res = await fetch(target, unix ? { unix } : {});
+  const target = `${url.replace(/\/$/, "")}${path}`;
+  return fetch(target, unix ? { ...init, unix } : init);
+}
+
+async function fetchContainers(labels) {
+  const filters = encodeURIComponent(JSON.stringify({ label: labels }));
+  const res = await dockerFetch(`/containers/json?filters=${filters}`);
   if (!res.ok) {
     throw new Error(`docker engine responded ${res.status}`);
   }
@@ -58,6 +68,7 @@ function toPreview(container) {
     worktree: labels["preview.worktree"] || DEFAULT_WORKTREE,
     desc: labels["preview.desc"] || "",
     url,
+    id: container.Id || "",
     composeProject: labels["com.docker.compose.project"] || "",
   };
 }
@@ -103,11 +114,49 @@ function groupPreviews(previews) {
 export async function listPreviews() {
   let containers;
   try {
-    containers = await fetchContainers();
+    containers = await fetchContainers(["preview.url"]);
   } catch (err) {
     console.error("[preview-hub] docker query failed:", err?.message ?? err);
     return [];
   }
   if (!Array.isArray(containers)) return [];
   return groupPreviews(containers.map(toPreview).filter(Boolean));
+}
+
+async function inspectContainer(id) {
+  const res = await dockerFetch(`/containers/${id}/json`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`docker engine responded ${res.status}`);
+  return res.json();
+}
+
+async function stopContainer(id) {
+  const res = await dockerFetch(`/containers/${id}/stop`, { method: "POST" });
+  if (!res.ok && res.status !== 304 && res.status !== 404) {
+    throw new Error(`docker engine responded ${res.status} stopping ${id.slice(0, 12)}`);
+  }
+}
+
+/**
+ * Stop the preview whose labeled container has the given id: every running
+ * container of its compose project, or just that container when it belongs to
+ * none. Containers are stopped, not removed, so the launcher's own teardown
+ * (`preview stop` or its watchdog) still finds and cleans up the stack.
+ *
+ * Resolves to { status: "stopped", count }, or { status: "not-found" } when the
+ * id is malformed, unknown, or not a preview container. Throws on Docker errors.
+ */
+export async function stopPreview(id) {
+  if (typeof id !== "string" || !CONTAINER_ID.test(id)) return { status: "not-found" };
+  const container = await inspectContainer(id);
+  const labels = (container && container.Config && container.Config.Labels) || {};
+  if (!labels["preview.url"]) return { status: "not-found" };
+
+  const composeProject = labels["com.docker.compose.project"];
+  const ids = composeProject
+    ? (await fetchContainers([`com.docker.compose.project=${composeProject}`])).map((c) => c.Id)
+    : [container.Id];
+
+  await Promise.all(ids.map(stopContainer));
+  return { status: "stopped", count: ids.length };
 }

@@ -35,8 +35,8 @@ preview hub up        # pulls ghcr.io/dantebarba/preview-hub and runs it
 preview hub expose    # serve it on your tailnet on a dedicated HTTPS port
 ```
 
-`preview hub up` runs the hub container with the Docker socket mounted **read-only**
-so it can discover previews, publishes `HUB_PORT` (default `8788`), and sets
+`preview hub up` runs the hub container with the Docker socket mounted so it can
+discover previews and stop them from the UI, publishes `HUB_PORT` (default `8788`), and sets
 `restart: unless-stopped`. Manage it with `preview hub {down,status,logs}`. The
 published image is `ghcr.io/dantebarba/preview-hub:latest` (override with
 `PREVIEW_HUB_IMAGE`).
@@ -60,6 +60,21 @@ docker compose up -d
 Copy `.env.example` to `.env` to override the port or poll interval; both have
 safe defaults, so `.env` is optional.
 </details>
+
+## Stopping a preview from the hub
+
+Right-click a card (or focus it and press <kbd>Delete</kbd>) on desktop, or swipe it
+left on a phone, to reveal **Stop**; tap it to stop that preview. The hub stops every
+running container of the preview's compose project — it only acts on stacks whose
+container carries `preview.url` — so the card disappears on the next poll.
+
+The hub runs in a container, so it cannot run the launcher's full teardown: the
+containers are stopped, not removed, and the Tailscale mapping, any host processes an
+`on_down` hook would stop, and the launcher's state stay behind until `preview stop`
+or the auto-stop watchdog runs. `preview start` brings a hub-stopped preview back.
+
+Anyone who can reach the hub can stop previews, and the Docker socket grants full
+control of the engine whether or not it is mounted `:ro`; keep the hub on your tailnet.
 
 ## Serve it over Tailscale (one time)
 

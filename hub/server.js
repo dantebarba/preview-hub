@@ -3,6 +3,8 @@
  *
  * Serves the JSON discovery API and the static PWA:
  *   GET /api/previews  -> grouped/deduped preview list (200; [] on Docker error)
+ *   POST /api/previews/stop {id} -> stop that preview's compose project
+ *                         (200 {stopped}; 404 unknown/not a preview; 502 Docker error)
  *   GET /api/config    -> { pollIntervalMs }
  *   GET /health        -> "ok"
  *   everything else     -> a file from ./public (path-traversal safe), else 404
@@ -13,7 +15,7 @@
 
 import { statSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
-import { listPreviews } from "./docker.js";
+import { listPreviews, stopPreview } from "./docker.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 
@@ -99,12 +101,44 @@ async function handlePreviews() {
   }
 }
 
+/**
+ * Stop one preview. The body must be JSON so a cross-origin page cannot send it
+ * without a CORS preflight, which this server never approves.
+ */
+async function handleStop(req) {
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
+  }
+  if (!(req.headers.get("content-type") || "").startsWith("application/json")) {
+    return new Response("Unsupported Media Type", { status: 415 });
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "invalid JSON" }, { status: 400 });
+  }
+
+  try {
+    const result = await stopPreview(body && body.id);
+    if (result.status === "not-found") {
+      return Response.json({ error: "no such preview" }, { status: 404 });
+    }
+    return Response.json({ stopped: result.count });
+  } catch (err) {
+    console.error("[preview-hub] /api/previews/stop failed:", err?.message ?? err);
+    return Response.json({ error: "docker engine unavailable" }, { status: 502 });
+  }
+}
+
 const server = Bun.serve({
   port: PORT,
   async fetch(req) {
     const { pathname } = new URL(req.url);
 
     if (pathname === "/api/previews") return handlePreviews();
+    if (pathname === "/api/previews/stop") return handleStop(req);
     if (pathname === "/api/config") {
       return Response.json({ pollIntervalMs: POLL_INTERVAL_MS });
     }
