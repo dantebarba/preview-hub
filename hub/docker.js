@@ -15,8 +15,8 @@
  * an empty list (logged to stderr) rather than a thrown error, so the PWA can
  * still render an empty state.
  *
- * stopPreview() stops every running container of one preview's compose project,
- * refusing any container that does not carry `preview.url`, so the hub can only
+ * stopPreview() stops every running container of one preview's compose project
+ * and its share forwarder, refusing any container that does not carry `preview.url`, so the hub can only
  * ever stop preview stacks.
  */
 
@@ -186,8 +186,9 @@ async function stopContainer(id) {
 
 /**
  * Stop the preview whose labeled container has the given id: every running
- * container of its compose project, or just that container when it belongs to
- * none. Containers are stopped, not removed, so the launcher's own teardown
+ * container of its compose project, and its share forwarder so nothing of it
+ * stays reachable from the internet, or just that container when it belongs to
+ * no compose project. The share itself is left for the launcher to retract. Containers are stopped, not removed, so the launcher's own teardown
  * (`preview stop` or its watchdog) still finds and cleans up the stack.
  *
  * Resolves to { status: "stopped", count }, or { status: "not-found" } when the
@@ -201,7 +202,14 @@ export async function stopPreview(id) {
 
   const composeProject = labels["com.docker.compose.project"];
   const ids = composeProject
-    ? (await fetchContainers([`com.docker.compose.project=${composeProject}`])).map((c) => c.Id)
+    ? (
+        await Promise.all([
+          fetchContainers([`com.docker.compose.project=${composeProject}`]),
+          fetchContainers([`preview.share.project=${composeProject}`]),
+        ])
+      )
+        .flat()
+        .map((c) => c.Id)
     : [container.Id];
 
   await Promise.all(ids.map(stopContainer));

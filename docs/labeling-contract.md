@@ -124,5 +124,6 @@ The key is never a label: it lives only in the link `preview share` prints and i
 launcher's state, so nothing that reads the Docker socket can show it. The hub adds
 `share: { host, expires }` to a preview while its forwarder is running with a host and an
 expiry in the future, and shows the host and the time it expires; it cannot share or
-unshare. A forwarder outlives an expired share until `preview shares`, `preview status` or
+unshare; its **Stop** also stops the forwarder of the same compose project, leaving the share
+for the launcher to retract. A forwarder outlives an expired share until `preview shares`, `preview status` or
 `preview stop` removes it, which is why the hub checks the expiry itself.

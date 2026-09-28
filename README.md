@@ -66,7 +66,8 @@ safe defaults, so `.env` is optional.
 Right-click a card (or focus it and press <kbd>Delete</kbd>) on desktop, or swipe it
 left on a phone, to reveal **Stop**; tap it to stop that preview. The hub stops every
 running container of the preview's compose project — it only acts on stacks whose
-container carries `preview.url` — so the card disappears on the next poll.
+container carries `preview.url` — plus its share forwarder when it is
+[shared](#sharing-a-preview-on-the-internet), so the card disappears on the next poll.
 
 The hub runs in a container, so it cannot run the launcher's full teardown: the
 containers are stopped, not removed, and the Tailscale mapping, any host processes an
@@ -90,7 +91,8 @@ preview shares                      # every share, from any directory
 `share` and `unshare` act on the current checkout's preview, resolved like `preview stop`
 (`PREVIEW_ID`, `.preview/`). `share` prints a link `https://<label>.<domain>/?k=<key>` and
 the expiry in local time; the label is built from the project and the identity (lowercase,
-anything outside `[a-z0-9-]` becomes `-`, at most 63 characters). Sharing again replaces
+each run of characters outside `[a-z0-9-]` becomes one `-`, no leading or trailing `-`, at
+most 63 characters). Sharing again replaces
 the key and the expiry, so the link printed before stops working. `shares` lists label,
 link and time left, marking the shares whose preview is not running on this machine.
 
@@ -102,15 +104,17 @@ serves the preview's `PREVIEW_SERVE_TARGET` on that one address at the preview's
 port, never on `0.0.0.0`. `share` fails when that address is not one of this machine's.
 
 - `share` refuses a preview that is not running, and warns and asks for confirmation
-  (skip it with `--yes`) when the preview's containers mount a `.env` / `.envrc` or read
-  one through `env_file`: the guest will be talking to a process that holds credentials.
+  (skip it with `--yes`) when the preview's containers mount a `.env` / `.envrc`, read one
+  through `env_file`, or compose reads the project directory's `.env`: the guest will be
+  talking to a process that holds credentials.
 - It warns when the project uses Vite, whose dev server refuses the public `Host` until it
   is listed in `server.allowedHosts`.
 - `preview stop`, `killall` and the auto-stop watchdog unshare first.
 - The edge removes a share when it expires; `preview shares` and `preview status` then
   stop the forwarder it left behind.
 - The hub shows a shared preview's public host and expiry, never the key, and cannot share
-  or unshare.
+  or unshare. Stopping a shared preview from the hub stops its forwarder too; the share
+  itself stays listed until `preview unshare`, `preview stop` or its expiry.
 
 Configure it with environment variables, or with `KEY=VALUE` lines in
 `~/.config/preview/share.env` (the environment wins). Put them in the file when the

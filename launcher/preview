@@ -382,17 +382,21 @@ cmd_status() {
     else
       plog "  auto-stop watchdog: down"
     fi
-    if [ -f "$STATE_DIR/share.json" ] && share_forwarder_exists; then
-      local host="" expires=""
-      if command -v python3 >/dev/null 2>&1; then
-        { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
-        plog "  shared: https://${host:-?}/ until $(fmt_epoch "${expires:-0}") ($(time_left "${expires:-0}") left)"
-      else
-        plog "  shared: yes"
+    local host="" expires=""
+    if [ -f "$STATE_DIR/share.json" ] && command -v python3 >/dev/null 2>&1; then
+      { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
+      if [[ "$expires" =~ ^[0-9]+$ ]] && [ "$expires" -le "$(date +%s)" ]; then
+        rm -f "$STATE_DIR/share.json"
       fi
-    else
-      rm -f "$STATE_DIR/share.json"
+    fi
+    if [ ! -f "$STATE_DIR/share.json" ]; then
       plog "  shared: no"
+    elif ! share_forwarder_exists; then
+      pwarn "  shared, but its forwarder is gone: run 'preview share' to restore it or 'preview unshare'"
+    elif [ -n "$host" ]; then
+      plog "  shared: https://$host/ until $(fmt_epoch "$expires") ($(time_left "$expires") left)"
+    else
+      plog "  shared: yes"
     fi
   else
     plog "  not running"
@@ -407,7 +411,7 @@ cmd_status() {
     id="$(cat "$dir/id" 2>/dev/null || basename "$dir")"
     url="$(cat "$dir/url" 2>/dev/null || echo '(starting)')"
     shared=""
-    if [ -f "$dir/share.json" ] && docker inspect "$(share_forwarder_name "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")")" >/dev/null 2>&1; then
+    if [ -f "$dir/share.json" ] && share_forwarder_exists "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
       shared=" [shared]"
     fi
     if compose_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
@@ -550,12 +554,10 @@ share_remote() {
   return "$status"
 }
 
-## Build this preview's public label from its project and identity: lowercase, every run of
-## characters outside [a-z0-9-] becomes one '-', no leading or trailing '-', at most 63
-## characters.
+## Build this preview's public label from its project and identity: the slug of both with '_'
+## also turned into '-', so only [a-z0-9-] remains, cut to 63 characters with no trailing '-'.
 share_label() {
-  printf '%s-%s' "$PREVIEW_PROJECT" "$PREVIEW_ID" | LC_ALL=C tr '[:upper:]' '[:lower:]' \
-    | LC_ALL=C sed -E 's/[^a-z0-9-]+/-/g; s/^-+//' | cut -c1-63 | sed -E 's/-+$//'
+  slugify "$PREVIEW_PROJECT-$PREVIEW_ID" | tr '_' '-' | cut -c1-63 | sed -E 's/-+$//'
 }
 
 ## Print the label this preview is shared under: the one recorded at share time, else the one
@@ -589,8 +591,9 @@ addr_is_local() {
 ## Name of the forwarder container of compose project $1, default this preview's.
 share_forwarder_name() { printf '%s-share' "${1:-$PREVIEW_COMPOSE_PROJECT}"; }
 
-## True when this preview's forwarder container exists, running or not.
-share_forwarder_exists() { docker inspect "$(share_forwarder_name)" >/dev/null 2>&1; }
+## True when the forwarder container of compose project $1 (default this preview's) exists,
+## running or not.
+share_forwarder_exists() { docker inspect "$(share_forwarder_name "${1:-}")" >/dev/null 2>&1; }
 
 ## True when a local process LISTENs on the given address and TCP port.
 addr_port_listening() {
@@ -634,7 +637,8 @@ share_forwarder_start() {
 share_forwarder_stop() { docker rm -f "$(share_forwarder_name)" >/dev/null 2>&1 || true; }
 
 ## Print every .env / .envrc file the preview's running containers bind-mount (directly, or at
-## the top of a mounted directory) or read through a service's env_file, one per line.
+## the top of a mounted directory) or read through a service's env_file, plus the .env compose
+## itself reads from the project directory, one per line.
 share_credential_files() {
   local ids
   ids="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" 2>/dev/null || true)"
@@ -667,6 +671,9 @@ for c in containers:
                     add(os.path.join(src, name))
 
 labels = (containers[0].get("Config") or {}).get("Labels") or {} if containers else {}
+workdir = labels.get("com.docker.compose.project.working_dir") or ""
+if workdir and os.path.exists(os.path.join(workdir, ".env")):
+    add(os.path.join(workdir, ".env"))
 files = [f for f in (labels.get("com.docker.compose.project.config_files") or "").split(",") if f]
 if files:
     cmd = ["docker", "compose", "-p", sys.argv[1]]
@@ -814,6 +821,7 @@ cmd_share() {
   [ -n "$label" ] || die "could not build a share label from project '$PREVIEW_PROJECT' and '$PREVIEW_ID'"
   if ! share_forwarder_exists; then
     plog "forwarding $PREVIEW_SHARE_ADDR:$PREVIEW_BASE -> $PREVIEW_SERVE_TARGET"
+    trap 'share_remote remove "$label" >/dev/null 2>&1; share_forwarder_stop; exit 130' INT TERM HUP
     share_forwarder_start "$label" || die "could not start the share forwarder"
     started=1
   fi
@@ -822,6 +830,7 @@ cmd_share() {
     [ "$started" -eq 1 ] && share_forwarder_stop
     exit 1
   fi
+  trap - INT TERM HUP
   { read -r host; read -r url; read -r expires; } < <(printf '%s' "$json" | json_fields host url expires 2>/dev/null || true) || true
   if [ -z "$url" ] || [ -z "$host" ] || ! [[ "$expires" =~ ^[0-9]+$ ]]; then
     share_remote remove "$label" >/dev/null || true
@@ -847,9 +856,9 @@ cmd_share() {
   fi
 }
 
-## unshare: retract this checkout's share on the edge, stop its forwarder, clear its state.
+## unshare: retract this checkout's share on the edge, stop its forwarder, clear its state. The
+## forwarder and state go even when the edge cannot be reached.
 cmd_unshare() {
-  share_require_edge
   share_retract
 }
 
