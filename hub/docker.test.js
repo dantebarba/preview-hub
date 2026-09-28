@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { sharesByProject, withShares } from "./docker.js";
+import { edgeOf, sharesByProject, withShares } from "./docker.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -83,5 +83,24 @@ describe("withShares", () => {
     expect(shared.share).toEqual({ host: "acme-main.example.com", expires: 1800003600 });
     expect(plain.share).toBeUndefined();
     expect(orphan.share).toBeUndefined();
+  });
+});
+
+describe("edgeOf", () => {
+  const labels = {
+    "preview.edge.label": "acme-main",
+    "preview.edge.port": "45000",
+    "preview.edge.target": "127.0.0.1:45001",
+  };
+
+  test("reads label, port and target", () => {
+    expect(edgeOf(labels)).toEqual({ label: "acme-main", port: 45000, target: "127.0.0.1:45001" });
+  });
+
+  test("rejects a missing or malformed piece", () => {
+    expect(edgeOf({})).toBeNull();
+    expect(edgeOf({ ...labels, "preview.edge.label": "Acme_Main" })).toBeNull();
+    expect(edgeOf({ ...labels, "preview.edge.port": "8080" })).toBeNull();
+    expect(edgeOf({ ...labels, "preview.edge.target": "127.0.0.1:45001; id" })).toBeNull();
   });
 });

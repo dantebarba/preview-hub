@@ -6,10 +6,11 @@
  * project contributes at most one record, groups the records by `preview.project`
  * and sorts them into the exact shape the hub serves at GET /api/previews.
  *
- * A preview the launcher has shared on the internet also has a forwarder
- * container carrying `preview.share.*` labels; its public host and expiry are
- * attached to the preview as `share`. The key is never in a label, so the hub
- * cannot show it.
+ * A preview shared on the internet (by the launcher or the hub) also has a
+ * forwarder container carrying `preview.share.*` labels; its public host and
+ * expiry are attached to the preview as `share`. The key is never in a label.
+ * A preview whose `preview.edge.*` labels say where it can be shared from is
+ * marked `shareable`.
  *
  * Docker access is best-effort: an unreachable engine or a non-OK response yields
  * an empty list (logged to stderr) rather than a thrown error, so the PWA can
@@ -44,14 +45,20 @@ function dockerEndpoint() {
 
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/;
 const SHARE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const EDGE_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const EDGE_TARGET = /^[A-Za-z0-9.:[\]-]+:\d{1,5}$/;
+const EDGE_PORT_MIN = 40000;
+const EDGE_PORT_MAX = 59999;
 
-function dockerFetch(path, init = {}) {
+/** Call the Docker Engine API at `path`, over the socket or TCP endpoint. */
+export function dockerFetch(path, init = {}) {
   const { url, unix } = dockerEndpoint();
   const target = `${url.replace(/\/$/, "")}${path}`;
   return fetch(target, unix ? { ...init, unix } : init);
 }
 
-async function fetchContainers(labels) {
+/** List running containers carrying every one of the given label filters. */
+export async function fetchContainers(labels) {
   const filters = encodeURIComponent(JSON.stringify({ label: labels }));
   const res = await dockerFetch(`/containers/json?filters=${filters}`);
   if (!res.ok) {
@@ -64,6 +71,20 @@ async function fetchContainers(labels) {
  * Turn one raw Docker container object into a preview record, or null when it
  * lacks the required `preview.url` label.
  */
+/**
+ * Read where a preview can be shared from out of its `preview.edge.*` labels:
+ * { label, port, target }, or null when any is missing or malformed.
+ */
+export function edgeOf(labels) {
+  const source = labels || {};
+  const label = source["preview.edge.label"] || "";
+  const port = Number(source["preview.edge.port"]);
+  const target = source["preview.edge.target"] || "";
+  if (!EDGE_LABEL.test(label) || !EDGE_TARGET.test(target)) return null;
+  if (!Number.isInteger(port) || port < EDGE_PORT_MIN || port > EDGE_PORT_MAX) return null;
+  return { label, port, target };
+}
+
 function toPreview(container) {
   const labels = (container && container.Labels) || {};
   const url = labels["preview.url"];
@@ -76,6 +97,7 @@ function toPreview(container) {
     url,
     id: container.Id || "",
     composeProject: labels["com.docker.compose.project"] || "",
+    shareable: edgeOf(labels) !== null,
   };
 }
 
@@ -170,7 +192,8 @@ export async function listPreviews() {
   return groupPreviews(withShares(previews, shares));
 }
 
-async function inspectContainer(id) {
+/** Inspect one container by id or name; null when it does not exist. */
+export async function inspectContainer(id) {
   const res = await dockerFetch(`/containers/${id}/json`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`docker engine responded ${res.status}`);
@@ -185,20 +208,31 @@ async function stopContainer(id) {
 }
 
 /**
+ * Inspect the preview container with the given id: null when the id is
+ * malformed, unknown, or not a container carrying `preview.url`.
+ */
+export async function inspectPreview(id) {
+  if (typeof id !== "string" || !CONTAINER_ID.test(id)) return null;
+  const container = await inspectContainer(id);
+  const labels = (container && container.Config && container.Config.Labels) || {};
+  return labels["preview.url"] ? container : null;
+}
+
+/**
  * Stop the preview whose labeled container has the given id: every running
- * container of its compose project, and its share forwarder so nothing of it
- * stays reachable from the internet, or just that container when it belongs to
- * no compose project. The share itself is left for the launcher to retract. Containers are stopped, not removed, so the launcher's own teardown
- * (`preview stop` or its watchdog) still finds and cleans up the stack.
+ * container of its compose project and its share forwarder, or just that
+ * container when it belongs to no compose project. Retracting the share on the
+ * edge is ./share.js's job, done before this. Containers are stopped, not
+ * removed, so the launcher's own teardown (`preview stop` or its watchdog)
+ * still finds and cleans up the stack.
  *
  * Resolves to { status: "stopped", count }, or { status: "not-found" } when the
  * id is malformed, unknown, or not a preview container. Throws on Docker errors.
  */
 export async function stopPreview(id) {
-  if (typeof id !== "string" || !CONTAINER_ID.test(id)) return { status: "not-found" };
-  const container = await inspectContainer(id);
-  const labels = (container && container.Config && container.Config.Labels) || {};
-  if (!labels["preview.url"]) return { status: "not-found" };
+  const container = await inspectPreview(id);
+  if (!container) return { status: "not-found" };
+  const labels = container.Config.Labels;
 
   const composeProject = labels["com.docker.compose.project"];
   const ids = composeProject
