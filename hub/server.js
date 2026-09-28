@@ -4,9 +4,18 @@
  * Serves the JSON discovery API and the static PWA:
  *   GET /api/previews  -> grouped/deduped preview list, a shared preview carrying
  *                         share: { host, expires } (200; [] on Docker error)
- *   POST /api/previews/stop {id} -> stop that preview's compose project
- *                         (200 {stopped}; 404 unknown/not a preview; 502 Docker error)
- *   GET /api/config    -> { pollIntervalMs }
+ *   POST /api/previews/stop {id} -> retract its share, then stop that preview's
+ *                         compose project (200 {stopped, warning?}; 404 unknown/not a
+ *                         preview; 502 Docker error)
+ *   POST /api/previews/share {id, hours, confirm} -> share it on the internet
+ *                         (200 {shared, host, expires} or {needsConfirm, files})
+ *   POST /api/previews/unshare {id} -> retract its share (200 {unshared, warning?})
+ *   POST /api/previews/share-link {id} -> its link, key included (200 {url, expires})
+ *   GET /api/config    -> { pollIntervalMs, share }
+ *
+ * The share endpoints answer 409 when this hub has no share settings, 404 for
+ * an unknown preview or share, 400 for a bad duration and 502 when the edge or
+ * Docker fails, each as { error }.
  *   GET /health        -> "ok"
  *   everything else     -> a file from ./public (path-traversal safe), else 404
  *
@@ -16,7 +25,8 @@
 
 import { statSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
-import { listPreviews, stopPreview } from "./docker.js";
+import { listPreviews } from "./docker.js";
+import { ShareError, shareEnabled, sharing } from "./share.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 
@@ -103,10 +113,12 @@ async function handlePreviews() {
 }
 
 /**
- * Stop one preview. The body must be JSON so a cross-origin page cannot send it
- * without a CORS preflight, which this server never approves.
+ * Run one preview action from a POST with a JSON body. The body must be JSON so
+ * a cross-origin page cannot send it without a CORS preflight, which this
+ * server never approves. A ShareError answers with its own status and message;
+ * anything else is logged and answered 502.
  */
-async function handleStop(req) {
+async function handleAction(req, name, action) {
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
   }
@@ -122,16 +134,29 @@ async function handleStop(req) {
   }
 
   try {
-    const result = await stopPreview(body && body.id);
-    if (result.status === "not-found") {
-      return Response.json({ error: "no such preview" }, { status: 404 });
-    }
-    return Response.json({ stopped: result.count });
+    return Response.json(await action(body || {}));
   } catch (err) {
-    console.error("[preview-hub] /api/previews/stop failed:", err?.message ?? err);
+    if (err instanceof ShareError) {
+      if (err.status >= 500) console.error(`[preview-hub] ${name} failed:`, err.message);
+      return Response.json({ error: err.message }, { status: err.status });
+    }
+    console.error(`[preview-hub] ${name} failed:`, err?.message ?? err);
     return Response.json({ error: "docker engine unavailable" }, { status: 502 });
   }
 }
+
+async function stopAction({ id }) {
+  const result = await sharing.stop(id);
+  if (result.status === "not-found") throw new ShareError("no such preview", 404);
+  return result.warning ? { stopped: result.count, warning: result.warning } : { stopped: result.count };
+}
+
+const ACTIONS = {
+  "/api/previews/stop": stopAction,
+  "/api/previews/share": ({ id, hours, confirm }) => sharing.share(id, hours, confirm === true),
+  "/api/previews/unshare": ({ id }) => sharing.unshare(id),
+  "/api/previews/share-link": ({ id }) => sharing.link(id),
+};
 
 const server = Bun.serve({
   port: PORT,
@@ -139,9 +164,9 @@ const server = Bun.serve({
     const { pathname } = new URL(req.url);
 
     if (pathname === "/api/previews") return handlePreviews();
-    if (pathname === "/api/previews/stop") return handleStop(req);
+    if (Object.hasOwn(ACTIONS, pathname)) return handleAction(req, pathname, ACTIONS[pathname]);
     if (pathname === "/api/config") {
-      return Response.json({ pollIntervalMs: POLL_INTERVAL_MS });
+      return Response.json({ pollIntervalMs: POLL_INTERVAL_MS, share: shareEnabled });
     }
     if (pathname === "/health") {
       return new Response("ok", {
@@ -154,3 +179,4 @@ const server = Bun.serve({
 });
 
 console.log(`[preview-hub] listening on http://localhost:${server.port}`);
+console.log(`[preview-hub] sharing ${shareEnabled ? "enabled" : "disabled (no share settings)"}`);
