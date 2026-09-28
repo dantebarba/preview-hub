@@ -160,11 +160,14 @@ const ACTIONS = {
 
 const server = Bun.serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, srv) {
     const { pathname } = new URL(req.url);
 
     if (pathname === "/api/previews") return handlePreviews();
-    if (Object.hasOwn(ACTIONS, pathname)) return handleAction(req, pathname, ACTIONS[pathname]);
+    if (Object.hasOwn(ACTIONS, pathname)) {
+      srv.timeout(req, 0);
+      return handleAction(req, pathname, ACTIONS[pathname]);
+    }
     if (pathname === "/api/config") {
       return Response.json({ pollIntervalMs: POLL_INTERVAL_MS, share: shareEnabled });
     }

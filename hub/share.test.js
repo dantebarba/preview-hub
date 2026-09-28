@@ -155,6 +155,15 @@ describe("share", () => {
     ]);
   });
 
+  test("removes the share and the forwarder when the edge answers add unexpectedly", async () => {
+    const { calls, sharing } = harness({ edge: async (verb) => (verb === "add" ? "not json" : "") });
+    await expect(sharing.share(ID, 4, false)).rejects.toMatchObject({ status: 502 });
+    expect(calls.slice(-2)).toEqual([
+      ["edge", "remove", "acme-main"],
+      ["remove", "acme-main-share"],
+    ]);
+  });
+
   test("keeps an existing forwarder when a re-share fails", async () => {
     const { calls, sharing } = harness({
       forwarders: { "acme-main-share": { "preview.share.label": "acme-main" } },
@@ -228,6 +237,29 @@ describe("unshare, link and stop", () => {
       ["remove", "acme-main-share"],
       ["stopPreview"],
     ]);
+  });
+
+  test("stop still stops the stack when retracting the share fails", async () => {
+    const calls = [];
+    const failing = createSharing({
+      config: { enabled: true },
+      edge: async () => "",
+      docker: {
+        inspectPreview: async () => ({ Config: { Labels: EDGE_LABELS } }),
+        forwarderLabels: async () => ({ "preview.share.label": "acme-main" }),
+        remove: async () => {
+          throw new ShareError("docker engine responded 500 removing acme-main-share", 502);
+        },
+        stopPreview: async () => {
+          calls.push(["stopPreview"]);
+          return { status: "stopped", count: 2 };
+        },
+      },
+    });
+    const result = await failing.stop(ID);
+    expect(result).toMatchObject({ status: "stopped", count: 2 });
+    expect(result.warning).toContain("could not retract the share");
+    expect(calls).toEqual([["stopPreview"]]);
   });
 
   test("stop without share settings still drops the forwarder, with a warning", async () => {

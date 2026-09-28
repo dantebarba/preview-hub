@@ -406,6 +406,8 @@ cmd_status() {
       plog "  shared: https://$host/ until $(fmt_epoch "$expires") ($(time_left "$expires") left)"
     elif [ -f "$STATE_DIR/share.json" ] && ! share_forwarder_exists && share_still_listed; then
       pwarn "  shared, but its forwarder is gone: run 'preview share' to restore it or 'preview unshare'"
+    elif share_forwarder_exists; then
+      plog "  shared: yes"
     else
       rm -f "$STATE_DIR/share.json"
       plog "  shared: no"
@@ -991,6 +993,17 @@ hub_share_args() {
   fi
 }
 
+## Print why hub_share_args found sharing not configured: the first missing tool, setting or
+## file.
+hub_share_off_reason() {
+  local problem
+  problem="$(share_config_problem)"
+  if [ -n "$problem" ]; then printf '%s' "$problem"
+  elif [ -z "$PREVIEW_SHARE_ADDR" ]; then printf 'PREVIEW_SHARE_ADDR is not set'
+  else printf "known_hosts '%s' is missing" "$PREVIEW_SHARE_KNOWN_HOSTS"
+  fi
+}
+
 ## True when the running hub container was started with the share settings.
 hub_shares() {
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$(hub_name)" 2>/dev/null | grep -q '^PREVIEW_SHARE_SSH='
@@ -1008,7 +1021,7 @@ hub_up() {
   if hub_share_args; then
     plog "sharing from the hub: on (edge $PREVIEW_SHARE_SSH, forwarders bind $PREVIEW_SHARE_ADDR)"
   else
-    plog "sharing from the hub: off (set PREVIEW_SHARE_SSH and PREVIEW_SHARE_ADDR, see 'preview share --help')"
+    plog "sharing from the hub: off ($(hub_share_off_reason); see 'preview share --help')"
   fi
   plog "starting hub '$name' ($image) on :$port, socket $sock..."
   docker run -d \
