@@ -16,6 +16,9 @@
 #   preview stop       # tear it down (also fired automatically by the watchdog)
 #   preview status     # this checkout's preview + every preview recorded on the machine
 #   preview killall    # tear down every recorded preview and sweep strays
+#   preview share      # publish this checkout's running preview on the internet, behind a key
+#   preview unshare    # retract it
+#   preview shares     # every share, with its URL and time left
 #
 # ── One preview per identity, deterministically ──────────────────────────────
 # The identity is the checked-out git branch (short SHA when detached), overridable with
@@ -281,13 +284,18 @@ reset_watchdog() {
 }
 
 ## Best-effort teardown of an orphan state dir whose identity file is missing (e.g. a removed
-## worktree): no on_down context is available, so it only releases the recorded port and stack.
+## worktree): no on_down context is available, so it only releases the recorded port, share
+## and stack.
 teardown_dir() {
   local dir="$1" slug base
   slug="$(basename "$dir")"
   base="$(cat "$dir/base" 2>/dev/null || true)"
   plog "tearing down orphan state '$slug'..."
   stop_watchdog "$dir"
+  if [ -f "$dir/share.json" ]; then
+    STATE_DIR="$dir" PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug" share_retract
+  fi
+  docker rm -f "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug-share" >/dev/null 2>&1 || true
   [ -n "$base" ] && tailscale serve --https="$base" off >/dev/null 2>&1 || true
   docker compose -p "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
   rm -rf "$dir"
@@ -343,13 +351,15 @@ cmd_start() {
   plog "auto-stops in $(( TIMEOUT_SECONDS / 3600 ))h (or run: preview stop)"
 }
 
-## stop: tear down this checkout's preview. Order: on_down (best effort) -> Tailscale off for
-## the recorded base -> compose down (named volumes kept) -> remove the state dir.
+## stop: tear down this checkout's preview. Order: unshare when shared -> on_down (best effort)
+## -> Tailscale off for the recorded base -> compose down (named volumes kept) -> remove the
+## state dir.
 cmd_stop() {
   local base="$TS_PORT"
   [ -f "$STATE_DIR/base" ] && base="$(cat "$STATE_DIR/base")"
   plog "stopping '$PREVIEW_ID'..."
   stop_watchdog "$STATE_DIR"
+  if share_active; then share_retract; fi
   if has_hook on_down; then on_down || pwarn "on_down hook reported an error; continuing teardown"; fi
   tailscale serve --https="$base" off >/dev/null 2>&1 || true
   docker compose -p "$PREVIEW_COMPOSE_PROJECT" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
@@ -357,8 +367,10 @@ cmd_stop() {
   plog "stopped. (named volumes kept; other tailscale mappings untouched.)"
 }
 
-## status: this checkout's preview plus every preview recorded on the machine.
+## status: this checkout's preview plus every preview recorded on the machine, after stopping
+## the forwarders of shares that are gone.
 cmd_status() {
+  share_sweep_forwarders
   plog "this checkout: '$PREVIEW_ID' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT', worktree '$PREVIEW_WORKTREE'"
   if [ -d "$STATE_DIR" ]; then
     local url; url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)')"
@@ -370,30 +382,43 @@ cmd_status() {
     else
       plog "  auto-stop watchdog: down"
     fi
+    if [ -f "$STATE_DIR/share.json" ] && share_forwarder_exists && command -v python3 >/dev/null 2>&1; then
+      local host expires
+      { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
+      plog "  shared: https://${host:-?}/ until $(fmt_epoch "${expires:-0}") ($(time_left "${expires:-0}") left)"
+    else
+      rm -f "$STATE_DIR/share.json"
+      plog "  shared: no"
+    fi
   else
     plog "  not running"
   fi
 
   plog "all previews on this machine:"
-  local dir id url any=0
+  local dir id url shared any=0
   for dir in "$STATE_ROOT"/*/; do
     [ -d "$dir" ] || continue
     any=1
     dir="${dir%/}"
     id="$(cat "$dir/id" 2>/dev/null || basename "$dir")"
     url="$(cat "$dir/url" 2>/dev/null || echo '(starting)')"
+    shared=""
+    if [ -f "$dir/share.json" ] && docker inspect "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")-share" >/dev/null 2>&1; then
+      shared=" [shared]"
+    fi
     if compose_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
-      plog "  • $id  $url  [up]"
+      plog "  • $id  $url  [up]$shared"
     else
-      plog "  • $id  $url  [down]"
+      plog "  • $id  $url  [down]$shared"
     fi
   done
   [ "$any" -eq 1 ] || plog "  (none)"
 }
 
 ## killall: stop every recorded preview (re-invoking `stop` per identity so on_down runs with
-## the right context), then sweep strays — compose projects under our prefix and Tailscale
-## mappings inside 40000-59999. Named volumes are kept; `tailscale serve reset` is never used.
+## the right context and shares are retracted), then sweep strays — share forwarders and
+## compose projects under our prefix and Tailscale mappings inside 40000-59999. Named volumes
+## are kept; `tailscale serve reset` is never used.
 cmd_killall() {
   local dir id n=0
   for dir in "$STATE_ROOT"/*/; do
@@ -408,7 +433,16 @@ cmd_killall() {
     n=$(( n + 1 ))
   done
 
-  local proj port
+  local proj port name label
+  while IFS=$'\t' read -r name proj label; do
+    case "$proj" in
+      "$PREVIEW_COMPOSE_PROJECT_PREFIX"-*)
+        plog "sweeping stray share forwarder '$name'..."
+        STATE_DIR="$STATE_ROOT/.stray" PREVIEW_COMPOSE_PROJECT="$proj" share_retract "$label"
+        ;;
+    esac
+  done < <(docker ps -a --filter label=preview.share.project \
+    --format '{{.Names}}\t{{.Label "preview.share.project"}}\t{{.Label "preview.share.label"}}' 2>/dev/null || true)
   for proj in $(list_compose_projects); do
     case "$proj" in
       "$PREVIEW_COMPOSE_PROJECT_PREFIX"-*)
@@ -423,6 +457,444 @@ cmd_killall() {
   done
 
   plog "killall done: $n recorded preview(s) stopped. (named volumes kept.)"
+}
+
+## ── share: publish one preview to the internet through an edge host ─────────
+## The launcher never talks to a DNS provider, runs a tunnel or a public proxy: an edge host
+## owns all of that and is asked over SSH, one call per action, with a key bound there to its
+## `share` command (verbs add/remove/list). The edge proxies a guest to PREVIEW_SHARE_ADDR:<port>
+## on this machine, so while a preview is shared a forwarder container serves its backend on
+## that one address, at PREVIEW_BASE. Nothing machine-specific is baked in: the edge's SSH
+## destination, the key and the address come from the environment or the user's share config.
+
+SHARE_CONFIG_FILE="${PREVIEW_SHARE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/preview/share.env}"
+SHARE_DEFAULT_HOURS=4
+SHARE_MAX_HOURS=72
+
+## Fill PREVIEW_SHARE_SSH / _KEY / _ADDR / _IMAGE from the user's share config file (plain
+## KEY=VALUE lines, never sourced), without overriding a value already set in the environment,
+## then apply the defaults. Idempotent.
+share_load_config() {
+  local line key value
+  if [ -f "$SHARE_CONFIG_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line#export }"
+      key="${line%%=*}"
+      value="${line#*=}"
+      case "$key" in
+        PREVIEW_SHARE_SSH|PREVIEW_SHARE_KEY|PREVIEW_SHARE_ADDR|PREVIEW_SHARE_IMAGE) ;;
+        *) continue ;;
+      esac
+      [ -n "${!key:-}" ] && continue
+      value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+      printf -v "$key" '%s' "${value/#\~/$HOME}"
+    done <"$SHARE_CONFIG_FILE"
+  fi
+  PREVIEW_SHARE_SSH="${PREVIEW_SHARE_SSH:-}"
+  PREVIEW_SHARE_ADDR="${PREVIEW_SHARE_ADDR:-}"
+  PREVIEW_SHARE_KEY="${PREVIEW_SHARE_KEY:-$HOME/.ssh/share_key}"
+  PREVIEW_SHARE_IMAGE="${PREVIEW_SHARE_IMAGE:-alpine/socat:latest}"
+}
+
+## Print why the edge cannot be called from here (missing tool, setting or key), or nothing
+## when it can.
+share_config_problem() {
+  if ! command -v ssh >/dev/null 2>&1; then
+    printf "'ssh' is required to reach the share edge"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    printf "'python3' is required to read the share edge's answers"
+  elif [ -z "$PREVIEW_SHARE_SSH" ]; then
+    printf 'PREVIEW_SHARE_SSH is not set (the edge SSH destination, user@host); set it in the environment or in %s' "$SHARE_CONFIG_FILE"
+  elif [ ! -f "$PREVIEW_SHARE_KEY" ]; then
+    printf "share key '%s' is missing: it is created when the share edge is installed (or point PREVIEW_SHARE_KEY at it)" "$PREVIEW_SHARE_KEY"
+  fi
+}
+
+## Die unless the edge can be called from here.
+share_require_edge() {
+  local problem
+  share_load_config
+  problem="$(share_config_problem)"
+  [ -z "$problem" ] || die "$problem"
+}
+
+## Explain an exit status of the edge's `share` command (or of ssh itself).
+share_status_meaning() {
+  case "$1" in
+    2) printf 'invalid argument' ;;
+    3) printf 'label reserved or in use by another record' ;;
+    4) printf 'the DNS provider refused or was unreachable' ;;
+    5) printf 'edge error' ;;
+    255) printf 'ssh could not reach the edge or the key was refused' ;;
+    *) printf 'exit status %s' "$1" ;;
+  esac
+}
+
+## Run one verb of the edge's `share` command over SSH and print its standard output. On
+## failure, show the one line the edge printed on standard error with what the status means,
+## and return that status.
+share_remote() {
+  local err out status=0
+  err="$(mktemp)"
+  out="$(ssh -i "$PREVIEW_SHARE_KEY" -o BatchMode=yes -o IdentitiesOnly=yes \
+    "$PREVIEW_SHARE_SSH" "$*" 2>"$err")" || status=$?
+  if [ "$status" -ne 0 ]; then
+    pwarn "share $1 failed ($(share_status_meaning "$status")): $(tail -n1 "$err")"
+  fi
+  rm -f "$err"
+  printf '%s' "$out"
+  return "$status"
+}
+
+## Build this preview's public label from its project and identity: lowercase, every run of
+## characters outside [a-z0-9-] becomes one '-', no leading or trailing '-', at most 63
+## characters.
+share_label() {
+  printf '%s-%s' "$PREVIEW_PROJECT" "$PREVIEW_ID" | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C sed -E 's/[^a-z0-9-]+/-/g; s/^-+//' | cut -c1-63 | sed -E 's/-+$//'
+}
+
+## Print the label this preview is shared under: the one recorded at share time, else the one
+## its forwarder carries, else the one its project and identity build today.
+share_recorded_label() {
+  local label=""
+  if [ -f "$STATE_DIR/share.json" ] && command -v python3 >/dev/null 2>&1; then
+    label="$(json_fields label <"$STATE_DIR/share.json" 2>/dev/null || true)"
+  fi
+  [ -n "$label" ] || label="$(docker inspect -f '{{index .Config.Labels "preview.share.label"}}' "$(share_forwarder_name)" 2>/dev/null || true)"
+  [ -n "$label" ] || label="$(share_label)"
+  printf '%s' "$label"
+}
+
+## Print the named top-level fields of the JSON object on stdin, one per line (empty when
+## absent).
+json_fields() {
+  python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(str(d.get(k, "")) for k in sys.argv[1:]))' "$@"
+}
+
+## True when the given IP address is assigned to an interface of this machine.
+addr_is_local() {
+  local re="${1//./\\.}"
+  if command -v ip >/dev/null 2>&1; then
+    ip -o addr show 2>/dev/null | grep -qE "inet6? $re/"
+  else
+    ifconfig 2>/dev/null | grep -qE "inet6? (addr:)?$re( |/|%|$)"
+  fi
+}
+
+## Name of this preview's forwarder container.
+share_forwarder_name() { printf '%s-share' "$PREVIEW_COMPOSE_PROJECT"; }
+
+## True when this preview's forwarder container exists, running or not.
+share_forwarder_exists() { docker inspect "$(share_forwarder_name)" >/dev/null 2>&1; }
+
+## True when a local process LISTENs on the given address and TCP port.
+addr_port_listening() {
+  command -v ss >/dev/null 2>&1 || return 0
+  ss -ltnH "src $1 and sport = :$2" 2>/dev/null | grep -q .
+}
+
+## (Re)start this preview's forwarder: a socat container on the host network that listens on
+## PREVIEW_SHARE_ADDR:PREVIEW_BASE only, never on every address, and forwards to
+## PREVIEW_SERVE_TARGET, the backend `tailscale serve` proxies to. Its preview.share.* labels
+## carry the label, public host and expiry the hub displays, never the key; host and expiry
+## stay empty until the edge has accepted the share. Fails when it does not come up listening.
+share_forwarder_start() {
+  local label="$1" host="${2:-}" expires="${3:-}" name target i
+  name="$(share_forwarder_name)"
+  target="${PREVIEW_SERVE_TARGET%%/*}"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" --network host --restart no \
+    --label preview.share.project="$PREVIEW_COMPOSE_PROJECT" \
+    --label preview.share.label="$label" \
+    --label preview.share.host="$host" \
+    --label preview.share.expires="$expires" \
+    "$PREVIEW_SHARE_IMAGE" \
+    "TCP-LISTEN:$PREVIEW_BASE,bind=$PREVIEW_SHARE_ADDR,fork,reuseaddr" "TCP:$target" >/dev/null \
+    || return 1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" != "true" ]; then
+      pwarn "forwarder exited: $(docker logs --tail 1 "$name" 2>&1)"
+      docker rm -f "$name" >/dev/null 2>&1 || true
+      return 1
+    fi
+    addr_port_listening "$PREVIEW_SHARE_ADDR" "$PREVIEW_BASE" && return 0
+    sleep 0.3
+  done
+  pwarn "forwarder is not listening on $PREVIEW_SHARE_ADDR:$PREVIEW_BASE"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  return 1
+}
+
+## Remove this preview's forwarder container, if any.
+share_forwarder_stop() { docker rm -f "$(share_forwarder_name)" >/dev/null 2>&1 || true; }
+
+## Print every .env / .envrc file the preview's running containers bind-mount (directly, or at
+## the top of a mounted directory) or read through a service's env_file, one per line.
+share_credential_files() {
+  local ids
+  ids="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+  docker inspect $ids 2>/dev/null | python3 -c '
+import json, os, subprocess, sys
+
+def secret(path):
+    name = os.path.basename(path.rstrip("/"))
+    if name in (".env", ".envrc"):
+        return True
+    return name.startswith(".env.") and name.rsplit(".", 1)[-1] not in ("example", "sample", "template", "dist")
+
+found = []
+def add(path):
+    if path not in found:
+        found.append(path)
+
+containers = json.load(sys.stdin)
+for c in containers:
+    for m in c.get("Mounts") or []:
+        src = m.get("Source") or ""
+        if m.get("Type") != "bind" or not src:
+            continue
+        if secret(src):
+            add(src)
+        elif os.path.isdir(src):
+            for name in (".env", ".envrc"):
+                if os.path.exists(os.path.join(src, name)):
+                    add(os.path.join(src, name))
+
+labels = (containers[0].get("Config") or {}).get("Labels") or {} if containers else {}
+files = [f for f in (labels.get("com.docker.compose.project.config_files") or "").split(",") if f]
+if files:
+    cmd = ["docker", "compose", "-p", sys.argv[1]]
+    if labels.get("com.docker.compose.project.working_dir"):
+        cmd += ["--project-directory", labels["com.docker.compose.project.working_dir"]]
+    for f in files:
+        cmd += ["-f", f]
+    for flags in (["--no-env-resolution"], []):
+        r = subprocess.run(cmd + ["config", "--format", "json"] + flags, capture_output=True, text=True)
+        if r.returncode == 0:
+            break
+    if r.returncode == 0:
+        for svc in (json.loads(r.stdout).get("services") or {}).values():
+            entries = svc.get("env_file") or []
+            if not isinstance(entries, list):
+                entries = [entries]
+            for e in entries:
+                path = e.get("path") if isinstance(e, dict) else e
+                if path and secret(path):
+                    add(path)
+
+print("\n".join(found))
+' "$PREVIEW_COMPOSE_PROJECT" 2>/dev/null || true
+}
+
+## Ask on the terminal whether to share anyway; die unless the answer is yes. Dies too when
+## there is no terminal to ask on, pointing at --yes.
+share_confirm() {
+  local answer=""
+  { : </dev/tty; } 2>/dev/null || die "no terminal to confirm on; pass --yes to share anyway"
+  printf 'share anyway? [y/N] ' >/dev/tty
+  read -r answer </dev/tty || true
+  case "$answer" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) die "not shared." ;;
+  esac
+}
+
+## True when the project serves through Vite, whose dev server refuses a Host it does not know.
+share_uses_vite() {
+  [ -n "$(find "$PREVIEW_ROOT" -maxdepth 3 -name node_modules -prune -o -name 'vite.config.*' -print 2>/dev/null | head -n1)" ]
+}
+
+## Print an epoch timestamp in local time (GNU date, else BSD date).
+fmt_epoch() { date -d "@$1" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$1" '+%Y-%m-%d %H:%M %Z'; }
+
+## Print the time left until an epoch timestamp as "Xh YYm", or "expired".
+time_left() {
+  local s=$(( $1 - $(date +%s) ))
+  if [ "$s" -le 0 ]; then printf 'expired'; else printf '%dh %02dm' $(( s / 3600 )) $(( s % 3600 / 60 )); fi
+}
+
+## Retract this preview's share (label $1, default the recorded one): `remove` on the edge,
+## then stop the forwarder and clear the recorded state. A failed or impossible `remove` is
+## reported but still takes the forwarder and the state down; the edge expires the share by
+## itself.
+share_retract() {
+  local label="${1:-}" problem
+  share_load_config
+  [ -n "$label" ] || label="$(share_recorded_label)"
+  problem="$(share_config_problem)"
+  if [ -n "$problem" ]; then
+    pwarn "could not retract '$label' on the edge: $problem"
+  elif share_remote remove "$label" >/dev/null; then
+    plog "unshared '$label'"
+  else
+    pwarn "the edge still lists '$label' until it expires"
+  fi
+  share_forwarder_stop
+  rm -f "$STATE_DIR/share.json"
+}
+
+## True when this preview has a share recorded or a forwarder left running.
+share_active() { [ -f "$STATE_DIR/share.json" ] || share_forwarder_exists; }
+
+## Print one label per line from the JSON array `list` answered, on stdin.
+share_list_labels() { python3 -c 'import json,sys; [print(s.get("label","")) for s in json.load(sys.stdin)]'; }
+
+## Stop every forwarder on this machine whose share is gone: expired by its own label, or no
+## longer in the edge's list. The list is the JSON given as $1, else fetched when the edge is
+## reachable. Forwarders still waiting for the edge's answer (no expiry yet) are left alone.
+share_sweep_forwarders() {
+  local listed="${1:-}" labels="" have_list=0 rows name label expires now
+  rows="$(docker ps -a --filter label=preview.share.label \
+    --format '{{.Names}}\t{{.Label "preview.share.label"}}\t{{.Label "preview.share.expires"}}' 2>/dev/null || true)"
+  [ -n "$rows" ] || return 0
+  share_load_config
+  if [ -z "$listed" ] && [ -z "$(share_config_problem)" ]; then
+    listed="$(share_remote list 2>/dev/null || true)"
+  fi
+  if [ -n "$listed" ] && labels="$(printf '%s' "$listed" | share_list_labels 2>/dev/null)"; then
+    have_list=1
+  fi
+  now="$(date +%s)"
+  while IFS=$'\t' read -r name label expires; do
+    case "$expires" in ''|*[!0-9]*) continue ;; esac
+    if [ "$expires" -le "$now" ] || { [ "$have_list" -eq 1 ] && ! printf '%s\n' "$labels" | grep -qxF "$label"; }; then
+      plog "stopping forwarder '$name': share '$label' has expired or was removed"
+      docker rm -f "$name" >/dev/null 2>&1 || true
+    fi
+  done <<<"$rows"
+}
+
+## share: publish this checkout's running preview as https://<label>.<edge domain> behind a
+## key for --hours (default 4, at most 72). Sharing again replaces the key and the expiry.
+cmd_share() {
+  local hours="$SHARE_DEFAULT_HOURS" yes=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --hours) [ "$#" -ge 2 ] || { share_usage; exit 2; }; hours="$2"; shift ;;
+      --hours=*) hours="${1#--hours=}" ;;
+      -y|--yes) yes=1 ;;
+      *) share_usage; exit 2 ;;
+    esac
+    shift
+  done
+  case "$hours" in ''|*[!0-9]*) die "--hours must be a whole number from 1 to $SHARE_MAX_HOURS" ;; esac
+  [ "$((10#$hours))" -ge 1 ] && [ "$((10#$hours))" -le "$SHARE_MAX_HOURS" ] \
+    || die "--hours must be a whole number from 1 to $SHARE_MAX_HOURS"
+  hours=$((10#$hours))
+
+  share_require_edge
+  [ -n "$PREVIEW_SHARE_ADDR" ] || die "PREVIEW_SHARE_ADDR is not set (the address of this machine the edge proxies to); set it in the environment or in $SHARE_CONFIG_FILE"
+  addr_is_local "$PREVIEW_SHARE_ADDR" \
+    || die "sharing only works on the machine the edge proxies to: $PREVIEW_SHARE_ADDR is not an address of this machine"
+  { [ -d "$STATE_DIR" ] && compose_running "$PREVIEW_COMPOSE_PROJECT"; } \
+    || die "'$PREVIEW_ID' is not running; run 'preview start' first"
+
+  local creds
+  creds="$(share_credential_files)"
+  if [ -n "$creds" ]; then
+    pwarn "this preview's containers mount or read credential files:"
+    while IFS= read -r f; do pwarn "  $f"; done <<<"$creds"
+    pwarn "a guest will be talking to a process that holds them."
+    [ "$yes" -eq 1 ] || share_confirm
+  fi
+
+  local label started=0 json host="" url="" expires=""
+  label="$(share_label)"
+  [ -n "$label" ] || die "could not build a share label from project '$PREVIEW_PROJECT' and '$PREVIEW_ID'"
+  if ! share_forwarder_exists; then
+    plog "forwarding $PREVIEW_SHARE_ADDR:$PREVIEW_BASE -> $PREVIEW_SERVE_TARGET"
+    share_forwarder_start "$label" || die "could not start the share forwarder"
+    started=1
+  fi
+  plog "sharing '$label' for ${hours}h..."
+  if ! json="$(share_remote add "$label" "$PREVIEW_BASE" "$hours")"; then
+    [ "$started" -eq 1 ] && share_forwarder_stop
+    exit 1
+  fi
+  { read -r host; read -r url; read -r expires; } < <(printf '%s' "$json" | json_fields host url expires 2>/dev/null || true) || true
+  if [ -z "$url" ] || [ -z "$host" ] || ! [[ "$expires" =~ ^[0-9]+$ ]]; then
+    share_remote remove "$label" >/dev/null || true
+    share_forwarder_stop
+    die "the edge answered 'add' with something unexpected; nothing is shared"
+  fi
+  if ! share_forwarder_start "$label" "$host" "$expires"; then
+    share_remote remove "$label" >/dev/null || true
+    rm -f "$STATE_DIR/share.json"
+    die "could not restart the share forwarder; the share was removed"
+  fi
+  (umask 077 && printf '%s\n' "$json" >"$STATE_DIR/share.json")
+
+  echo
+  plog "shared:  $url"
+  plog "expires: $(fmt_epoch "$expires") (in $(time_left "$expires")); retract with: preview unshare"
+  plog "anyone holding the link gets in until then."
+  if share_uses_vite; then
+    pwarn "a Vite dev server refuses requests for an unknown Host: allow '$host' in server.allowedHosts"
+    pwarn "(a built bundle served by another server is not affected)."
+  fi
+}
+
+## unshare: retract this checkout's share on the edge, stop its forwarder, clear its state.
+cmd_unshare() {
+  share_require_edge
+  share_retract
+}
+
+## shares: every share the edge lists, with its URL and time left, marking those whose preview
+## is not running on this machine; then stop forwarders whose share is gone. Needs no .preview/.
+cmd_shares() {
+  PREVIEW_SLUG="shares"
+  command -v docker >/dev/null 2>&1 || die "docker is required for 'preview shares'"
+  share_require_edge
+  local json rows label url expires proj where any=0
+  json="$(share_remote list)" || exit 1
+  rows="$(printf '%s' "$json" | python3 -c '
+import json, sys
+for s in json.load(sys.stdin):
+    print("\t".join(str(s.get(k, "")) for k in ("label", "url", "expires")))
+')" || die "the edge answered 'list' with something unexpected"
+  while IFS=$'\t' read -r label url expires; do
+    [ -n "$label" ] || continue
+    any=1
+    where=""
+    proj="$(docker ps --filter "label=preview.share.label=$label" --format '{{.Label "preview.share.project"}}' 2>/dev/null | head -n1)"
+    if [ -z "$proj" ] || [ -z "$(docker ps -q --filter "label=com.docker.compose.project=$proj" 2>/dev/null)" ]; then
+      where="  [not running here]"
+    fi
+    plog "• $label  $url  $(time_left "$expires") left$where"
+  done <<<"$rows"
+  [ "$any" -eq 1 ] || plog "no shares."
+  share_sweep_forwarders "$json"
+}
+
+share_usage() {
+  cat >&2 <<EOF
+usage: preview share [--hours N] [--yes]
+       preview unshare
+       preview shares
+
+  share     publish this checkout's running preview on the internet as
+            https://<label>.<edge domain>/?k=<key> for N hours (1-$SHARE_MAX_HOURS, default
+            $SHARE_DEFAULT_HOURS); sharing again replaces the key and the expiry
+  unshare   retract this checkout's share and stop its forwarder
+  shares    list every share with its URL and time left, from any directory
+
+options:
+  --hours N  how long the share lasts before the edge removes it
+  -y, --yes  share even when the preview mounts or reads a .env / .envrc
+
+The edge host is asked over SSH; the share is served from PREVIEW_SHARE_ADDR:<port> on
+this machine by a forwarder container. 'preview stop', 'killall' and the auto-stop
+watchdog unshare first.
+
+env (or KEY=VALUE lines in \$PREVIEW_SHARE_CONFIG, default ~/.config/preview/share.env):
+  PREVIEW_SHARE_SSH    SSH destination of the edge, user@host (required)
+  PREVIEW_SHARE_ADDR   address of this machine the edge proxies to (required)
+  PREVIEW_SHARE_KEY    SSH key bound to the edge's share command (default: ~/.ssh/share_key)
+  PREVIEW_SHARE_IMAGE  forwarder image (default: alpine/socat:latest)
+EOF
 }
 
 ## ── hub: run the discovery hub itself ───────────────────────────────────────
@@ -698,6 +1170,7 @@ usage() {
 preview $PREVIEW_VERSION
 
 usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
+       preview share [--hours N] [--yes] | unshare | shares
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
        preview self-update
@@ -708,6 +1181,10 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   stop         tear down this checkout's preview (also fired by the auto-stop watchdog)
   status       this checkout's preview plus every preview recorded on this machine
   killall      tear down every recorded preview and sweep strays (named volumes kept)
+  share        publish this checkout's running preview on the internet behind a key, for
+               --hours N (1-72, default 4); see 'preview share --help'
+  unshare      retract this checkout's share
+  shares       every share with its URL and time left, from any directory
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
   self-update  replace this CLI with the newest release from GitHub
   --version    print the version this launcher was stamped with
@@ -727,15 +1204,21 @@ main() {
     init) shift; cmd_init "$@"; exit $? ;;
     hub) shift; cmd_hub "$@"; exit $? ;;
     self-update) self_update; exit $? ;;
+    shares) cmd_shares; exit $? ;;
+    share|unshare) case "${2:-}" in -h|--help) share_usage; exit 0 ;; esac ;;
     start|stop|status|killall) ;;
     *) usage; exit 2 ;;
   esac
+  local cmd="$1"
+  shift
   setup
-  case "$1" in
+  case "$cmd" in
     start)   cmd_start ;;
     stop)    cmd_stop ;;
     status)  cmd_status ;;
     killall) cmd_killall ;;
+    share)   cmd_share "$@" ;;
+    unshare) cmd_unshare ;;
   esac
 }
 
