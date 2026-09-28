@@ -10,6 +10,10 @@
  * http(s) URLs are ever turned into a clickable link. Polling pauses while the
  * tab is hidden and resumes with an immediate refetch on return.
  *
+ * A preview the launcher has shared on the internet shows a "Shared until"
+ * chip and its public host; the hub only displays shares, it never makes or
+ * retracts one, and the key is never sent to it.
+ *
  * Each card can stop its preview: a right-click (or Delete on a focused card)
  * or a left swipe slides the card aside to reveal a Stop button, and pressing
  * it asks the hub to stop that preview's containers. Open, stopping and failed
@@ -82,6 +86,23 @@ function arrowIcon() {
   return svg;
 }
 
+/** Return the preview's share as { host, expires } while it is live, else null. */
+function liveShare(value) {
+  if (!value || typeof value !== "object") return null;
+  const host = str(value.host);
+  const expires = Number(value.expires);
+  if (!host || !Number.isFinite(expires) || expires * 1000 <= Date.now()) return null;
+  return { host, expires };
+}
+
+/** Format an epoch-seconds expiry as local time, with the weekday when not today. */
+function untilText(expires) {
+  const date = new Date(expires * 1000);
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (date.toDateString() === new Date().toDateString()) return time;
+  return `${date.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 function createCard(preview) {
   const source = preview && typeof preview === "object" ? preview : {};
   const url = safeUrl(source.url);
@@ -89,6 +110,7 @@ function createCard(preview) {
   const worktree = str(source.worktree) || "Root Worktree";
   const desc = str(source.desc);
   const compose = str(source.composeProject);
+  const share = liveShare(source.share);
 
   let card;
   if (url) {
@@ -110,9 +132,11 @@ function createCard(preview) {
   const meta = el("div", "card__meta");
   meta.appendChild(el("span", "chip", worktree));
   if (!url) meta.appendChild(el("span", "chip chip--warn", "URL unavailable"));
+  if (share) meta.appendChild(el("span", "chip chip--share", `Shared until ${untilText(share.expires)}`));
   card.appendChild(meta);
 
   if (desc) card.appendChild(el("p", "card__desc", desc));
+  if (share) card.appendChild(el("span", "card__share", share.host));
   if (compose) card.appendChild(el("span", "card__compose", compose));
 
   return card;

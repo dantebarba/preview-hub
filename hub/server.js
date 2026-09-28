@@ -2,7 +2,8 @@
  * Preview Hub backend (Bun).
  *
  * Serves the JSON discovery API and the static PWA:
- *   GET /api/previews  -> grouped/deduped preview list (200; [] on Docker error)
+ *   GET /api/previews  -> grouped/deduped preview list, a shared preview carrying
+ *                         share: { host, expires } (200; [] on Docker error)
  *   POST /api/previews/stop {id} -> stop that preview's compose project
  *                         (200 {stopped}; 404 unknown/not a preview; 502 Docker error)
  *   GET /api/config    -> { pollIntervalMs }
