@@ -64,10 +64,12 @@ safe defaults, so `.env` is optional.
 ## Stopping a preview from the hub
 
 Right-click a card (or focus it and press <kbd>Delete</kbd>) on desktop, or swipe it
-left on a phone, to reveal **Stop**; tap it to stop that preview. The hub stops every
-running container of the preview's compose project — it only acts on stacks whose
-container carries `preview.url` — plus its share forwarder when it is
-[shared](#sharing-a-preview-on-the-internet), so the card disappears on the next poll.
+left on a phone, to reveal its actions: **Stop**, plus the share actions when the hub
+can [share](#sharing-from-the-hub). Tap **Stop** to stop that preview. When the preview is
+shared, the hub first retracts the share on the edge and removes its forwarder, so no
+share outlives it. Then it stops every running container of the preview's compose
+project — it only acts on stacks whose container carries `preview.url` — and the card
+disappears on the next poll.
 
 The hub runs in a container, so it cannot run the launcher's full teardown: the
 containers are stopped, not removed, and the Tailscale mapping, any host processes an
@@ -92,8 +94,8 @@ preview shares                      # every share, from any directory
 (`PREVIEW_ID`, `.preview/`). `share` prints a link `https://<label>.<domain>/?k=<key>` and
 the expiry in local time; the label is built from the project and the identity (lowercase,
 each run of characters outside `[a-z0-9-]` becomes one `-`, no leading or trailing `-`, at
-most 63 characters). Sharing again replaces
-the key and the expiry, so the link printed before stops working. `shares` lists label,
+most 63 characters). Sharing again replaces the key and the expiry, so the link printed
+before stops working. `shares` lists label,
 link and time left, marking the shares whose preview is not running on this machine.
 
 The launcher runs no tunnel, proxy or DNS itself. It asks an **edge host** that owns all
@@ -112,9 +114,10 @@ port, never on `0.0.0.0`. `share` fails when that address is not one of this mac
 - `preview stop`, `killall` and the auto-stop watchdog unshare first.
 - The edge removes a share when it expires; `preview shares` and `preview status` then
   stop the forwarder it left behind.
-- The hub shows a shared preview's public host and expiry, never the key, and cannot share
-  or unshare. Stopping a shared preview from the hub stops its forwarder too; the share
-  itself stays listed until `preview unshare`, `preview stop` or its expiry.
+- The hub shows a shared preview with a **Shared** badge, its public host and its expiry,
+  and can share, unshare and copy the link itself when configured (see
+  [Sharing from the hub](#sharing-from-the-hub)). A share made from either side is seen and
+  retracted by the other.
 
 Configure it with environment variables, or with `KEY=VALUE` lines in
 `~/.config/preview/share.env` (the environment wins). Put them in the file when the
@@ -126,9 +129,37 @@ auto-stop watchdog must be able to unshare: it only sees the environment of `pre
 | `PREVIEW_SHARE_ADDR`   | — (required)                   | Address of this machine the edge proxies to; the forwarder binds only there |
 | `PREVIEW_SHARE_KEY`    | `~/.ssh/share_key`             | SSH key bound to the edge's `share` command |
 | `PREVIEW_SHARE_IMAGE`  | `alpine/socat:latest`          | Forwarder image |
+| `PREVIEW_SHARE_KNOWN_HOSTS` | `~/.ssh/known_hosts`      | known_hosts `preview hub up` hands to the hub |
 | `PREVIEW_SHARE_CONFIG` | `~/.config/preview/share.env`  | Where the settings above are read from |
 
 `share` needs `ssh` and `python3` besides docker.
+
+### Sharing from the hub
+
+When the settings above resolve, `preview hub up` hands them to the hub container: the
+SSH destination, the bind address and the forwarder image as environment, the key and
+`known_hosts` mounted read-only, and the edge's address as this host resolves it (the
+container's DNS may not see a private zone). `preview hub status` says whether sharing
+is on; after changing the settings, recreate the hub with `preview hub update`.
+
+A card's actions (right-click, <kbd>Delete</kbd>, or a left swipe) then offer:
+
+- **Share**, on a preview that is not shared: a dialog picks 1, 4 (default), 24 or 72
+  hours. When one of the preview's containers bind-mounts a `.env` / `.envrc` file, the
+  hub lists it and asks again before sharing. From inside its container the hub cannot
+  look into mounted directories or `env_file`; `preview share` checks those.
+- **Copy link**, on a shared preview: the link, key included, is fetched from the edge's
+  `list` when pressed and put on the clipboard (or shown to copy by hand). The hub never
+  stores it.
+- **Unshare**: retracts the share on the edge and removes the forwarder.
+- **Stop**: retracts the share first, then stops the preview.
+
+A preview started by a launcher older than this feature lacks the `preview.edge.*`
+labels the hub needs; restart it to share it from the hub. The hub image carries
+`openssh-client` for this.
+
+With sharing on, anyone who can reach the hub can publish previews on the internet and
+read their links: keep the hub on your tailnet.
 
 ## Serve it over Tailscale (one time)
 
