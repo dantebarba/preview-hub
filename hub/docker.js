@@ -158,15 +158,16 @@ async function fetchShares() {
  */
 export async function listPreviews() {
   let containers;
+  let shares;
   try {
-    containers = await fetchContainers(["preview.url"]);
+    [containers, shares] = await Promise.all([fetchContainers(["preview.url"]), fetchShares()]);
   } catch (err) {
     console.error("[preview-hub] docker query failed:", err?.message ?? err);
     return [];
   }
   if (!Array.isArray(containers)) return [];
   const previews = containers.map(toPreview).filter(Boolean);
-  return groupPreviews(withShares(previews, await fetchShares()));
+  return groupPreviews(withShares(previews, shares));
 }
 
 async function inspectContainer(id) {

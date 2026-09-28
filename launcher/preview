@@ -295,7 +295,7 @@ teardown_dir() {
   if [ -f "$dir/share.json" ]; then
     STATE_DIR="$dir" PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug" share_retract
   fi
-  docker rm -f "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug-share" >/dev/null 2>&1 || true
+  docker rm -f "$(share_forwarder_name "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug")" >/dev/null 2>&1 || true
   [ -n "$base" ] && tailscale serve --https="$base" off >/dev/null 2>&1 || true
   docker compose -p "$PREVIEW_COMPOSE_PROJECT_PREFIX-$slug" -f "$PREVIEW_COMPOSE_FILE" down >/dev/null 2>&1 || true
   rm -rf "$dir"
@@ -382,10 +382,14 @@ cmd_status() {
     else
       plog "  auto-stop watchdog: down"
     fi
-    if [ -f "$STATE_DIR/share.json" ] && share_forwarder_exists && command -v python3 >/dev/null 2>&1; then
-      local host expires
-      { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
-      plog "  shared: https://${host:-?}/ until $(fmt_epoch "${expires:-0}") ($(time_left "${expires:-0}") left)"
+    if [ -f "$STATE_DIR/share.json" ] && share_forwarder_exists; then
+      local host="" expires=""
+      if command -v python3 >/dev/null 2>&1; then
+        { read -r host; read -r expires; } < <(json_fields host expires <"$STATE_DIR/share.json" 2>/dev/null || true) || true
+        plog "  shared: https://${host:-?}/ until $(fmt_epoch "${expires:-0}") ($(time_left "${expires:-0}") left)"
+      else
+        plog "  shared: yes"
+      fi
     else
       rm -f "$STATE_DIR/share.json"
       plog "  shared: no"
@@ -403,7 +407,7 @@ cmd_status() {
     id="$(cat "$dir/id" 2>/dev/null || basename "$dir")"
     url="$(cat "$dir/url" 2>/dev/null || echo '(starting)')"
     shared=""
-    if [ -f "$dir/share.json" ] && docker inspect "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")-share" >/dev/null 2>&1; then
+    if [ -f "$dir/share.json" ] && docker inspect "$(share_forwarder_name "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")")" >/dev/null 2>&1; then
       shared=" [shared]"
     fi
     if compose_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
@@ -536,7 +540,7 @@ share_status_meaning() {
 share_remote() {
   local err out status=0
   err="$(mktemp)"
-  out="$(ssh -i "$PREVIEW_SHARE_KEY" -o BatchMode=yes -o IdentitiesOnly=yes \
+  out="$(ssh -n -i "$PREVIEW_SHARE_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 \
     "$PREVIEW_SHARE_SSH" "$*" 2>"$err")" || status=$?
   if [ "$status" -ne 0 ]; then
     pwarn "share $1 failed ($(share_status_meaning "$status")): $(tail -n1 "$err")"
@@ -582,8 +586,8 @@ addr_is_local() {
   fi
 }
 
-## Name of this preview's forwarder container.
-share_forwarder_name() { printf '%s-share' "$PREVIEW_COMPOSE_PROJECT"; }
+## Name of the forwarder container of compose project $1, default this preview's.
+share_forwarder_name() { printf '%s-share' "${1:-$PREVIEW_COMPOSE_PROJECT}"; }
 
 ## True when this preview's forwarder container exists, running or not.
 share_forwarder_exists() { docker inspect "$(share_forwarder_name)" >/dev/null 2>&1; }
@@ -600,7 +604,7 @@ addr_port_listening() {
 ## carry the label, public host and expiry the hub displays, never the key; host and expiry
 ## stay empty until the edge has accepted the share. Fails when it does not come up listening.
 share_forwarder_start() {
-  local label="$1" host="${2:-}" expires="${3:-}" name target i
+  local label="$1" host="${2:-}" expires="${3:-}" name target
   name="$(share_forwarder_name)"
   target="${PREVIEW_SERVE_TARGET%%/*}"
   docker rm -f "$name" >/dev/null 2>&1 || true
@@ -612,7 +616,7 @@ share_forwarder_start() {
     "$PREVIEW_SHARE_IMAGE" \
     "TCP-LISTEN:$PREVIEW_BASE,bind=$PREVIEW_SHARE_ADDR,fork,reuseaddr" "TCP:$target" >/dev/null \
     || return 1
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" != "true" ]; then
       pwarn "forwarder exited: $(docker logs --tail 1 "$name" 2>&1)"
       docker rm -f "$name" >/dev/null 2>&1 || true
@@ -709,8 +713,10 @@ share_uses_vite() {
 ## Print an epoch timestamp in local time (GNU date, else BSD date).
 fmt_epoch() { date -d "@$1" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$1" '+%Y-%m-%d %H:%M %Z'; }
 
-## Print the time left until an epoch timestamp as "Xh YYm", or "expired".
+## Print the time left until an epoch timestamp as "Xh YYm", "expired", or "unknown" when the
+## value is not a whole number.
 time_left() {
+  case "$1" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   local s=$(( $1 - $(date +%s) ))
   if [ "$s" -le 0 ]; then printf 'expired'; else printf '%dh %02dm' $(( s / 3600 )) $(( s % 3600 / 60 )); fi
 }
@@ -788,6 +794,9 @@ cmd_share() {
   [ -n "$PREVIEW_SHARE_ADDR" ] || die "PREVIEW_SHARE_ADDR is not set (the address of this machine the edge proxies to); set it in the environment or in $SHARE_CONFIG_FILE"
   addr_is_local "$PREVIEW_SHARE_ADDR" \
     || die "sharing only works on the machine the edge proxies to: $PREVIEW_SHARE_ADDR is not an address of this machine"
+  if command -v tailscale >/dev/null 2>&1 && tailscale ip 2>/dev/null | grep -qxF "$PREVIEW_SHARE_ADDR"; then
+    die "PREVIEW_SHARE_ADDR must not be a tailnet address: tailscale serve holds port $PREVIEW_BASE there"
+  fi
   { [ -d "$STATE_DIR" ] && compose_running "$PREVIEW_COMPOSE_PROJECT"; } \
     || die "'$PREVIEW_ID' is not running; run 'preview start' first"
 
@@ -824,7 +833,9 @@ cmd_share() {
     rm -f "$STATE_DIR/share.json"
     die "could not restart the share forwarder; the share was removed"
   fi
-  (umask 077 && printf '%s\n' "$json" >"$STATE_DIR/share.json")
+  (umask 077 && printf '%s' "$json" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); d["label"]=sys.argv[1]; print(json.dumps(d))' "$label" \
+    >"$STATE_DIR/share.json")
 
   echo
   plog "shared:  $url"
