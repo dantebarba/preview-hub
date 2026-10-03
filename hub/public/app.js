@@ -16,10 +16,10 @@
  * A right-click (or Delete on a focused card) or a left swipe slides the card
  * aside to reveal its actions: Stop, which retracts any share first, and, when
  * the hub has share settings, Share (a dialog picks the duration and confirms
- * credential files), or Copy link and Unshare for a shared preview. The link,
- * key included, is fetched only when Copy link is pressed. Open, busy and
- * failed states are kept by container id so they survive re-renders between
- * polls.
+ * credential files, then copies the link), or Copy link and Unshare for a
+ * shared preview. The link, key included, is fetched only when a share
+ * succeeds or Copy link is pressed. Open, busy and failed states are kept by
+ * container id so they survive re-renders between polls.
  */
 
 const API_BASE = new URL("./", document.baseURI);
@@ -380,13 +380,40 @@ async function sharePreview(id, source) {
   }
   const hours = await askDuration(str(source.branch) || "This preview");
   if (hours === null) return;
+  let shared = null;
+  const finished = new Promise((resolve) => {
+    shared = resolve;
+  });
+  const link = finished.then((result) => {
+    if (!result) throw new Error("not shared");
+    return postJson(LINK_URL, { id }).then((data) => str(data.url));
+  });
+  const copied = copyText(link);
+  copied.catch(() => {});
   await runAction(id, "share", async () => {
-    let result = await postJson(SHARE_URL, { id, hours });
-    if (result.needsConfirm) {
-      if (!(await confirmCredentials(result.files || []))) return;
-      result = await postJson(SHARE_URL, { id, hours, confirm: true });
+    try {
+      let result = await postJson(SHARE_URL, { id, hours });
+      if (result.needsConfirm) {
+        if (!(await confirmCredentials(result.files || []))) return;
+        result = await postJson(SHARE_URL, { id, hours, confirm: true });
+      }
+      shared(result);
+      const until = `Shared until ${untilText(Number(result.expires))}`;
+      try {
+        await copied;
+        toast(`${until} · Link copied`);
+      } catch {
+        const url = await link.catch(() => null);
+        if (!url) {
+          toast(`${until} · Copy link to send it`);
+          return;
+        }
+        toast(until);
+        await showLink(url);
+      }
+    } finally {
+      shared(null);
     }
-    toast(`Shared until ${untilText(Number(result.expires))} · Copy link to send it`);
   });
 }
 
