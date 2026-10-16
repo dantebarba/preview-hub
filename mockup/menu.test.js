@@ -89,13 +89,21 @@ test("route sends / to the menu, /app/ to the project and /<slug> to its page", 
   assert.equal(route("/@vite/client", where), null);
 });
 
+test("rewriteRefs resolves ./ references of a nested page against its own directory", (t) => {
+  const dir = scratch(t, { "step.tsx": "" });
+  assert.equal(
+    rewriteRefs(`<script src="./step.tsx"></script>`, { app: "/srv/app", pageDir: dir, pageUrlDir: "/pages/nested" }),
+    `<script src="/pages/nested/step.tsx"></script>`
+  );
+});
+
 test("rewriteRefs points ./ references at /pages/ when the file exists, and /app/ at /@fs", (t) => {
   const dir = scratch(t, { "pay.tsx": "", "pay.css": "" });
   const html =
     `<script type="module" src="./pay.tsx?x"></script><link href='./pay.css'><a href="./other">o</a>` +
     `<a href="?v=b">b</a><link rel="stylesheet" href="/app/web/styles.css"><img src='/app/logo.png'>`;
   assert.equal(
-    rewriteRefs(html, { app: "/srv/app", pagesDir: dir }),
+    rewriteRefs(html, { app: "/srv/app", pageDir: dir }),
     `<script type="module" src="/pages/pay.tsx?x"></script><link href='/pages/pay.css'><a href="./other">o</a>` +
       `<a href="?v=b">b</a><link rel="stylesheet" href="/@fs/srv/app/web/styles.css"><img src='/@fs/srv/app/logo.png'>`
   );

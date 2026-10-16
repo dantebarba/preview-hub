@@ -49,7 +49,11 @@ export function readManifest(scratch) {
   const file = path.join(scratch, "manifest.json");
   if (!existsSync(file)) return { manifest: { pages: [] }, error: null };
   try {
-    return { manifest: JSON.parse(readFileSync(file, "utf8")), error: null };
+    const manifest = JSON.parse(readFileSync(file, "utf8"));
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+      return { manifest: { pages: [] }, error: "manifest.json: must be an object" };
+    }
+    return { manifest, error: null };
   } catch (e) {
     return { manifest: { pages: [] }, error: `manifest.json: ${e.message}` };
   }
@@ -104,7 +108,7 @@ export function renderMenu({ manifest, error }, shots) {
     const label = page.title || page.path;
     const variants = Array.isArray(page.variants) && page.variants.length ? page.variants : [{ label, query: "" }];
     out.push(`<h2>${escapeHtml(label)}</h2><ul>`);
-    for (const v of variants) {
+    for (const v of variants.filter(Boolean)) {
       const href = page.path + (v.query || "");
       out.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(v.label || href)}</a></li>`);
     }
@@ -143,14 +147,15 @@ export function route(url, { app, scratch }) {
 
 /**
  * Rewrite a page's references to the URLs Vite tracks them by. A page is served at `/<slug>`,
- * so `./checkout.tsx` becomes `/pages/checkout.tsx` when that file exists, else a browser would
- * resolve it against `/`; and `/app/<path>` becomes `/@fs<app>/<path>`, the URL a CSS update
- * names, so a linked stylesheet is swapped in place instead of left stale.
+ * so `./checkout.tsx` in `pages/<dir>/` becomes `/pages/<dir>/checkout.tsx` when that file
+ * exists in `pageDir`, else a browser would resolve it against the slug's parent; and
+ * `/app/<path>` becomes `/@fs<app>/<path>`, the URL a CSS update names, so a linked stylesheet
+ * is swapped in place instead of left stale.
  */
-export function rewriteRefs(html, { app, pagesDir }) {
+export function rewriteRefs(html, { app, pageDir, pageUrlDir = "/pages" }) {
   return html
     .replace(RELATIVE_REF, (all, attr, quote, file, rest) =>
-      existsSync(path.join(pagesDir, file)) ? `${attr}=${quote}/pages/${file}${rest}${quote}` : all
+      existsSync(path.join(pageDir, file)) ? `${attr}=${quote}${pageUrlDir}/${file}${rest}${quote}` : all
     )
     .replace(APP_REF, (all, attr, quote) => `${attr}=${quote}/@fs${app}/`);
 }
@@ -175,7 +180,6 @@ function noStore(res) {
 /** The Vite plugin: menu at `/`, clean page URLs, the `/app/` prefix, no-store and reloads. */
 export function menuPlugin({ app }) {
   const scratch = path.join(app, ".mockup");
-  const pagesDir = path.join(scratch, "pages");
   return {
     name: "mockup-menu",
     enforce: "pre",
@@ -214,7 +218,9 @@ export function menuPlugin({ app }) {
     transformIndexHtml: {
       order: "pre",
       handler(html, ctx) {
-        return ctx.path.startsWith("/pages/") ? rewriteRefs(html, { app, pagesDir }) : html;
+        if (!ctx.path.startsWith("/pages/")) return html;
+        const pageUrlDir = path.posix.dirname(ctx.path);
+        return rewriteRefs(html, { app, pageDir: path.join(scratch, pageUrlDir), pageUrlDir });
       },
     },
   };
