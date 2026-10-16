@@ -1,11 +1,11 @@
 # The whole mockup preview: one container running the /mockup runtime (a pinned Vite dev
 # server), bound to loopback on the engine's PREVIEW_PORT_1, which Tailscale proxies to,
 # websockets included, so hot reload reaches the phone. The frontend root is mounted
-# read-only; shots/ is the one writable mount. PREVIEW_MOCKUP_IMAGE overrides the image,
-# e.g. to try a local build of the runtime.
+# read-only; shots/ is the one writable mount. `preview start` exports PREVIEW_MOCKUP_IMAGE,
+# the runtime image matching the launcher's release; set it yourself to try another build.
 services:
   web:
-    image: ${PREVIEW_MOCKUP_IMAGE:-ghcr.io/dantebarba/preview-mockup:0.6.0}
+    image: ${PREVIEW_MOCKUP_IMAGE:?exported by preview start (launcher 0.6.1 or newer)}
     ports:
       - "127.0.0.1:${PREVIEW_PORT_1}:80"
     environment:

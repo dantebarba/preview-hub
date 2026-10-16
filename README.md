@@ -307,7 +307,8 @@ A design question is cheaper to settle on a phone than in prose. The bundled
 `/mockup` skill has the agent write **sample pages** that render a project's real
 components into a self-ignoring `.mockup/` directory, and serves them from the
 pinned `/mockup` runtime (`ghcr.io/dantebarba/preview-mockup`, built from
-[`mockup/`](mockup/)): Vite used as a library with its own React, Vue and Svelte
+[`mockup/`](mockup/); `preview start` exports its name and tag as
+`PREVIEW_MOCKUP_IMAGE`, so no project file names the image): Vite used as a library with its own React, Vue and Svelte
 plugins, reading the project only as a read-only source tree (`node_modules`,
 `tsconfig`/`jsconfig` paths, `postcss.config.*` with Tailwind v3 or v4, `.env*`).
 There is no build step and no per-project recipe: start once, then every save hot

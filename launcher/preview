@@ -39,9 +39,10 @@
 # Nothing machine-specific is baked in: the tailnet host is resolved at runtime from
 # `tailscale status`, and the advertised URL exists only as a runtime Docker label.
 #
-# Besides the identity, port and path variables, `start` exports PREVIEW_URL and
-# PREVIEW_ALLOWED_HOSTS (the host names a server that checks Host must accept) before the
-# hooks run, so every process they start inherits both. A container sees them only when the
+# Besides the identity, port and path variables, `start` exports PREVIEW_URL,
+# PREVIEW_ALLOWED_HOSTS (the host names a server that checks Host must accept) and
+# PREVIEW_MOCKUP_IMAGE (the /mockup runtime image matching this launcher) before the hooks
+# run, so every process they start inherits them. A container sees them only when the
 # compose file passes them through `environment:`.
 set -euo pipefail
 
@@ -237,6 +238,16 @@ export_allowed_hosts() {
   export PREVIEW_ALLOWED_HOSTS
 }
 
+## Export PREVIEW_MOCKUP_IMAGE, the /mockup runtime image the scaffolded compose file runs, unless
+## already set: ghcr.io/<owner of PREVIEW_REPO>/preview-mockup at this launcher's release tag
+## (`latest` for a dev build), so no project file carries the image owner or the version.
+export_mockup_image() {
+  local tag="${PREVIEW_VERSION#v}"
+  case "$tag" in 0.0.0-dev|'') tag="latest" ;; esac
+  PREVIEW_MOCKUP_IMAGE="${PREVIEW_MOCKUP_IMAGE:-ghcr.io/${PREVIEW_REPO%%/*}/preview-mockup:$tag}"
+  export PREVIEW_MOCKUP_IMAGE
+}
+
 ## Write the compose override that adds the five preview.* labels, plus the three preview.edge.*
 ## labels the hub needs to share the preview, to PREVIEW_LABEL_SERVICE.
 ## Label values are written as ${PREVIEW_LABEL_*} interpolations, resolved by compose at `dc`
@@ -346,6 +357,7 @@ cmd_start() {
   resolve_url
   share_load_config
   export_allowed_hosts
+  export_mockup_image
   mkdir -p "$STATE_DIR"
   local edge_label
   edge_label="$(share_label)"

@@ -189,7 +189,10 @@ Tailscale mapping, the five `preview.*` labels and the watchdog; nothing in the
 hub or the engine knows it is a mockup.
 
 The compose service is the `/mockup` runtime, `ghcr.io/dantebarba/preview-mockup`
-(source in [`mockup/`](../mockup/)), bound to loopback. It mounts the frontend root
+(source in [`mockup/`](../mockup/)), bound to loopback. The launcher exports the image
+name at its own release tag as `PREVIEW_MOCKUP_IMAGE` before the hooks run, and the
+scaffolded compose file reads only that, so no project file names the image or its
+version; set the variable yourself to run another build. It mounts the frontend root
 read-only at `/app` and `.mockup/shots/` read-write, and runs one Vite dev server, the
 same for every project, with its own pinned plugins; the project's Vite config is never
 read. What it serves:
