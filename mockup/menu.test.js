@@ -76,17 +76,16 @@ test("checkManifest names missing pages, bad paths and bad JSON", (t) => {
 });
 
 test("route sends / to the menu, /app/ to the project and /<slug> to its page", (t) => {
-  const dir = scratch(t, { "pages/pay.html": "", "pages/nested/step.html": "" });
-  const where = { app: "/srv/app", scratch: dir };
-  assert.deepEqual(route("/", where), { menu: true });
-  assert.deepEqual(route("/?v=b", where), { menu: true });
-  assert.deepEqual(route("/app/web/styles.css?x=1", where), { url: "/@fs/srv/app/web/styles.css?x=1" });
-  assert.deepEqual(route("/pay?v=b", where), { url: "/pages/pay.html?v=b" });
-  assert.deepEqual(route("/pay/", where), { url: "/pages/pay.html" });
-  assert.deepEqual(route("/nested/step", where), { url: "/pages/nested/step.html" });
-  assert.equal(route("/missing", where), null);
-  assert.equal(route("/pages/pay.ts", where), null);
-  assert.equal(route("/@vite/client", where), null);
+  const app = scratch(t, { ".mockup/pages/pay.html": "", ".mockup/pages/nested/step.html": "" });
+  assert.deepEqual(route("/", app), { menu: true });
+  assert.deepEqual(route("/?v=b", app), { menu: true });
+  assert.deepEqual(route("/app/web/styles.css?x=1", app), { url: `/@fs${app}/web/styles.css?x=1` });
+  assert.deepEqual(route("/pay?v=b", app), { url: "/pages/pay.html?v=b" });
+  assert.deepEqual(route("/pay/", app), { url: "/pages/pay.html" });
+  assert.deepEqual(route("/nested/step", app), { url: "/pages/nested/step.html" });
+  assert.equal(route("/missing", app), null);
+  assert.equal(route("/pages/pay.ts", app), null);
+  assert.equal(route("/@vite/client", app), null);
 });
 
 test("rewriteRefs resolves ./ references of a nested page against its own directory", (t) => {
@@ -103,7 +102,7 @@ test("rewriteRefs points ./ references at /pages/ when the file exists, and /app
     `<script type="module" src="./pay.tsx?x"></script><link href='./pay.css'><a href="./other">o</a>` +
     `<a href="?v=b">b</a><link rel="stylesheet" href="/app/web/styles.css"><img src='/app/logo.png'>`;
   assert.equal(
-    rewriteRefs(html, { app: "/srv/app", pageDir: dir }),
+    rewriteRefs(html, { app: "/srv/app", pageDir: dir, pageUrlDir: "/pages" }),
     `<script type="module" src="/pages/pay.tsx?x"></script><link href='/pages/pay.css'><a href="./other">o</a>` +
       `<a href="?v=b">b</a><link rel="stylesheet" href="/@fs/srv/app/web/styles.css"><img src='/@fs/srv/app/logo.png'>`
   );

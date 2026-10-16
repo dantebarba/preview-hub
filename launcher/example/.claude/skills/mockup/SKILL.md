@@ -82,9 +82,9 @@ while the reviewer may still be looking.
 
 ## 7. What the runtime cannot compile
 
-**Angular** (its compiler owns the template format); **route-level features** of SvelteKit,
-Nuxt and Next (`$app/*`, `next/router`, server components), though their plain Svelte, Vue
-and React components work; **project Vite plugins** (SVG components, auto-imports).
+**Angular** (its compiler owns the template format); **Svelte before 5**; **route-level
+features** of SvelteKit, Nuxt and Next (`$app/*`, `next/router`, server components), though
+their plain Svelte, Vue and React components work; **project Vite plugins** (SVG components).
 
 For those screens, write a plain page with the component's markup against the app's compiled
 CSS under `/app/`, and say in the report that it is a static copy.

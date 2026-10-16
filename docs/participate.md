@@ -210,9 +210,10 @@ React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped 
 an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
 container log. Every response is `Cache-Control: no-store`.
 
-Not compiled: Angular, whose compiler owns the template format, and route-level features
-of SvelteKit, Nuxt and Next (`$app/*`, `next/router`, server components); plain Svelte,
-Vue and React components from those apps still work. Screens that need them are mocked as
+Not compiled: Angular, whose compiler owns the template format; Svelte before 5, since the
+image pins the Svelte 5 compiler; and route-level features of SvelteKit, Nuxt and Next
+(`$app/*`, `next/router`, server components). Plain Svelte, Vue and React components from
+those apps still work. Screens that need them are mocked as
 plain pages against the app's compiled CSS.
 
 `on_build` only validates the manifest and that every page file exists, with the runtime

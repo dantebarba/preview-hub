@@ -19,9 +19,10 @@ import { createLogger, createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import loadPostcssConfig from "postcss-load-config";
-import { checkManifest, menuPlugin } from "./menu.mjs";
+import { checkManifest, menuPlugin, scratchDir } from "./menu.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APP = process.env.APP_DIR || "/app";
 const POSTCSS_CONFIGS = [
   "postcss.config.js",
   "postcss.config.cjs",
@@ -63,12 +64,21 @@ export function findPostcssConfig(app) {
 }
 
 /** True when the project has the package installed, resolved the way its own code would. */
-export function projectHas(app, pkg) {
+function projectHas(app, pkg) {
   try {
     createRequire(path.join(app, "package.json")).resolve(`${pkg}/package.json`);
     return true;
   } catch {
     return existsSync(path.join(app, "node_modules", pkg, "package.json"));
+  }
+}
+
+/** The major version of the project's own Svelte, which must match the image's compiler. */
+function projectSvelteMajor(app) {
+  try {
+    return Number(createRequire(path.join(app, "package.json"))("svelte/package.json").version.split(".")[0]);
+  } catch {
+    return null;
   }
 }
 
@@ -85,7 +95,7 @@ export function withPages(content, pagesDir) {
  * when it has no config. A Tailwind v3 plugin is rebuilt from the project's Tailwind config with
  * the mockup pages added to `content`, so classes used only in a sample are generated.
  */
-export async function projectPostcss(app) {
+async function projectPostcss(app) {
   if (!findPostcssConfig(app)) return null;
   const { plugins } = await loadPostcssConfig({ cwd: app, env: "development" }, app);
   const tailwind = tailwindV3(app);
@@ -104,7 +114,7 @@ function tailwindV3(app) {
   try {
     const module = require("tailwindcss");
     const config = require("tailwindcss/loadConfig")(path.join(app, name));
-    const content = withPages(config.content, path.join(app, ".mockup", "pages"));
+    const content = withPages(config.content, path.join(scratchDir(app), "pages"));
     return { module, plugin: module({ ...config, content }) };
   } catch (e) {
     console.warn(`[mockup] Tailwind content not extended with the pages: ${e.message}`);
@@ -118,7 +128,7 @@ function tailwindV3(app) {
  * scanner starts from the Vite root.
  */
 export function tailwindV4Sources({ app }) {
-  const sources = `\n@source "${path.join(app, ".mockup", "pages")}";\n@source "${app}";\n`;
+  const sources = `\n@source "${path.join(scratchDir(app), "pages")}";\n@source "${app}";\n`;
   return {
     name: "mockup-tailwind-sources",
     enforce: "pre",
@@ -135,7 +145,7 @@ export function tailwindV4Sources({ app }) {
  * `.mockup/pages/`. For each `tsconfig*.json`/`jsconfig*.json` at the project root, write a
  * wrapper under `dir` that extends it and includes its own directory; returns the wrappers.
  */
-export function pageTsconfigs(app, dir) {
+function pageTsconfigs(app, dir) {
   const configs = readdirSync(app).filter((f) => /^[tj]sconfig(\..+)?\.json$/.test(f));
   return configs.map((name, i) => {
     const wrapper = path.join(dir, String(i), name.startsWith("j") ? "jsconfig.json" : "tsconfig.json");
@@ -149,8 +159,8 @@ export function pageTsconfigs(app, dir) {
  * Resolve a bare import from a page as if a file beside one of the wrappers had made it, so the
  * wrapped config's `paths` and `baseUrl` apply; anything they do not map resolves as usual.
  */
-export function pageAliases({ app, wrappers }) {
-  const pagesDir = path.join(app, ".mockup", "pages") + path.sep;
+function pageAliases({ app, wrappers }) {
+  const pagesDir = path.join(scratchDir(app), "pages") + path.sep;
   const anchors = wrappers.map((w) => path.join(path.dirname(w), "page.tsx"));
   return {
     name: "mockup-page-aliases",
@@ -177,13 +187,16 @@ async function importFromProject(app, pkg) {
  * pages; React (Fast Refresh), Vue and Svelte when the project has them; the project's own
  * `@tailwindcss/vite` when it styles with that instead of PostCSS.
  */
-export async function plugins(app, postcss, cacheDir) {
+async function plugins(app, postcss, cacheDir) {
   const list = [menuPlugin({ app }), tailwindV4Sources({ app }), tsconfigPaths({ root: app, loose: true })];
   const wrappers = pageTsconfigs(app, path.join(cacheDir, "tsconfig"));
   if (wrappers.length) list.push(pageAliases({ app, wrappers }), tsconfigPaths({ root: app, projects: wrappers, loose: true }));
   if (projectHas(app, "react")) list.push(react());
   if (projectHas(app, "vue")) list.push((await import("@vitejs/plugin-vue")).default());
-  if (projectHas(app, "svelte")) list.push((await import("@sveltejs/vite-plugin-svelte")).svelte());
+  if (projectHas(app, "svelte")) {
+    if (projectSvelteMajor(app) === 5) list.push((await import("@sveltejs/vite-plugin-svelte")).svelte());
+    else console.warn("[mockup] .svelte files need Svelte 5; this project's Svelte is not compiled");
+  }
   const postcssTailwind = postcss?.some((p) => /tailwind/.test(p?.postcssPlugin || ""));
   if (!postcssTailwind && projectHas(app, "@tailwindcss/vite")) {
     list.push((await importFromProject(app, "@tailwindcss/vite")).default());
@@ -200,11 +213,11 @@ function logger() {
 }
 
 /** The whole Vite config for a project at `app`. */
-export async function viteConfig({ app, port, hosts, cacheDir }) {
+async function viteConfig({ app, port, hosts, cacheDir }) {
   const postcss = await projectPostcss(app);
   return {
     configFile: false,
-    root: path.join(app, ".mockup"),
+    root: scratchDir(app),
     appType: "mpa",
     publicDir: false,
     cacheDir,
@@ -227,7 +240,7 @@ export async function viteConfig({ app, port, hosts, cacheDir }) {
 
 /** Start the server; resolves to the Vite dev server once it listens. */
 export async function start({
-  app = process.env.APP_DIR || "/app",
+  app = APP,
   port = Number(process.env.PORT || 80),
   hosts = allowedHosts(process.env.PREVIEW_ALLOWED_HOSTS),
   cacheDir = process.env.MOCKUP_CACHE_DIR || "/tmp/vite",
@@ -240,7 +253,7 @@ export async function start({
 
 /** `--check`: print what is wrong with the manifest and exit non-zero, or exit 0. */
 function check(app) {
-  const problems = checkManifest(path.join(app, ".mockup"));
+  const problems = checkManifest(scratchDir(app));
   for (const p of problems) console.error(`mockup: ${p}`);
   if (!problems.length) console.log("mockup: manifest ok");
   process.exit(problems.length ? 1 : 0);
@@ -248,7 +261,7 @@ function check(app) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   if (process.argv.includes("--check")) {
-    check(process.env.APP_DIR || "/app");
+    check(APP);
   } else {
     const server = await start();
     server.printUrls();

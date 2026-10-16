@@ -314,9 +314,10 @@ There is no build step and no per-project recipe: start once, then every save ho
 reloads on the phone, with component state kept by Fast Refresh. The launcher runs
 it under its own identity (`mockup-<branch>`), so it gets a Tailscale URL, a card
 on the hub and the 6h watchdog like any other preview; the card opens on a menu of
-every page, variant and still. Angular and route-level SvelteKit/Nuxt/Next
-features are not compiled. `/mockup stop` removes the container and every file it
-created. See [`docs/participate.md`](docs/participate.md#mockups-as-previews).
+every page, variant and still. Angular, Svelte before 5 and route-level
+SvelteKit/Nuxt/Next features are not compiled. It needs `docker`, `tailscale`, the
+`preview` launcher and `git` on the machine. `/mockup stop` removes the container
+and every file it created. See [`docs/participate.md`](docs/participate.md#mockups-as-previews).
 
 A minimal, synthetic example — one service in a project's preview compose file.
 The values are supplied at runtime (the launcher exports them; stamp them from

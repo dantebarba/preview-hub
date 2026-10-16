@@ -31,13 +31,18 @@ const STYLE =
   "img{width:195px;border:1px solid #444;border-radius:12px;display:block}" +
   "figcaption{margin:6px 0;font-size:13px;color:#aaa}.err{color:#fca5a5}";
 
+/** The mockup's scratch dir inside the project root `app`. */
+export function scratchDir(app) {
+  return path.join(app, ".mockup");
+}
+
 /** Escape a string for HTML text and attribute values. */
-export function escapeHtml(s) {
+function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 /** The page file a manifest path such as `/checkout` names, relative to the scratch dir. */
-export function pageFile(pagePath) {
+function pageFile(pagePath) {
   return `pages/${String(pagePath).replace(/^\/+|\/+$/g, "")}.html`;
 }
 
@@ -45,7 +50,7 @@ export function pageFile(pagePath) {
  * Read `<scratch>/manifest.json`. Returns `{ manifest, error }`; a missing file is an empty
  * manifest, an unreadable one is reported in `error` so the menu can show it.
  */
-export function readManifest(scratch) {
+function readManifest(scratch) {
   const file = path.join(scratch, "manifest.json");
   if (!existsSync(file)) return { manifest: { pages: [] }, error: null };
   try {
@@ -133,7 +138,7 @@ export function renderMenu({ manifest, error }, shots) {
  * URL, or null to leave it alone. `/app/<path>` becomes `/@fs<app>/<path>`, and `/<slug>`
  * becomes `/pages/<slug>.html` when that page exists.
  */
-export function route(url, { app, scratch }) {
+export function route(url, app) {
   const q = url.indexOf("?");
   const pathname = q === -1 ? url : url.slice(0, q);
   const search = q === -1 ? "" : url.slice(q);
@@ -142,7 +147,7 @@ export function route(url, { app, scratch }) {
   const slug = SLUG.exec(pathname);
   if (!slug || path.extname(slug[1])) return null;
   const file = pageFile(slug[1]);
-  return existsSync(path.join(scratch, file)) ? { url: `/${file}${search}` } : null;
+  return existsSync(path.join(scratchDir(app), file)) ? { url: `/${file}${search}` } : null;
 }
 
 /**
@@ -152,7 +157,7 @@ export function route(url, { app, scratch }) {
  * `/app/<path>` becomes `/@fs<app>/<path>`, the URL a CSS update names, so a linked stylesheet
  * is swapped in place instead of left stale.
  */
-export function rewriteRefs(html, { app, pageDir, pageUrlDir = "/pages" }) {
+export function rewriteRefs(html, { app, pageDir, pageUrlDir }) {
   return html
     .replace(RELATIVE_REF, (all, attr, quote, file, rest) =>
       existsSync(path.join(pageDir, file)) ? `${attr}=${quote}${pageUrlDir}/${file}${rest}${quote}` : all
@@ -179,7 +184,7 @@ function noStore(res) {
 
 /** The Vite plugin: menu at `/`, clean page URLs, the `/app/` prefix, no-store and reloads. */
 export function menuPlugin({ app }) {
-  const scratch = path.join(app, ".mockup");
+  const scratch = scratchDir(app);
   return {
     name: "mockup-menu",
     enforce: "pre",
@@ -190,7 +195,7 @@ export function menuPlugin({ app }) {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         noStore(res);
-        const target = route(req.url, { app, scratch });
+        const target = route(req.url, app);
         if (!target) return next();
         if (!target.menu) {
           req.url = target.url;
