@@ -12,8 +12,7 @@ on_build() {
 }
 
 on_healthcheck() {
-  local i
-  for i in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     curl -fs -o /dev/null "http://127.0.0.1:$PREVIEW_PORT_1/" && return 0
     sleep 0.5
   done

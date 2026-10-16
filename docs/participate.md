@@ -176,40 +176,54 @@ back to a clean slate when several previews have accumulated.
 ## Mockups as previews
 
 [`launcher/example/.claude/skills/mockup/`](../launcher/example/.claude/skills/mockup/)
-is a Claude Code skill (user-invoked only, via `/mockup`) that makes a UI mockup a
-preview of its own. `preview init` scaffolds it into your project's `.claude/skills/`
-alongside the `preview` skill; it needs nothing else from you.
+is a Claude Code skill (invoked only on `/mockup`) that makes a UI mockup a preview of its
+own. `preview init` scaffolds it into your project's `.claude/skills/` alongside the
+`preview` skill; it needs nothing else from you.
 
 How it fits the engine: the skill scaffolds `<frontend>/.mockup/`, a scratch directory
 that gitignores itself and carries its own `.preview/` (a `config.sh`, a `hooks.sh`
 and a one-service compose file). `mockup.sh start` runs `preview start` *inside* that
 directory, so the engine treats the mockup as a separate project: identity
 `mockup-<branch>`, its own port block and compose project (`mk-mockup-<branch>`), a
-Tailscale mapping, the five `preview.*` labels and the watchdog — nothing in the
-hub or the engine knows it is a mockup. The compose service is a single
-`nginx:alpine` bound to loopback that serves three read-only mounts: the built
-sample pages, a generated menu at `/` (the URL on the hub card) and a gallery of
-captured stills and GIFs.
+Tailscale mapping, the five `preview.*` labels and the watchdog; nothing in the
+hub or the engine knows it is a mockup.
 
-The only contract inside the scratch directory is that `build.sh` leaves a static site
-in `dist/`. The skill ships no framework code: the agent reads the project's toolchain
-and writes the recipe — a scratch Vite root reusing the project's config, an Astro
-root, or hand-written pages against the compiled CSS as a last resort — and mounts one
-page per `*Samples.<ext>` file so a file name is a URL. Sample pages import the
-project's real components, read `?v=` for variants and wire interactions for real, so
-a reviewer taps a button and sees the spinner.
+The compose service is the `/mockup` runtime, `ghcr.io/dantebarba/preview-mockup`
+(source in [`mockup/`](../mockup/)), bound to loopback. It mounts the frontend root
+read-only at `/app` and `.mockup/shots/` read-write, and runs one Vite dev server, the
+same for every project, with its own pinned plugins; the project's Vite config is never
+read. What it serves:
 
-`mockup.sh capture` runs a Playwright spec against the running preview to record
-transitions as frame bursts (CSS animations slowed to 0.2× through Chromium's devtools
-protocol, since a screenshot takes longer than most transitions last) and turns them
-into looping GIFs plus filmstrips, listed on the menu. `mockup.sh stop` runs
-`preview stop`, whose `on_down` hook removes the container together with its image
-(`compose down --rmi all`, which Docker refuses when another container still uses the
-image), then deletes the scratch directory.
+- `/`: a menu rendered per request from `.mockup/manifest.json` and the `shots/` listing.
+- `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
+  (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
+  that imports real components. Bare imports resolve from the project's `node_modules`;
+  `tsconfig.json`/`jsconfig.json` `paths` apply to the pages too; `.vue`, `.svelte`, CSS
+  modules, assets and `import.meta.env.*` from the project's `.env*` (`VITE_`,
+  `REACT_APP_`, `PUBLIC_`) work as in any Vite app.
+- CSS through the project's `postcss.config.*` and its own plugins (Tailwind v3 and v4,
+  autoprefixer, nesting), with the pages added to Tailwind's sources so classes used only
+  in a sample are generated; a project on `@tailwindcss/vite` gets that plugin instead.
 
-Requirements on the machine: `docker`, `tailscale`, the `preview` launcher, `python3`,
-and the project's own toolchain installed; `@playwright/test` with Chromium and Pillow
-only for captures.
+Hot reload goes over Vite's websocket on the same port, which `tailscale serve` proxies:
+React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped in place,
+an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
+container log. Every response is `Cache-Control: no-store`.
+
+Not compiled: Angular, whose compiler owns the template format, and route-level features
+of SvelteKit, Nuxt and Next (`$app/*`, `next/router`, server components); plain Svelte,
+Vue and React components from those apps still work. Screens that need them are mocked as
+plain pages against the app's compiled CSS.
+
+`on_build` only validates the manifest and that every page file exists, with the runtime
+image and the compose file alone, so the one-off container never shows on the hub.
+`mockup.sh shot <path> <name> [WxH]` captures a still of the live page with
+`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, listed on
+the menu. `mockup.sh stop` runs `preview stop` and deletes the scratch directory; the
+pinned runtime image stays for the next mockup.
+
+Requirements on the machine: `docker`, `tailscale`, the `preview` launcher and `git`,
+plus the project's `node_modules` when pages import its packages.
 
 ## Reference adopter
 
