@@ -1,0 +1,22 @@
+{
+  "name": "preview-mockup",
+  "private": true,
+  "description": "The /mockup runtime: a pinned Vite dev server that serves a project's .mockup/ pages with hot module replacement.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@vitejs/plugin-react": "6.1.2",
+    "@vitejs/plugin-vue": "6.0.10",
+    "postcss-load-config": "6.0.1",
+    "svelte": "5.57.2",
+    "vite": "8.3.4",
+    "vite-tsconfig-paths": "6.1.1"
+  }
+}

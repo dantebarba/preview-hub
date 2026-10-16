@@ -1,7 +1,8 @@
 name: publish-image
 
-# Builds the hub container and publishes it to GHCR so `preview hub up` can pull it.
-# Fires when a release is published (e.g. via `gh release create vX.Y.Z`), or on demand.
+# Builds the hub container and the /mockup runtime and publishes both to GHCR, so `preview hub
+# up` and a mockup's compose file can pull them. Fires when a release is published (e.g. via
+# `gh release create vX.Y.Z`), or on demand.
 
 on:
   release:
@@ -33,6 +34,13 @@ jobs:
 
   build-push:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - context: ./hub
+            image: ghcr.io/${{ github.repository }}
+          - context: ./mockup
+            image: ghcr.io/${{ github.repository_owner }}/preview-mockup
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +59,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
@@ -59,7 +67,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./hub
+          context: ${{ matrix.context }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

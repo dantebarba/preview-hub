@@ -1187,12 +1187,7 @@ cmd_hub() {
 MOCKUP_SKILL_FILES="
 .claude/skills/mockup/SKILL.md
 .claude/skills/mockup/scripts/mockup.sh
-.claude/skills/mockup/scripts/site.py
-.claude/skills/mockup/assets/helpers.ts
-.claude/skills/mockup/assets/build.sh
 .claude/skills/mockup/assets/docker-compose.yml
-.claude/skills/mockup/assets/playwright.config.ts
-.claude/skills/mockup/assets/nginx.conf
 .claude/skills/mockup/assets/preview/hooks.sh
 .claude/skills/mockup/assets/preview/config.sh
 "
