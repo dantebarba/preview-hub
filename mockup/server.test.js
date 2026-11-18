@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { addStill, appendEvent } from "./review.mjs";
+import { fileUrl } from "./stills/state.js";
 import { allowedHosts, findPostcssConfig, scratchOwner, start, tailwindV4Sources, withPages } from "./server.mjs";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -218,20 +219,32 @@ describe("the mockup server", () => {
   });
 
   test("two shots of one name are rev 2: listed, served and linked from the menu", async () => {
-    await shoot("home", "Home");
-    await shoot("home");
-    const home = await still("home");
-    assert.equal(home.title, "Home");
-    assert.deepEqual(home.revs.map((r) => [r.n, r.file]), [[1, "stills/home/desktop/1.png"], [2, "stills/home/desktop/2.png"]]);
+    await shoot("landing", "Home");
+    await shoot("landing");
+    const landing = await still("landing");
+    assert.equal(landing.title, "Home");
+    const files = landing.revs.map((r) => [r.n, r.file]);
+    assert.deepEqual(files, [[1, "stills/landing/desktop/1.png"], [2, "stills/landing/desktop/2.png"]]);
     const none = { rev: 2, viewed: null, reviewed: false, changed: false };
-    assert.deepEqual(home.mark, { ...none, variants: { desktop: none } });
-    const image = await fetch(`${base}/stills/home/desktop/2.png`);
+    assert.deepEqual(landing.mark, { ...none, variants: { desktop: none } });
+    const image = await fetch(`${base}/stills/landing/desktop/2.png`);
     assert.equal(image.status, 200);
     assert.notEqual(image.headers.get("cache-control"), "no-store");
     assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
     const menu = await (await fetch(`${base}/`)).text();
     assert.match(menu, /<a href="\/stills">Review the stills/);
-    assert.match(menu, /<a href="\/stills#home"><img src="\/stills\/home\/desktop\/2\.png"/);
+    assert.match(menu, /<a href="\/stills#landing"><img src="\/stills\/landing\/desktop\/2\.png"/);
+  });
+
+  test("a variant's image is served at the URL fileUrl gives it, its key's + encoded", async () => {
+    const file = path.join(app, "shot.png");
+    writeFileSync(file, PNG);
+    const dir = path.join(app, ".mockup");
+    const { rev } = await addStill(dir, { file, name: "dark", viewport: "mobile", tags: ["dark"] });
+    const image = await fetch(`${base}${fileUrl(rev.file)}`);
+    assert.equal(image.status, 200);
+    assert.notEqual(image.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
   });
 
   test("POST /_review/events takes only JSON (415) and only a good event (400)", async () => {

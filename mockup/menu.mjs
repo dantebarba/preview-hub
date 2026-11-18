@@ -224,7 +224,9 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
  * Where a request goes before Vite sees it: `{ menu: true }` for the menu, `{ viewer: true }`
  * for the stills viewer at the reserved `/stills`, else the rewritten URL, or null to leave it
  * alone. `/app/<path>` becomes `/@fs<app>/<path>`, and `/<slug>` becomes `/pages/<slug>.html`
- * when that page exists.
+ * when that page exists. A revision's image named with `%2B` or `%40`, as `fileUrl` writes the
+ * `+` and `@` of a variant key, is named with the characters themselves, which is how Vite
+ * finds the file.
  */
 export function route(url, app) {
   const q = url.indexOf("?");
@@ -232,6 +234,9 @@ export function route(url, app) {
   const search = q === -1 ? "" : url.slice(q);
   if (pathname === "/" || pathname === "/index.html") return { menu: true };
   if (pathname === "/stills" || pathname === "/stills/") return { viewer: true };
+  if (REV_IMAGE.test(pathname) && /%2B|%40/i.test(pathname)) {
+    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/g, "@")}${search}` };
+  }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
   const slug = SLUG.exec(pathname);
   if (!slug || path.extname(slug[1])) return null;

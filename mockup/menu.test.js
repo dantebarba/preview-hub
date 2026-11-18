@@ -107,9 +107,16 @@ test("route reserves /stills for the viewer, even over a page of that name", (t)
   assert.deepEqual(route("/stills", app), { viewer: true });
   assert.deepEqual(route("/stills/?x=1", app), { viewer: true });
   assert.equal(route("/stills/05-invite/1.png", app), null);
+  assert.equal(route("/stills/05-invite/mobile+dark/1.png", app), null);
+  assert.deepEqual(route("/stills/05-invite/mobile%2Bdark%2Brtl/2.png?v=1", app), {
+    url: "/stills/05-invite/mobile+dark+rtl/2.png?v=1",
+  });
+  assert.deepEqual(route("/stills/x/custom-360x740%402-touch/1.png", app), {
+    url: "/stills/x/custom-360x740@2-touch/1.png",
+  });
 });
 
-test("reviewStills lists each still with its first variant's revisions, the reviewer's mark, and the log's cursor", async (t) => {
+test("reviewStills lists each still with its first variant's revisions, the reviewer's mark and the cursor", async (t) => {
   const dir = scratch(t, { "shot.png": PNG });
   const file = path.join(dir, "shot.png");
   await addStill(dir, { file, name: "a", title: "First" });
