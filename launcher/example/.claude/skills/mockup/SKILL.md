@@ -76,8 +76,36 @@ presets `mobile` (390×844, the default), `mobile-s` (375×812, iPhone mini), `t
 Shoot the smallest matrix that covers the change: the viewports it affects; a `--tag dark`
 call and a separate `--tag light` call (never both in one) only when it touches both themes;
 free tags (`--tag empty`) for other states; `--full-page` for screens that scroll, never a
-guessed height. Read the PNGs it names to check nothing is clipped. The viewer is `/stills`;
-never write a stills page.
+guessed height (it grows the viewport to fit an app shell's inner scroller, and shoots the
+viewport while a dialog is open). Read the PNGs it names to check nothing is clipped. The
+viewer is `/stills`; never write a stills page.
+
+**More than a couple of stills, or any still that needs an interaction**, go in
+`.mockup/shots.mjs` and are shot with `preview stills shoot` (`--only '<regex>'` for some):
+
+```js
+export default {
+  defaults: { viewports: ["desktop", "mobile"], fullPage: true },
+  ignore: [/Google Maps/],
+  shots: [
+    { name: "03-users", title: "Settings › Users", path: "/users" },
+    { name: "05-invite-user", title: "Invite user", path: "/users", viewports: ["desktop"],
+      steps: async (page) => {
+        await page.click("Invite user");
+        await page.type("[role=dialog] input[type=email]", "luis@example.com");
+        await page.waitFor("[role=dialog] button", { text: "Send invitation" });
+      } },
+  ],
+};
+```
+
+Steps: `click(textOrSelector, { within })`, `hover`, `type(selector, text)`, `press(key)`,
+`waitFor(textOrSelector, { text, gone, timeout })`, `evaluate(fnOrString)` (a string sees
+`$$` and `byText`); each action waits for the page to settle, so `sleep(ms)` is a last resort.
+`tags: [["dark"], ["light"]]` shoots both themes. Read its JSON lines: a failed shot names why
+(a missing target), `exceptions` and `consoleErrors` flag a broken page, `added` is `rev <n>`
+or `unchanged`, `file` the PNG to check. Use presets with `fullPage`, never guessed heights,
+and no shooter scripts outside the project.
 
 ## 6. Report, listen, answer
 
@@ -100,7 +128,8 @@ review reply <id> "Ana, <what changed>"` by the reviewer's name, which ends work
 
 **Keep the stills** when the work should outlive the mockup (a mockup branch, an epic's
 stills): before stopping, `preview stills export docs/mockups/<topic> --readme`, then commit
-the folder, `.review/` included so the remarks and revisions travel with it. The folder reads
+the folder, `.review/` included so the remarks and revisions travel with it, and `shots.mjs`,
+which the export copies beside the stills. The folder reads
 back as the same stills, revisions and remarks, and `preview stills serve <dir>` reviews it
 later with no mockup running. A folder that holds a `.review/` already is refused: export into
 a new folder, or fix its stills in place as below. When unsure whether they should outlive it,
@@ -111,7 +140,8 @@ serve <dir>`): listen with `preview review watch --dir <dir>` under Monitor and 
 above, every `preview review` and `preview stills ls` command taking `--dir <dir>`. To fix a
 still, rewrite its image in place under the same file name (`<name>@<variant>.png`, or
 `<name>.png` for a still whose one variant is `desktop`); the viewer shows it as the next
-revision. With the mockup still up, `mockup.sh shot` and copy the PNG it names over that file.
+revision. With the mockup still up, `mockup.sh shot` (or `preview stills shoot --only`) and
+copy the PNG it names over that file.
 A read-only folder refuses every write: say so instead of retrying.
 
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
