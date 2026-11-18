@@ -242,10 +242,15 @@ plain pages against the app's compiled CSS.
 
 `on_build` only validates the manifest and that every page file exists, with the runtime
 image and the compose file alone, so the one-off container never shows on the hub.
-`mockup.sh shot <path> <name> [WxH]` captures a still of the live page with
-`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, listed on
-the menu. `mockup.sh stop` runs `preview stop` and deletes the scratch directory; the
-pinned runtime image stays for the next mockup.
+`mockup.sh shot <path> <name> [WxH] [title]` captures a still of the live page with
+`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, then adds it
+with `preview stills add`, passing the title, the page path as the source and the size, so
+shooting a name again makes its next revision in `/stills`. The skill then runs
+`preview review watch` under a monitor and answers each remark: it reads the thread and its
+marked PNG (`preview review show`), fixes the page, re-shoots the still and replies
+(`preview review reply`); resolving is left to the reviewer. The viewer is `/stills`; a
+mockup writes no stills page. `mockup.sh stop` runs `preview stop` and deletes the scratch
+directory, stills and remarks included; the pinned runtime image stays for the next mockup.
 
 Requirements on the machine: `docker`, `tailscale`, the `preview` launcher and `git`,
 plus the project's `node_modules` when pages import its packages.

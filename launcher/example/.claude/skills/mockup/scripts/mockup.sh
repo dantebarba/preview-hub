@@ -8,8 +8,9 @@
 #   mockup.sh start [desc]                bring the preview up; needed once, then just save
 #   mockup.sh status
 #   mockup.sh stop                        preview stop, then delete .mockup/ (KEEP=1 keeps it)
-#   mockup.sh shot <path> <name> [WxH]    still of the live page into .mockup/shots/<name>.png
-#                                         (default 390x844), listed on the menu
+#   mockup.sh shot <path> <name> [WxH] [title]
+#                                         still of the live page (default 390x844), added with
+#                                         `preview stills add` as the next revision of <name>
 set -euo pipefail
 
 skill="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,11 +65,13 @@ case "${1:-status}" in
     if [ "${KEEP:-0}" = "1" ]; then echo "stopped; kept $scratch"; else rm -rf "$scratch"; echo "stopped and removed $scratch"; fi
     ;;
   shot)
-    [ "$#" -ge 3 ] || { echo "usage: mockup.sh shot <path> <name> [WxH]" >&2; exit 2; }
-    page="$2" name="$3" size="${4:-390x844}"
+    [ "$#" -ge 3 ] || { echo "usage: mockup.sh shot <path> <name> [WxH] [title]" >&2; exit 2; }
+    page="$2" name="$3" size="${4:-390x844}" title="${5:-}"
     [[ "$page" == /* ]] || { echo "path must start with / (e.g. /checkout?v=b)" >&2; exit 2; }
-    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "name may only use letters, digits, '.', '_' and '-'" >&2; exit 2; }
-    [[ "$size" =~ ^[0-9]+x[0-9]+$ ]] || { echo "size must look like 390x844" >&2; exit 2; }
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] \
+      || { echo "name: a letter or digit, then letters, digits, '.', '_' or '-' (100 at most)" >&2; exit 2; }
+    [[ "$size" =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$ ]] || { echo "size must look like 390x844" >&2; exit 2; }
+    [ -z "$title" ] || [[ "$title" =~ [^[:space:]] ]] || { echo "title must not be blank" >&2; exit 2; }
     [ -f "$(state_dir)/base" ] || { echo "not running; mockup.sh start first" >&2; exit 1; }
     port=$(( $(cat "$(state_dir)/base") + 1 ))
     mkdir -p "$scratch/shots"
@@ -79,7 +82,9 @@ case "${1:-status}" in
       --screenshot="/shots/$name.png" "http://127.0.0.1:$port$page" >/dev/null 2>&1 \
       || { echo "chrome failed to capture http://127.0.0.1:$port$page" >&2; exit 1; }
     [ -s "$scratch/shots/$name.png" ] || { echo "no image written for $page" >&2; exit 1; }
-    echo "$scratch/shots/$name.png ($size); listed on the menu"
+    add=(stills add "$scratch/shots/$name.png" --name "$name" --source "$page" --size "$size")
+    [ -z "$title" ] || add+=("--title=$title")
+    ( cd "$scratch" && preview "${add[@]}" )
     ;;
-  *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [WxH]" >&2; exit 2 ;;
+  *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [WxH] [title]" >&2; exit 2 ;;
 esac
