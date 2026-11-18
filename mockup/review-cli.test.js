@@ -146,7 +146,7 @@ test("stills add shoots variants by --viewport, --tag and --full-page, and still
   r = await cli(dir, ["stills", "ls"]);
   assert.deepEqual(r.out.split("\n"), [
     'landing [mobile+light]  r1  not reviewed  0 open  "landing"',
-    'landing [mobile+dark]  r1  reviewed by Ana, dante  1 open  "landing"',
+    'landing [mobile+dark]  r1  reviewed by Ana (guest), dante  1 open  "landing"',
     'landing [desktop]  r1  not reviewed  0 open  "landing"',
     'landing [custom-1440x1250]  r1  not reviewed  0 open  "landing"',
   ]);
@@ -154,7 +154,7 @@ test("stills add shoots variants by --viewport, --tag and --full-page, and still
   assert.match(r.out.split("\n")[1], /^landing \[mobile\+dark\] {2}r1 {2}not reviewed/);
   const [row] = JSON.parse((await cli(dir, ["stills", "ls", "--json"])).out);
   assert.equal(row.variants[2].viewport.fullPage, true);
-  assert.deepEqual(Object.keys(row.variants[1].marks), ["Ana", "dante"]);
+  assert.deepEqual(Object.keys(row.variants[1].marks), ["Ana (guest)", "dante"]);
 });
 
 test("stills add refuses a missing name, a missing file and a file that is not a PNG", async (t) => {

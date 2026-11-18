@@ -176,7 +176,7 @@ An event carries exactly the fields of its type; any other field makes the line 
 - `still` is a still name from the manifest, `variant` the key of one of its variants and
   `rev` one of that variant's revision numbers, at the time the event was appended.
 - `variant` absent means the still's first variant, so logs written before variants keep
-  their meaning. `variant` goes only with a `still`.
+  their meaning; on a `working` it means the whole still. `variant` goes only with a `still`.
 - `still: null` on a `thread` is a **general thread**, about no still: it has no `rev` and no
   `anchor`. Reserved for chat in a later version; a reader may ignore it.
 - `thread` is the `id` of a `thread` event earlier in the log.
@@ -248,10 +248,12 @@ reopen, or that was never resolved.
 **Threads** carry their `variant`: the one their event names, else the still's first
 variant (null for a general thread).
 
-**Reviewed marks are per reviewer.** For each author name, per still in the manifest and per
-variant: that author's last `viewed` event for it sets the reviewed revision, and their
-`unviewed` after it clears it. Another author's events never touch it, so a guest marking
-stills reviewed hides nothing from the owner. "Reviewed" always means reviewed by someone in
+**Reviewed marks are per reviewer.** A reviewer is an author's name, a guest's (`via:
+"share"`) with ` (guest)` after it, `Ana (guest)`, so a guest who types the owner's name is
+still another reviewer. For each reviewer, per still in the manifest and per variant: their
+last `viewed` event for it sets the reviewed revision, and their `unviewed` after it clears
+it. Another reviewer's events never touch it, so a guest marking stills reviewed hides
+nothing from the owner. "Reviewed" always means reviewed by someone in
 particular: the viewer's own identity, or the reviewer `preview stills ls --as` names. The
 fold also gives the **reviewers**, every author with a mark that holds. With `rev` the
 variant's current revision and `viewed` the revision that reviewer marked:
@@ -303,7 +305,7 @@ event's `author` (`kind: "human"`), whatever `author` the posted body claims:
   `preview review watch` prints `Ana (guest)`.
 
 `GET /_review/stills` answers `{stills, marks, working, me, cursor}`: `marks` every
-reviewer's marked revisions as `{author: {still: {variant key: rev}}}`, `working` the
+reviewer's marked revisions as `{reviewer: {still: {variant key: rev}}}`, `working` the
 [working](#working) fold, and `me` who is asking, `{name, via}`, `name` null for a guest.
 
 ## Who writes what

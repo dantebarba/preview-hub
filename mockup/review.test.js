@@ -371,13 +371,17 @@ test("reviewed marks are per reviewer and per variant, so a guest's marks leave 
   await appendEvent(dir, { type: "viewed", author: ANA, still: "invite", rev: 1 });
   assert.equal(reviewed(dir, "dante").invite.reviewed, false);
   assert.equal(reviewed(dir, "dante").invite.variants["mobile+dark"].reviewed, false);
-  assert.equal(reviewed(dir, "Ana").invite.reviewed, true);
-  assert.equal(reviewed(dir, "Ana").invite.variants["mobile+dark"].reviewed, true);
+  assert.equal(reviewed(dir, "Ana").invite.reviewed, false);
+  assert.equal(reviewed(dir, "Ana (guest)").invite.reviewed, true);
+  assert.equal(reviewed(dir, "Ana (guest)").invite.variants["mobile+dark"].reviewed, true);
   await appendEvent(dir, { type: "viewed", author: HUMAN, still: "invite", variant: "mobile+dark", rev: 1 });
   await appendEvent(dir, { type: "unviewed", author: ANA, still: "invite", rev: 1 });
   await appendEvent(dir, { type: "unviewed", author: ANA, still: "invite", variant: "mobile+dark", rev: 1 });
   assert.deepEqual(reviewMarks(dir).reviewers, ["dante"]);
   assert.equal(reviewMarks(dir).marks.get("dante").get("invite").get("mobile+dark"), 1);
+  assert.equal(reviewed(dir, "dante").invite.variants["mobile+dark"].reviewed, true);
+  const posing = { kind: "human", name: "dante", via: "share" };
+  await appendEvent(dir, { type: "unviewed", author: posing, still: "invite", variant: "mobile+dark", rev: 1 });
   assert.equal(reviewed(dir, "dante").invite.variants["mobile+dark"].reviewed, true);
 });
 

@@ -71,6 +71,7 @@ import {
   progress,
   region,
   revealed,
+  reviewerOf,
   step,
   tagsLabel,
   tagsOf,
@@ -218,9 +219,14 @@ function me() {
   return guest() ? guestName : state.me.name;
 }
 
+/** The reviewer whose marks are those of whoever is looking (see `reviewerOf`), empty until a guest gives a name. */
+function markedAs() {
+  return me() ? reviewerOf({ name: me(), via: state.me.via }) : "";
+}
+
 /** Give every still the variant the pick lands on, with its revisions and the mark of whoever is looking. */
 function derive() {
-  choose(state.stills, state.pick, state.marks, me());
+  choose(state.stills, state.pick, state.marks, markedAs());
 }
 
 /** What the agent is working on now. */
@@ -787,7 +793,7 @@ function render() {
   const { reviewed, total } = counts(stills);
   el("count").textContent = `${reviewed} / ${total} reviewed`;
   el("place").textContent = `${at + 1}/${total}`;
-  const others = progress(state.marks, stills, me());
+  const others = progress(state.marks, stills, markedAs());
   el("others").hidden = !others.length;
   el("others").textContent = others.map((p) => `${p.name} reviewed ${p.reviewed}/${total}`).join(" · ");
   const over = workingNow().find((w) => !w.thread && (!w.still || (w.still === s.name && (w.variant ?? key) === key)));

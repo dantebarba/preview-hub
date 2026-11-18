@@ -36,7 +36,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { applyThread, applyWorking, markOf, workingAt } from "./stills/state.js";
+import { applyThread, applyWorking, markOf, reviewerOf, viewportOf, workingAt } from "./stills/state.js";
 
 export { WORKING_MS } from "./stills/state.js";
 
@@ -201,7 +201,7 @@ function legacyViewport(size) {
 
 /** The viewport a variant key names, for a v2 variant stored without a readable one. */
 function keyViewport(key) {
-  const head = key.split("+")[0];
+  const head = viewportOf(key);
   const m = CUSTOM_KEY.exec(head);
   if (m) return parseViewport(`${m[1]}x${m[2]}${m[3] ? `@${m[3]}` : ""}${m[4] ? "+touch" : ""}`);
   return Object.hasOwn(VIEWPORTS, head) ? parseViewport(head) : null;
@@ -542,14 +542,16 @@ export function readEvents(dir, since = 0) {
 /**
  * The variants of each still in the manifest of `dir`, by name: `{ first, variants }`, `first`
  * the key of its first variant (the one an event without `variant` means) and `variants` the
- * revision numbers of each variant, by key. Stills without a variant are left out.
+ * revision numbers of each variant, by key. Variants without a revision are left out, as the
+ * viewer leaves them out, and so are stills without a variant left.
  */
 export function revisions(dir) {
   const out = new Map();
   for (const s of stills(dir)) {
-    if (!s.variants.length) continue;
-    const variants = new Map(s.variants.map((v) => [v.key, new Set(v.revs.map((r) => r.n))]));
-    out.set(s.name, { first: s.variants[0].key, variants });
+    const shot = s.variants.filter((v) => v.revs.length);
+    if (!shot.length) continue;
+    const variants = new Map(shot.map((v) => [v.key, new Set(v.revs.map((r) => r.n))]));
+    out.set(s.name, { first: shot[0].key, variants });
   }
   return out;
 }
@@ -622,10 +624,11 @@ export function threads(dir) {
 
 /**
  * The reviewed marks of the log of `dir`, per reviewer: `{ reviewers, marks }`. `marks` maps
- * an author name to the marked revision of each still and variant, `Map<name, Map<still,
- * Map<key, rev>>>`, set by that author's last `viewed` and cleared by an `unviewed` after it;
- * an event without `variant` marks the still's first variant. `reviewers` lists, sorted, every
- * author with a mark that holds. `known` is `revisions(dir)`, when the caller has it already.
+ * a reviewer (the author's name, a guest's as `<name> (guest)`; see `reviewerOf`) to the marked
+ * revision of each still and variant, `Map<reviewer, Map<still, Map<key, rev>>>`, set by that
+ * reviewer's last `viewed` and cleared by an `unviewed` after it; an event without `variant`
+ * marks the still's first variant. `reviewers` lists, sorted, every reviewer with a mark that
+ * holds. `known` is `revisions(dir)`, when the caller has it already.
  */
 export function reviewMarks(dir, known = revisions(dir)) {
   const marks = new Map();
@@ -633,8 +636,9 @@ export function reviewMarks(dir, known = revisions(dir)) {
     if (e.type !== "viewed" && e.type !== "unviewed") continue;
     const still = known.get(e.still);
     if (!still) continue;
-    if (!marks.has(e.author.name)) marks.set(e.author.name, new Map());
-    const byStill = marks.get(e.author.name);
+    const by = reviewerOf(e.author);
+    if (!marks.has(by)) marks.set(by, new Map());
+    const byStill = marks.get(by);
     if (!byStill.has(e.still)) byStill.set(e.still, new Map());
     const key = e.variant ?? still.first;
     if (e.type === "viewed") byStill.get(e.still).set(key, e.rev);
@@ -651,11 +655,11 @@ export function reviewMarks(dir, known = revisions(dir)) {
  * `viewed` the revision `by` last marked, or null when they did not or an `unviewed` came
  * after; `reviewed` is true when that is the latest revision; `changed` when an older one was
  * marked, so a newer one has landed since and the mark no longer holds. Another reviewer's
- * marks count for nothing.
+ * marks count for nothing. `known` and `marks` are `revisions(dir)` and the `marks` of
+ * `reviewMarks`, when the caller has them already.
  */
-export function reviewed(dir, by) {
-  const known = revisions(dir);
-  const mine = reviewMarks(dir, known).marks.get(by) ?? new Map();
+export function reviewed(dir, by, known = revisions(dir), marks = reviewMarks(dir, known).marks) {
+  const mine = marks.get(by) ?? new Map();
   const out = {};
   for (const [name, still] of known) {
     const variants = {};

@@ -228,8 +228,10 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   changes the name.
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
-  `{stills: [{name, title, source, variants, revs, mark}], cursor}`, `revs` being the first
-  variant's and `mark` `{rev, viewed, reviewed, changed, variants}`, the reviewer's own;
+  `{stills: [{name, title, source, variants, revs, mark}], marks, working, me, cursor}`,
+  `revs` being the first variant's and `mark` `{rev, viewed, reviewed, changed, variants}`,
+  the reviewer's own, `marks` every reviewer's, `working` what the agent is on and `me` who
+  is asking, `{name, via}`;
   `GET /_review/threads` is `{threads}`;
   `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
   `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
@@ -256,7 +258,7 @@ Hot reload goes over Vite's websocket on the same port, which `tailscale serve` 
 React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped in place,
 an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
 container log. Every response is `Cache-Control: no-store`, but a still's revision
-(`/stills/<name>/<n>.png`), which never changes.
+(`/stills/<name>/<key>/<n>.png`), which never changes.
 
 Not compiled: Angular, whose compiler owns the template format; Svelte before 5, since the
 image pins the Svelte 5 compiler; and route-level features of SvelteKit, Nuxt and Next

@@ -396,8 +396,8 @@ Guest events carry `via: "share"`: the viewer shows a `guest` chip (*Ana · gues
 `watch` prints `Ana (guest)`, so a guest calling themselves "dante" is still told apart.
 Guests remark, reply and mark their own reviewed; **resolve and reopen are the owner's and the
 agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each reviewer has
-their own reviewed marks, so a guest's marks hide nothing from the owner; without `--as`,
-`stills ls` says whose marks hold.
+their own reviewed marks, a guest's under `Ana (guest)`, so a guest's marks hide nothing from
+the owner; without `--as`, `stills ls` says whose marks hold.
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
