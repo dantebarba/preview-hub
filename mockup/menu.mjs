@@ -375,6 +375,11 @@ function sendViewerFile(req, res, { file, type }) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
+/** Answer a GET of `/stills` with the viewer's page. */
+export function sendViewerPage(req, res) {
+  sendViewerFile(req, res, VIEWER_PAGE);
+}
+
 /** The request's body as a Buffer, or null once it passes `limit` bytes. */
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
@@ -390,7 +395,7 @@ function readBody(req, limit) {
 }
 
 /**
- * The live side of the review log of `scratch`: the open `GET /_review/events` responses, each
+ * The live side of the review log of `scratch`, a scratch dir or a folder source: the open `GET /_review/events` responses, each
  * with the `seq` it has been sent up to. `push()` sends every client the events above its
  * cursor, and is safe to call at any time; while a client is connected the log's size is also
  * checked every second, for a write no watcher reported, and a read that failed is tried again.
@@ -398,7 +403,7 @@ function readBody(req, limit) {
  * without data, and `close()` ends every response.
  */
 export function eventStream(scratch) {
-  const file = path.join(scratch, EVENTS_FILE);
+  const file = typeof scratch === "string" ? path.join(scratch, EVENTS_FILE) : scratch.paths.events;
   const clients = new Set();
   let timer = null;
   let size = -1;
@@ -579,9 +584,9 @@ async function postEvent(req, res, { scratch, stream, who }) {
 
 /**
  * Answer a request under `/_review/`, sent by `who` (see `reviewer`); false when the URL is not
- * one, so the caller goes on.
+ * one, so the caller goes on. `scratch` is a scratch dir or a folder source.
  */
-async function handleReview(req, res, { scratch, stream, who }) {
+export async function handleReview(req, res, { scratch, stream, who }) {
   if (!req.url.startsWith("/_review/")) return false;
   const { pathname, searchParams } = new URL(req.url, "http://mockup");
   const name = pathname.slice("/_review/".length);
