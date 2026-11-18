@@ -190,10 +190,11 @@ async function importFromProject(app, pkg) {
 /**
  * The plugin list: the menu and tsconfig paths always, for the project's sources and for the
  * pages; React (Fast Refresh), Vue and Svelte when the project has them; the project's own
- * `@tailwindcss/vite` when it styles with that instead of PostCSS.
+ * `@tailwindcss/vite` when it styles with that instead of PostCSS. `hosts` are the names the
+ * server accepts, which the menu tells a guest by.
  */
-async function plugins(app, postcss, cacheDir) {
-  const list = [menuPlugin({ app }), tailwindV4Sources({ app }), tsconfigPaths({ root: app, loose: true })];
+async function plugins(app, postcss, cacheDir, hosts) {
+  const list = [menuPlugin({ app, hosts }), tailwindV4Sources({ app }), tsconfigPaths({ root: app, loose: true })];
   const wrappers = pageTsconfigs(app, path.join(cacheDir, "tsconfig"));
   if (wrappers.length) list.push(pageAliases({ app, wrappers }), tsconfigPaths({ root: app, projects: wrappers, loose: true }));
   if (projectHas(app, "react")) list.push(react());
@@ -239,7 +240,7 @@ async function viteConfig({ app, port, hosts, cacheDir }) {
       allowedHosts: hosts,
       fs: { allow: [app, cacheDir, HERE] },
     },
-    plugins: await plugins(app, postcss, cacheDir),
+    plugins: await plugins(app, postcss, cacheDir, hosts),
   };
 }
 
