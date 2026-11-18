@@ -73,6 +73,9 @@ document.getElementById("invite").addEventListener("click", () => setTimeout(() 
 }, 150));
 </script></body></html>`;
 
+const FIXED = `<!doctype html><html><body style="margin:0"><div style="height:1000px">
+<div style="max-height:300px;overflow-y:auto"><div style="height:5000px"></div></div></div></body></html>`;
+
 const DONE = `<!doctype html><html><head><title>Done</title></head><body><h1>Done</h1></body></html>`;
 
 const THROWS = `<!doctype html><html><body><p>boom</p><script>
@@ -96,8 +99,8 @@ async function fixture(t) {
       res.write(": open\n\n");
     } else if (req.url === "/hang") {
       res.writeHead(200);
-    } else if (req.url.startsWith("/shell") || req.url.startsWith("/app") || req.url.startsWith("/done") || req.url.startsWith("/throws")) {
-      const page = { shell: SHELL, app: APP, done: DONE, throws: THROWS }[/^\/(\w+)/.exec(req.url)[1]];
+    } else if (req.url.startsWith("/shell") || req.url.startsWith("/app") || req.url.startsWith("/done") || req.url.startsWith("/throws") || req.url.startsWith("/fixed")) {
+      const page = { shell: SHELL, app: APP, done: DONE, throws: THROWS, fixed: FIXED }[/^\/(\w+)/.exec(req.url)[1]];
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(page);
     } else {
@@ -260,6 +263,8 @@ test("a full page of an app shell captures its inner scroller whole; with a dial
     maxHeight: 2000,
   });
   assert.deepEqual([capped.height, capped.fullPage], [2000, true]);
+  const fixed = await capture({ url: `${base}/fixed`, out: path.join(dir, "x.png"), viewport: "desktop", fullPage: true });
+  assert.deepEqual([fixed.height, fixed.fullPage], [1000, true]);
   const dialog = await capture({
     url: `${base}/shell?dialog=1`,
     out: path.join(dir, "d.png"),

@@ -23,9 +23,10 @@
  * A full page is as tall as the document or as the viewport plus what its tallest inner
  * scroller (`overflow-y` auto or scroll) hides, so an app shell whose document is the
  * viewport's height lays out whole: the viewport is resized to that height, at most
- * `maxHeight` (6000 CSS px), before the shot. With a dialog open (`[role=dialog]`,
- * `[role=alertdialog]`, `[aria-modal=true]`, `dialog[open]`) the viewport is shot as is and the
- * still is not a full page.
+ * `maxHeight` (6000 CSS px), before the shot; when what the scrollers hide does not shrink as
+ * the viewport grows, the growth is undone, so a fixed-height scroller adds no blank space.
+ * With a dialog open (`[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`,
+ * `dialog[open]`) the viewport is shot as is and the still is not a full page.
  *
  * A batch runs the shots of a recipe (see `loadRecipe`) in one Chromium, `--parallel` tabs at
  * a time (default 4), each in a browser context of its own so cookies and storage never leak
@@ -585,6 +586,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
     let height = vp.height;
     let whole = fullPage;
     if (fullPage) {
+      let last = null;
       for (let i = 0; i < 4; i += 1) {
         const m = await run(inPage(pageMeasure, MODAL));
         if (m.modal) {
@@ -592,12 +594,22 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
           if (height !== vp.height) {
             height = vp.height;
             await setMetrics(height);
-            await settle(RESIZE_WAIT_MS);
+            await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
+          }
+          break;
+        }
+        if (last && m.hidden >= last.hidden) {
+          const back = Math.min(maxHeight, Math.max(last.height, last.document));
+          if (back !== height) {
+            height = back;
+            await setMetrics(height);
+            await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
           }
           break;
         }
         const need = Math.min(maxHeight, Math.max(m.document, height + m.hidden));
         if (need <= height) break;
+        last = { height, document: m.document, hidden: m.hidden };
         height = need;
         await setMetrics(height);
         await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
@@ -783,7 +795,7 @@ export function ignorePatterns(recipe) {
   const list = recipe?.ignore ?? [];
   if (!Array.isArray(list)) throw new Error("'ignore' must be a list of RegExps or strings");
   return list.map((p) => {
-    if (p instanceof RegExp) return p;
+    if (p instanceof RegExp) return new RegExp(p.source, p.flags.replace(/[gy]/g, ""));
     if (typeof p === "string" && p) return new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     throw new Error("'ignore' must be a list of RegExps or strings");
   });
@@ -795,14 +807,14 @@ export async function loadRecipe(file) {
   return mod.default;
 }
 
-/** Run `fn` on each of `items`, at most `n` at a time. */
+/** Run `fn(item, index)` on each of `items`, at most `n` at a time. */
 async function pool(items, n, fn) {
   let next = 0;
   const worker = async () => {
     while (next < items.length) {
-      const item = items[next];
+      const index = next;
       next += 1;
-      await fn(item);
+      await fn(items[index], index);
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
@@ -836,10 +848,28 @@ export async function runBatch({
   const started = Date.now();
   const summary = { shots: shots.length, ok: 0, failed: 0, added: 0, unchanged: 0, ms: 0 };
   mkdirSync(outDir, { recursive: true });
-  const turns = shots.map(() => Promise.withResolvers());
-  await withBrowser(chrome, (browser) =>
-    pool(shots, parallel, async (shot) => {
-      const index = shots.indexOf(shot);
+  if (!shots.length) {
+    report({ summary });
+    return summary;
+  }
+  const ready = shots.map(() => Promise.withResolvers());
+  const keep = (async () => {
+    for (const [index, shot] of shots.entries()) {
+      const line = await ready[index].promise;
+      try {
+        if (line.ok && add) line.added = await add(shot, line.file, line);
+      } catch (e) {
+        Object.assign(line, { ok: false, error: `adding the still: ${e.message}` });
+      }
+      if (line.ok) summary.ok += 1;
+      else summary.failed += 1;
+      if (line.added === "unchanged") summary.unchanged += 1;
+      else if (line.added) summary.added += 1;
+      report(line);
+    }
+  })();
+  const shoot = withBrowser(chrome, (browser) =>
+    pool(shots, parallel, async (shot, index) => {
       const t0 = Date.now();
       const line = { name: shot.name, variant: shot.key, ok: false };
       try {
@@ -865,20 +895,10 @@ export async function runBatch({
         if (e.problems) Object.assign(line, e.problems);
       }
       line.ms = Date.now() - t0;
-      await turns[index - 1]?.promise;
-      try {
-        if (line.ok && add) line.added = await add(shot, line.file, line);
-      } catch (e) {
-        Object.assign(line, { ok: false, error: `adding the still: ${e.message}` });
-      }
-      if (line.ok) summary.ok += 1;
-      else summary.failed += 1;
-      if (line.added === "unchanged") summary.unchanged += 1;
-      else if (line.added) summary.added += 1;
-      report(line);
-      turns[index].resolve();
+      ready[index].resolve(line);
     })
   );
+  await Promise.all([shoot, keep]);
   summary.ms = Date.now() - started;
   report({ summary });
   return summary;
@@ -933,7 +953,10 @@ async function batchMain(values, { out, err, env = process.env }) {
         out(JSON.stringify(host ? { ...line, file: path.join(host, path.basename(line.file)) } : line));
       },
     });
-    if (!summary.shots) err(`no shot's name matches --only ${values.only}`);
+    if (!summary.shots) {
+      err(`no shot's name matches --only ${values.only}`);
+      return 1;
+    }
     return summary.failed ? 1 : 0;
   } catch (e) {
     err(`batch failed: ${e.message}`);

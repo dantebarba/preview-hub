@@ -1303,6 +1303,9 @@ stills_shoot() {
   [ -n "$cid" ] || die "the mockup is not running; mockup.sh start first"
   docker exec "$cid" grep -q -- '--batch' /srv/capture.mjs 2>/dev/null \
     || die "this mockup runtime cannot shoot a batch; run 'preview self-update', then mockup.sh stop and start"
+  if ! container_writable "$cid" /app/.mockup/stills || ! container_writable "$cid" /app/.mockup/review; then
+    die "the mockup container mounts its stills read-only; mockup.sh stop and start it to shoot"
+  fi
   mkdir -p "$PREVIEW_ROOT/shots"
   set -- docker exec --user "$(id -u):$(id -g)" -e HOME=/tmp -e "MOCKUP_HOST_OUT=$PREVIEW_ROOT/shots" \
     -e "MOCKUP_SHOT_WAIT_MS=${MOCKUP_SHOT_WAIT_MS:-5000}" "$cid" node /srv/capture.mjs --batch "/app/$rel" \
