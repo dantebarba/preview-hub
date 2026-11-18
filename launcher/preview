@@ -19,6 +19,9 @@
 #   preview share      # publish this checkout's running preview on the internet, behind a key
 #   preview unshare    # retract it
 #   preview shares     # every share, with its URL and time left
+#   preview stills ... # add a still revision to this checkout's mockup, list its stills
+#   preview review ... # list, show, answer and watch the mockup's review remarks; works with
+#                      # the preview stopped (docs/review-contract.md has the store)
 #
 # ── One preview per identity, deterministically ──────────────────────────────
 # The identity is the checked-out git branch (short SHA when detached), overridable with
@@ -1206,6 +1209,79 @@ cmd_hub() {
   esac
 }
 
+## ── stills and review: the agent's side of the stills review ─────────────────
+## `preview stills|review` run the review CLI of the /mockup runtime (mockup/review-cli.mjs) on a
+## mockup's scratch dir, `.mockup/`: the stills, their revisions and the review event log of
+## docs/review-contract.md. The logic lives in the runtime image, so the viewer and the CLI share
+## one module and the host needs only docker.
+
+## True when the path $2 inside container $1 is on a writable mount: the mount whose destination
+## is the longest prefix of the path is read-write.
+container_writable() {
+  local best="" rw="" dest flag
+  while read -r dest flag; do
+    case "$2/" in
+      "${dest%/}/"*) if [ "${#dest}" -gt "${#best}" ]; then best="$dest"; rw="$flag"; fi ;;
+    esac
+  done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.RW}}{{"\n"}}{{end}}' "$1" 2>/dev/null || true)
+  [ "$rw" = "true" ]
+}
+
+## Run the review CLI with the given arguments, replacing this shell. It is exec'd in the running
+## mockup container when that mounts stills/ and review/ writable, else run in a throwaway
+## container of the runtime image on the scratch dir as the calling user, so it works with the
+## preview stopped. `review watch` always takes the throwaway container, with --init: it outlives
+## `preview stop` and dies with its caller, which an exec'd process would not. A PNG given to
+## `stills add` reaches the CLI on stdin, so no other host path has to be mounted.
+review_cli() {
+  local cid image png="" watch=0
+  local env=(-e "MOCKUP_HOST_DIR=$PREVIEW_ROOT")
+  [ -z "${REVIEW_AUTHOR:-}" ] || env+=(-e "REVIEW_AUTHOR=$REVIEW_AUTHOR")
+  [ "${1:-}" = "review" ] && [ "${2:-}" = "watch" ] && watch=1
+  if [ "${1:-}" = "stills" ] && [ "${2:-}" = "add" ] && [ -n "${3:-}" ] && [ "$3" != "-" ]; then
+    png="$3"
+    [ -f "$png" ] || die "$png: no such file"
+    set -- stills add - "${@:4}"
+  fi
+  cid="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.service=$PREVIEW_LABEL_SERVICE" 2>/dev/null | head -n1 || true)"
+  if [ -n "$cid" ] && [ "$watch" = 0 ] \
+    && container_writable "$cid" /app/.mockup/stills && container_writable "$cid" /app/.mockup/review; then
+    set -- docker exec -i "${env[@]}" "$cid" node /srv/review-cli.mjs --dir /app/.mockup "$@"
+  else
+    if [ -n "$cid" ]; then
+      image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
+    else
+      export_mockup_image
+      image="$PREVIEW_MOCKUP_IMAGE"
+    fi
+    set -- docker run --rm -i --init --user "$(id -u):$(id -g)" "${env[@]}" -v "$PREVIEW_ROOT:/mockup" \
+      "$image" node /srv/review-cli.mjs --dir /mockup "$@"
+  fi
+  if [ -n "$png" ]; then exec "$@" <"$png"; else exec "$@"; fi
+}
+
+## Dispatch `stills` and `review`. The mockup is resolved the way mockup.sh resolves it: from the
+## frontend root its `.mockup/.preview`, else the `.preview/` found walking up; a scratch dir named
+## `.mockup` takes mockup.sh's identity, mockup-<branch>, unless PREVIEW_ID is set. Help and a
+## bare group need no project and print the CLI's own usage.
+cmd_review_cli() {
+  case "${2:-}" in
+    -h|--help|help|"")
+      if [ -n "${2:-}" ]; then set -- --help; else set -- "$1"; fi
+      export_mockup_image
+      exec docker run --rm "$PREVIEW_MOCKUP_IMAGE" node /srv/review-cli.mjs "$@"
+      ;;
+  esac
+  if [ -z "${PREVIEW_DIR:-}" ] && [ -d "$PWD/.mockup/.preview" ]; then PREVIEW_DIR="$PWD/.mockup/.preview"; fi
+  discover_preview_dir
+  if [ -z "${PREVIEW_ID:-}" ] && [ "$(basename "$PREVIEW_ROOT")" = ".mockup" ]; then
+    PREVIEW_ID="mockup-$(git -C "$PREVIEW_ROOT/.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+  fi
+  setup
+  review_cli "$@"
+}
+
 ## ── init: scaffold a project's preview files ────────────────────────────────
 ## `preview init` drops the files a project needs into the current repo — the two
 ## `.preview/` config files plus the `preview` and `mockup` Claude skills — and reports on
@@ -1354,6 +1430,7 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview share [--hours N] [--yes] | unshare | shares
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
+       preview stills {add|ls} ... | review {ls|show|reply|resolve|reopen|watch} ...
        preview self-update
        preview --version
 
@@ -1367,6 +1444,9 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   unshare      retract this checkout's share
   shares       every share with its URL and time left, from any directory
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
+  stills ...   add a still revision to this mockup, or list its stills; see 'preview stills --help'
+  review ...   list, show and answer this mockup's review remarks, or watch for new ones as they
+               land, one line each; see 'preview review --help'
   self-update  replace this CLI with the newest release from GitHub
   --version    print the version this launcher was stamped with
 
@@ -1374,6 +1454,7 @@ env:
   PREVIEW_ID       override the identity (default: current git branch / short SHA)
   PREVIEW_DIR      path to the .preview directory (default: found by walking up from \$PWD)
   TIMEOUT_SECONDS  auto-stop delay in seconds (default: 21600 = 6h)
+  REVIEW_AUTHOR    name 'review reply|resolve|reopen' write as (default: agent)
 EOF
 }
 
@@ -1385,6 +1466,7 @@ main() {
     init) shift; cmd_init "$@"; exit $? ;;
     hub) shift; cmd_hub "$@"; exit $? ;;
     self-update) self_update; exit $? ;;
+    stills|review) cmd_review_cli "$@"; exit $? ;;
     shares) cmd_shares; exit $? ;;
     share|unshare) case "${2:-}" in -h|--help) share_usage; exit 0 ;; esac ;;
     start|stop|status|killall) ;;
