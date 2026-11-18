@@ -295,6 +295,8 @@ wires up a per-branch Tailscale URL. See:
   worked example.
 - [`docs/labeling-contract.md`](docs/labeling-contract.md) — the labeling
   contract in full.
+- [`docs/review-contract.md`](docs/review-contract.md) — the stills review
+  store: a mockup's stills, their revisions and the review event log.
 - [`launcher/`](launcher/) — the preview engine that brings a stack up with the
   right labels and isolation.
 - [`launcher/example/.claude/skills/`](launcher/example/.claude/skills/) — two
