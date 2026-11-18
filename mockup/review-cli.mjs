@@ -37,7 +37,12 @@ const USAGE = `usage: preview stills add <png> --name N [--title T] [--source "/
 
 const COMMANDS = {
   "stills add": {
-    options: { name: { type: "string" }, title: { type: "string" }, source: { type: "string" }, size: { type: "string" } },
+    options: {
+      name: { type: "string" },
+      title: { type: "string" },
+      source: { type: "string" },
+      size: { type: "string" },
+    },
     args: [1, 1],
     run: stillsAdd,
   },
@@ -45,8 +50,8 @@ const COMMANDS = {
   "review ls": { options: { open: { type: "boolean" }, json: { type: "boolean" } }, args: [0, 0], run: reviewLs },
   "review show": { options: { json: { type: "boolean" } }, args: [1, 1], run: reviewShow },
   "review reply": { options: {}, args: [2, Infinity], raw: true, run: reviewReply },
-  "review resolve": { options: {}, args: [1, 1], run: (ctx, args) => mark(ctx, "resolve", args[0]) },
-  "review reopen": { options: {}, args: [1, 1], run: (ctx, args) => mark(ctx, "reopen", args[0]) },
+  "review resolve": { options: {}, args: [1, 1], run: (ctx, args) => setStatus(ctx, "resolve", args[0]) },
+  "review reopen": { options: {}, args: [1, 1], run: (ctx, args) => setStatus(ctx, "reopen", args[0]) },
   "review watch": { options: { since: { type: "string" }, json: { type: "boolean" } }, args: [0, 0], run: reviewWatch },
 };
 
@@ -114,7 +119,7 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, size }) {
   try {
     const entry = await addStill(dir, { file, name, title, source, size });
     const rev = entry.revs.at(-1);
-    io.out(`${entry.name} r${rev.n} ${path.join(io.hostDir, rev.file)}`);
+    io.out(`${entry.name} r${rev.n} ${io.host(rev.file)}`);
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   }
@@ -132,7 +137,7 @@ function stillsLs({ dir, io }, _args, { json }) {
       title: s.title,
       source: s.source,
       ...mark,
-      file: rev ? path.join(io.hostDir, rev.file) : null,
+      file: rev ? io.host(rev.file) : null,
       open: open.filter((t) => t.still === s.name).length,
     };
   });
@@ -163,14 +168,15 @@ function reviewShow({ dir, io }, [id], { json }) {
     ?.revs.find((r) => r.n === thread.rev);
   const annotated = path.join("review", "annotated", `${thread.id}.png`);
   const files = {
-    image: rev ? path.join(io.hostDir, rev.file) : null,
-    annotated: existsSync(path.join(dir, annotated)) ? path.join(io.hostDir, annotated) : null,
+    image: rev ? io.host(rev.file) : null,
+    annotated: existsSync(path.join(dir, annotated)) ? io.host(annotated) : null,
   };
   if (json) return io.out(JSON.stringify({ ...thread, ...files }, null, 2));
   io.out(`thread  ${thread.id}  ${thread.status}`);
   io.out(`on      ${target(thread)}`);
   if (files.image) io.out(`image   ${files.image}`);
-  if (thread.still !== null) io.out(`marked  ${files.annotated ?? "(not drawn yet: the viewer draws it when the thread is opened)"}`);
+  const notDrawn = "(not drawn yet: the viewer draws it when the thread is opened)";
+  if (thread.still !== null) io.out(`marked  ${files.annotated ?? notDrawn}`);
   for (const e of [thread, ...thread.replies]) {
     io.out("");
     io.out(`#${e.seq} ${e.author.name} (${e.author.kind}) ${e.at}`);
@@ -191,7 +197,7 @@ function reviewReply(ctx, [id, ...words]) {
 }
 
 /** Resolve or reopen a thread as the agent. */
-function mark(ctx, type, id) {
+function setStatus(ctx, type, id) {
   return agentEvent(ctx, { type, thread: id });
 }
 
@@ -226,7 +232,7 @@ async function reviewWatch({ dir, io }, _args, { since, json }) {
   const reported = new Set();
   let stamp = null;
   while (!io.signal?.aborted) {
-    if (dirGone(dir)) throw new CliError(`${io.hostDir}: removed; stopped watching`);
+    if (dirGone(dir)) throw new CliError(`${io.host(".")}: removed; stopped watching`);
     const now = logStamp(dir);
     if (now !== stamp) {
       stamp = now;
@@ -269,7 +275,11 @@ export async function main(argv, io) {
   const dir = path.resolve(dirArg ?? env.MOCKUP_DIR ?? process.cwd());
   const ctx = {
     dir,
-    io: { ...io, hostDir: env.MOCKUP_HOST_DIR || dir, author: env.REVIEW_AUTHOR?.trim() || "agent" },
+    io: {
+      ...io,
+      host: (rel) => path.join(env.MOCKUP_HOST_DIR || dir, rel),
+      author: env.REVIEW_AUTHOR?.trim() || "agent",
+    },
   };
   try {
     let parsed;
