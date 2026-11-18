@@ -284,6 +284,48 @@ directory, stills and remarks included; the pinned runtime image stays for the n
 Requirements on the machine: `docker`, `tailscale`, the `preview` launcher and `git`,
 plus the project's `node_modules` when pages import its packages.
 
+## Folders of stills
+
+A folder of images needs no `.preview/` and no participation at all: `preview stills serve
+[<dir>]` (default the working directory) serves it as a preview of its own, git or not, and
+`preview stills stop|status|share|unshare [<dir>]` manage it. **Images are the only
+requirement**: every `png`, `jpg`, `jpeg`, `webp` and `gif` under it is a still.
+
+How it fits the engine: the launcher runs the `/mockup` runtime in folder mode
+([`mockup/folder.mjs`](../mockup/folder.mjs)) with the folder mounted at `/stills`, with no
+project, no pages and no Vite. The identity is the folder's name and a hash of its absolute
+path, so the same folder always gets the same port block and URL; the compose file and the
+state live in `$XDG_STATE_HOME/preview/stills/<id>/` (default `~/.local/state`), since the
+folder may not be a git checkout. The rest is the engine's: a Tailscale mapping, the hub card
+"<folder> stills" with **Review**, the watchdog and sharing. The server answers only the viewer
+(`/` redirects to `/stills`), its `/_review/` routes and the stills' images, never the folder's
+other files, and checks `Host` against `PREVIEW_ALLOWED_HOSTS`. `preview status` and `killall`
+list a project's previews only; `preview stills status` lists every served folder.
+
+The rest of the folder is optional and only adds to the viewer; a missing extra falls back
+silently and a broken one becomes a note line:
+
+| The folder may also have | It adds |
+| ------------------------ | ------- |
+| `stills.json`, `[{name, title, group?, file?}]` | Titles, order and groups. |
+| `README.md` (or `index.md`) | Order, groups from its headings, titles from its table rows or alt text, and the viewer's **About** page, rendered and sanitized by the runtime. |
+| subfolders of images | A group per subfolder, when neither file above gives groups. |
+| `name@<variant>.png` | The variant `<variant>` of the still `name` (`onboarding@mobile+dark.png`); a plain `name.png` is its `desktop` variant. |
+| `stills/manifest.json` | A mockup's full stills format, read as declared. |
+
+**`.review/`** is the folder's review: the event log, the marked stills and every revision of
+every image, kept by content hash so a rewritten image is the next revision with before/after.
+Serving a writable folder creates it at start; reading never does. Commit it to keep the
+remarks with the folder, or ignore it. **Read-only**: a folder the host user cannot write, or
+whose `.review/` they cannot, is served with remarks off, and every write to it is refused.
+
+The agent's side is the same CLI as a mockup's with `--dir <dir>`: `preview review watch --dir
+<dir>`, `preview review reply <thread> "..." --dir <dir>`, `preview stills ls --dir <dir>`,
+served or not. `preview stills export <dir> [--readme]` turns a mockup's stills into such a
+folder, with their revisions and remarks, so they outlive `/mockup stop`. The store is
+specified in [`review-contract.md`](review-contract.md#folder-sources) and the reviewer's side
+in the README's [Any folder of images](../README.md#any-folder-of-images).
+
 ## Reference adopter
 
 For a real-world example beyond the synthetic one above, look at the `.preview/` directory

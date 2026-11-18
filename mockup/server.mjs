@@ -14,6 +14,9 @@
  *
  *   node server.mjs            serve on PORT (default 80) with hot module replacement
  *   node server.mjs --check    validate manifest.json and its pages, then exit
+ *
+ * With `STILLS_DIR` set it runs in folder mode instead (`folder.mjs`): that directory of
+ * images served for review at `/stills`, with no project, no Vite and no pages.
  */
 
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -24,6 +27,7 @@ import { createLogger, createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import loadPostcssConfig from "postcss-load-config";
+import { startFolder } from "./folder.mjs";
 import { checkManifest, menuPlugin, scratchDir } from "./menu.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -291,7 +295,11 @@ function check(app) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  if (process.argv.includes("--check")) {
+  if (process.env.STILLS_DIR) {
+    const port = Number(process.env.PORT || 80);
+    await startFolder({ dir: process.env.STILLS_DIR, port, hosts: allowedHosts(process.env.PREVIEW_ALLOWED_HOSTS) });
+    console.log(`[mockup] serving the stills of ${process.env.STILLS_DIR} on :${port}/stills`);
+  } else if (process.argv.includes("--check")) {
     check(APP);
   } else {
     const server = await start();

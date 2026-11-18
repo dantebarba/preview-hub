@@ -45,6 +45,22 @@
  * conversation full screen, with the marked area cropped from the still on top and the reply
  * form following the keyboard; swiped left it uncovers Resolve or Reopen, which can be undone
  * for five seconds, and swiped right Reply.
+ *
+ * A folder of images as the source may add to that, each only when it is there:
+ *
+ *   - groups: a heading before each group in the strip and in the grid, the group's name by the
+ *     title and a group picker, in the bar and so in the "⋯" sheet; the stills come in group
+ *     order, so stepping runs through the groups;
+ *   - About, in the top bar or the "⋯" sheet: the folder's README, read from
+ *     `GET /_review/about` as HTML the runtime sanitized, where an image that is a still goes to
+ *     it;
+ *   - notes, what an optional file of the folder got wrong, as one line that can be dismissed
+ *     and comes back only when the notes change;
+ *   - a folder that cannot be written: Remark, Reply, Resolve and Reviewed are disabled and a
+ *     line says "read-only folder: remarks off";
+ *   - live changes: the stream's `stills` event reads everything again, so a rewritten image
+ *     shows as its next revision, a new one appears and a removed one goes. An image of a
+ *     folder is rewritten in place, so its URL carries when it was.
  */
 
 import { annotate } from "./annotate.js";
@@ -65,13 +81,18 @@ import {
   lastMessage,
   MAX_NAME,
   moved,
+  notesLine,
   opposite,
   pickOf,
   pin,
   progress,
+  READ_ONLY,
   region,
   revealed,
   reviewerOf,
+  sectionAt,
+  sections,
+  sectionStart,
   step,
   tagsLabel,
   tagsOf,
@@ -104,6 +125,7 @@ const UNDO_MS = 5000;
 const MAX_ANSWER_PX = 160;
 const FIT = { z: 1, x: 0, y: 0 };
 const NO_REMARKS = "No remarks on this still yet. Mark an area of it to start one.";
+const REMARK_TITLE = "Mark an area of the still and comment on it (c)";
 const PHONE = matchMedia("(max-width: 760px)");
 const SMALL = matchMedia("(max-width: 599.98px), (pointer: coarse)");
 const WHEN = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
@@ -135,12 +157,21 @@ const state = {
   swiped: null,
   more: false,
   overview: false,
+  groups: [],
+  notes: [],
+  folder: false,
+  readonly: false,
+  about: null,
+  reading: false,
 };
 const root = document.documentElement;
 const room = document.querySelector("main");
 const fingers = new Map();
 const busy = new Set();
 let thumbs = [];
+let heads = [];
+let parts = [];
+let dismissed = "";
 let source = null;
 let loads = 0;
 let settled = 0;
@@ -253,9 +284,13 @@ function dotsOf(w) {
   return w ? [dots(w)] : [];
 }
 
-/** The URL of a revision's image. */
+/**
+ * The URL of a revision's image. The current image of a folder is rewritten in place, so its
+ * URL also says when it was, and a changed one is fetched again.
+ */
 function imageUrl(rev) {
-  return fileUrl(rev.file);
+  const url = fileUrl(rev.file);
+  return state.folder ? `${url}?t=${Date.parse(rev.at)}` : url;
 }
 
 /** The still and the variant key the hash names, `#<name>[@<key>]`, each null when it names none. */
@@ -282,11 +317,17 @@ function report(message) {
   el("error").hidden = !message;
 }
 
-/** Build the thumbnail strip, one image per still showing its latest revision. */
+/**
+ * Build the thumbnail strip, one image per still showing its latest revision, with a heading
+ * before the first still of each group when the source has groups.
+ */
 function buildStrip() {
   const strip = el("strip");
   strip.replaceChildren();
+  heads = parts.map((part) => ({ part, head: node("span", "group", part.title) }));
   thumbs = state.stills.map((s, i) => {
+    const first = heads.find((h) => h.part.at === i);
+    if (first) strip.appendChild(first.head);
     const t = document.createElement("img");
     t.src = imageUrl(s.revs.at(-1));
     t.alt = s.title;
@@ -383,12 +424,13 @@ function flick(dx, dy) {
 function actions(t, swiped) {
   const className = swiped ? "act" : "";
   const reply = node("button", `${className} reply`.trim(), "Reply");
+  reply.disabled = state.readonly;
   reply.onclick = (e) => {
     e.stopPropagation();
     answer(t.id);
   };
   const status = node("button", `${className} status`.trim(), statusLabel(t));
-  status.disabled = busy.has(t.id);
+  status.disabled = busy.has(t.id) || state.readonly;
   status.onclick = (e) => {
     e.stopPropagation();
     setStatus(t.id, swiped);
@@ -533,7 +575,7 @@ function renderTalk() {
   el("talk-n").textContent = at + 1;
   el("talk-title").textContent = title(t.body);
   el("talk-status").textContent = statusLabel(t);
-  el("talk-status").disabled = busy.has(t.id);
+  el("talk-status").disabled = busy.has(t.id) || state.readonly;
   entries.replaceChildren(entry(t), ...t.replies.map(entry), ...dotsOf(busyOn(t.id)));
   drawCrop(t);
   pinned = low;
@@ -548,13 +590,13 @@ function renderTalk() {
  * Put the reply form where the thread being answered is: at the foot of the conversation in
  * the mobile layout, under the thread's card in the desktop one, hidden when there is none.
  * What was typed for another thread is dropped, and the form keeps the focus it had (`held`),
- * which it loses when the cards it sat among are drawn again.
+ * which it loses when the cards it sat among are drawn again. A read-only folder has no form.
  */
 function placeReply(held) {
   const form = el("reply");
   const id = mobile ? state.talk : state.replying;
   const home = mobile ? el("talk") : el("threads").querySelector(`.slot[data-id="${id}"]`);
-  form.hidden = !id || !home;
+  form.hidden = !id || !home || state.readonly;
   if (form.hidden) return document.body.append(form);
   if (answerFor !== id) {
     answerFor = id;
@@ -617,7 +659,7 @@ function renderRemarks() {
   const cards = list.map((t, i) => [t, threadCard(t, i + 1)]);
   const done = cards.filter(([t]) => t.status !== "open");
   el("threads").replaceChildren(...cards.filter(([t]) => t.status === "open").map(([, card]) => card));
-  if (!list.length) el("threads").append(node("p", "", NO_REMARKS));
+  if (!list.length) el("threads").append(node("p", "", state.readonly ? READ_ONLY : NO_REMARKS));
   if (done.length) {
     const group = node("details", "sunk");
     group.open = state.sunk || done.some(([t]) => t.id === state.thread);
@@ -736,12 +778,31 @@ function watchWorking() {
 }
 
 /**
- * Draw the current still, its switchers and revision controls, the reviewed mark, the count,
- * the agent's dots for the still, the strip and the remarks.
+ * Draw what a folder source adds whether or not it has stills: the About entries and the page
+ * when it is open, the read-only line with Remark disabled, and the notes line until that very
+ * set of notes is dismissed.
+ */
+function renderSource() {
+  for (const button of document.querySelectorAll(".about")) button.hidden = !state.about;
+  el("readme").hidden = !state.reading;
+  root.classList.toggle("readonly", state.readonly);
+  el("readonly").hidden = !state.readonly;
+  for (const id of ["remark", "arm"]) el(id).disabled = state.readonly;
+  el("remark").title = state.readonly ? READ_ONLY : REMARK_TITLE;
+  el("notes").hidden = !state.notes.length || state.notes.join("\n") === dismissed;
+  el("notes-text").textContent = notesLine(state.notes);
+  el("notes-text").title = state.notes.join("\n");
+}
+
+/**
+ * Draw the current still with its group and latest revision, its switchers and revision
+ * controls, the reviewed mark, the count, the agent's dots for the still, the strip with its
+ * group headings and the remarks.
  */
 function render() {
   const { stills, at } = state;
   const some = stills.length > 0;
+  renderSource();
   el("empty").hidden = some;
   el("stage").hidden = !some;
   for (const id of ["prev", "next", "mark", "bar", "place", "dock"]) el(id).hidden = !some;
@@ -763,7 +824,9 @@ function render() {
     el("hint").hidden = true;
     el("talk").hidden = true;
     el("reply").hidden = true;
-    for (const id of ["variant", "busy", "viewports", "tags", "fallback", "others"]) el(id).hidden = true;
+    for (const id of ["variant", "busy", "viewports", "tags", "fallback", "others", "group", "revn", "groups"]) {
+      el(id).hidden = true;
+    }
     state.draft = null;
     return;
   }
@@ -789,6 +852,13 @@ function render() {
   el("still").style.width = !mobile && wide ? `${wide}px` : "";
   el("still").alt = s.title;
   el("title").textContent = s.title;
+  el("group").hidden = !s.group;
+  el("group").textContent = s.group ?? "";
+  el("revn").hidden = latest < 2;
+  el("revn").textContent = `rev ${latest}`;
+  const part = sectionAt(parts, at);
+  el("groups").hidden = !parts.length;
+  el("group-pick").replaceChildren(...parts.map((p, i) => new Option(`${p.title} (${p.count})`, i, false, i === part)));
   document.title = `${s.title} · stills`;
   el("flag").hidden = !s.mark.changed;
   const { reviewed, total } = counts(stills);
@@ -802,9 +872,10 @@ function render() {
   el("busy").replaceChildren(...dotsOf(over));
   renderSwitchers(s);
   el("viewed").checked = s.mark.reviewed;
-  el("viewed").disabled = state.rev !== latest;
+  el("viewed").disabled = state.readonly || state.rev !== latest;
   const own = state.rev === latest;
-  el("mark").title = own ? "Mark this still reviewed (v)" : `The mark is for rev ${latest}, the latest`;
+  const marking = own ? "Mark this still reviewed (v)" : `The mark is for rev ${latest}, the latest`;
+  el("mark").title = state.readonly ? READ_ONLY : marking;
   el("revs").hidden = s.revs.length < 2;
   el("compare").hidden = s.revs.length < 2;
   el("rev").replaceChildren(...s.revs.map((r) => new Option(`${r.n} of ${latest}`, r.n, false, r.n === state.rev)));
@@ -821,6 +892,7 @@ function render() {
     t.classList.toggle("done", mark.reviewed);
     t.classList.toggle("changed", mark.changed);
   });
+  for (const { head, part: p } of heads) head.hidden = thumbs.slice(p.at, p.at + p.count).every((t) => t.hidden);
   if (!mobile) thumbs[at].scrollIntoView({ block: "nearest", inline: "center" });
   const hash = state.pick ? `#${s.name}@${state.pick}` : `#${s.name}`;
   if (location.hash !== hash) history.replaceState(history.state, "", hash);
@@ -855,9 +927,11 @@ function unselect() {
 
 /**
  * Answer thread `id`: in the mobile layout its conversation opens with the keyboard up, in the
- * desktop one the reply form opens under its card, or closes when it was there.
+ * desktop one the reply form opens under its card, or closes when it was there. Not in a
+ * read-only folder.
  */
 function answer(id) {
+  if (state.readonly) return undefined;
   if (mobile) return openTalk(id, true);
   state.replying = state.replying === id ? null : id;
   state.thread = id;
@@ -1034,6 +1108,18 @@ async function refresh(turn) {
   state.held = Boolean(latest && state.draft) || state.held;
   const rev = latest && !state.draft ? null : state.rev;
   state.stills = data.stills;
+  state.groups = data.groups ?? [];
+  state.notes = data.notes ?? [];
+  state.folder = data.writable !== undefined;
+  state.readonly = data.writable === false;
+  state.about = data.about ?? null;
+  if (state.readonly) {
+    dropDraft();
+    state.armed = false;
+    state.replying = null;
+  }
+  if (state.reading && state.about) loadAbout();
+  else state.reading = false;
   state.marks = data.marks;
   state.me = data.me;
   state.working = new Map(data.working.map((w) => [workingKey(w), w]));
@@ -1043,6 +1129,7 @@ async function refresh(turn) {
   state.pick = state.pick && pickOf(state.stills, state.pick, () => false);
   derive();
   state.applied = Math.max(state.applied, data.cursor);
+  parts = sections(state.stills, state.groups);
   buildStrip();
   let at = state.stills.findIndex((s) => s.name === current);
   if (at === -1) at = hashIndex();
@@ -1074,6 +1161,58 @@ function follow() {
     if (opened) load();
     opened = true;
   };
+}
+
+/**
+ * Read the folder's About page into its sheet: the README's name and the HTML the runtime made
+ * of it, or why it could not be read. Dropped when the sheet was closed meanwhile.
+ */
+async function loadAbout() {
+  let page;
+  try {
+    page = await getJson("/_review/about");
+  } catch (e) {
+    if (state.reading) el("readme-body").textContent = `Could not read it: ${e.message}`;
+    return;
+  }
+  if (!state.reading) return;
+  el("readme-title").textContent = page.file;
+  el("readme-body").innerHTML = page.html;
+}
+
+/** Open the About page over the viewer, when the source has one. */
+function openAbout() {
+  if (!state.about) return;
+  closeSheets();
+  state.reading = true;
+  render();
+  loadAbout();
+}
+
+/** Close the About page. */
+function closeAbout() {
+  state.reading = false;
+  render();
+}
+
+/**
+ * A click in the About page on an image that is a still closes the page and goes to that
+ * still, and to the variant the image is of when it is not the still's first.
+ */
+function followAbout(e) {
+  const link = e.target.closest("a.still");
+  if (!link) return;
+  e.preventDefault();
+  closeAbout();
+  if (location.hash !== link.hash) location.hash = link.hash;
+}
+
+/** Go to the group the picker names: its first still left to review, else its first. */
+function pickGroup(e) {
+  const part = parts[Number(e.target.value)];
+  if (!part) return;
+  closeSheets();
+  show(sectionStart(state.stills, part, state.all));
 }
 
 /**
@@ -1141,7 +1280,7 @@ async function send(event) {
  */
 async function setReviewed(on) {
   const s = state.stills[state.at];
-  if (!s) return;
+  if (!s || state.readonly) return;
   const event = { type: on ? "viewed" : "unviewed", still: s.name, variant: s.variant.key, rev: s.revs.at(-1).n };
   if (!(await named())) return render();
   try {
@@ -1213,7 +1352,7 @@ async function postReply() {
  */
 async function setStatus(id, undoable = false) {
   const thread = state.threads.find((t) => t.id === id);
-  if (!thread || busy.has(id) || guest()) return;
+  if (!thread || busy.has(id) || guest() || state.readonly) return;
   const type = thread.status === "open" ? "resolve" : "reopen";
   busy.add(id);
   state.swiped = null;
@@ -1242,7 +1381,7 @@ function closeSheets() {
  * the sheets get out of the way of the still.
  */
 async function toggleArmed() {
-  if (!state.stills.length) return;
+  if (!state.stills.length || state.readonly) return;
   const on = !state.armed;
   if (on && !(await named())) return;
   state.armed = on;
@@ -1310,6 +1449,7 @@ function pointOf(e) {
  */
 function startDrag(e) {
   if (e.button !== 0 || fingers.size || el("post").disabled || e.target.closest("#composer, .mark")) return;
+  if (state.readonly) return;
   const at = pointOf(e);
   const corner = e.target.dataset.corner;
   if (corner) drag = { fixed: opposite(state.draft.anchor, corner) };
@@ -1498,6 +1638,17 @@ el("shade").onclick = () => {
   render();
 };
 el("layout").onclick = toggleLayout;
+for (const button of document.querySelectorAll(".about")) button.onclick = openAbout;
+el("readme-close").onclick = closeAbout;
+el("readme").onclick = (e) => {
+  if (e.target === el("readme")) closeAbout();
+};
+el("readme-body").onclick = followAbout;
+el("group-pick").onchange = pickGroup;
+el("notes-close").onclick = () => {
+  dismissed = state.notes.join("\n");
+  render();
+};
 el("variant").onclick = () => toggleSheet("more");
 el("who-name").maxLength = MAX_NAME;
 el("who-form").onsubmit = (e) => {
@@ -1581,6 +1732,8 @@ el("all").onchange = (e) => {
 addEventListener("keydown", (e) => {
   if (e.key === "Escape" && state.asking) return closeWho(false);
   if (state.asking) return;
+  if (e.key === "Escape" && state.reading) return closeAbout();
+  if (state.reading) return;
   if (e.key === "Escape" && (state.draft || state.armed)) return cancelDraft();
   if (e.key === "Escape" && state.talk) return closeTalk();
   if (e.key === "Escape" && (state.more || state.overview)) return el("shade").click();
