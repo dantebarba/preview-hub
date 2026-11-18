@@ -17,13 +17,16 @@
  *   GET  /_review/threads              { threads }
  *   GET  /_review/events?since=<seq>   server-sent events: the log's events above `since`, then
  *                                      each new one as it lands, and `stills` when the stills change
- *   POST /_review/events               append one event (a JSON body), answered with the stored one
+ *   POST /_review/events               append one event (a JSON body), answered with the stored one;
+ *                                      a `thread` may carry `annotated`, its still with the mark
+ *                                      drawn as a `data:image/png;base64,` URL of at most 8 MiB,
+ *                                      kept as `review/annotated/<id>.png`
  *
  * Every response is `Cache-Control: no-store` but a still's revision, which never changes. An
  * edit to the manifest or a still reloads the open tabs, as Vite does for a page.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendEvent, readEvents, reviewed, stills, threads } from "./review.mjs";
@@ -36,6 +39,10 @@ const REV_IMAGE = /^\/stills\/[^/]+\/\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
+const MAX_ANNOTATED_BYTES = 8 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
+const PNG_URL = "data:image/png;base64,";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const POLL_MS = 1000;
 const PING_TICKS = 20;
 const DEFAULT_AUTHOR = { kind: "human", name: "reviewer" };
@@ -44,6 +51,7 @@ const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
 const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
+  "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
   "viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
 };
 
@@ -384,6 +392,47 @@ function crossOrigin(req) {
   }
 }
 
+/** An error to answer with the HTTP status `status`. */
+function refusal(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+/**
+ * The PNG a posted thread carries in `annotated`, as a Buffer. Throws a refusal when `value` is
+ * not a `data:image/png;base64,` URL (400), holds more than 8 MiB (413) or is not a PNG (400).
+ */
+export function annotatedPng(value) {
+  if (typeof value !== "string" || !value.startsWith(PNG_URL)) {
+    throw refusal(400, `'annotated' must be a ${PNG_URL} URL`);
+  }
+  const png = Buffer.from(value.slice(PNG_URL.length), "base64");
+  if (png.length > MAX_ANNOTATED_BYTES) {
+    throw refusal(413, `'annotated' must be at most ${MAX_ANNOTATED_BYTES} bytes`);
+  }
+  if (!png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) throw refusal(400, "'annotated' must be a PNG");
+  return png;
+}
+
+/**
+ * Keep `png` as `review/annotated/<id>.png` of `scratch`, the still of thread `id` with its
+ * mark drawn. It is written beside its name and renamed onto it, so a reader never sees half
+ * of it. Returns the file's path.
+ */
+export function storeAnnotated(scratch, id, png) {
+  const dir = path.join(scratch, "review", "annotated");
+  const file = path.join(dir, `${id}.png`);
+  const partial = path.join(dir, `.${id}.png.${process.pid}`);
+  mkdirSync(dir, { recursive: true });
+  try {
+    writeFileSync(partial, png);
+    renameSync(partial, file);
+  } catch (e) {
+    rmSync(partial, { force: true });
+    throw e;
+  }
+  return file;
+}
+
 /**
  * `POST /_review/events`: append the event in the JSON body to the log and answer 201 with the
  * stored one. Only a JSON content type is taken (415), so a page of another origin cannot post
@@ -391,14 +440,20 @@ function crossOrigin(req) {
  * `Origin` is not this host is refused as well (403). A body that is not a JSON object, or an
  * event the store refuses, is a 400 with the reason. An event without an `author` is the
  * reviewer's.
+ *
+ * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
+ * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
+ * thread's id once it is. A PNG that could not be written leaves the remark stored without it.
+ * The rest of the body is at most 64 KiB (413), as it is without the PNG.
  */
 async function postEvent(req, res, { scratch, stream }) {
   if (crossOrigin(req)) return sendJson(res, 403, { error: "posting from another origin is not allowed" });
   if (!(req.headers["content-type"] || "").toLowerCase().startsWith(JSON_TYPE)) {
     return sendJson(res, 415, { error: `the body must be ${JSON_TYPE}` });
   }
-  const body = await readBody(req, MAX_POST_BYTES);
-  if (!body) return sendJson(res, 413, { error: `the body must be at most ${MAX_POST_BYTES} bytes` });
+  const tooLong = () => sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
+  const body = await readBody(req, MAX_UPLOAD_BYTES);
+  if (!body) return tooLong();
   let event;
   try {
     event = JSON.parse(body.toString("utf8"));
@@ -408,13 +463,33 @@ async function postEvent(req, res, { scratch, stream }) {
   if (event === null || typeof event !== "object" || Array.isArray(event)) {
     return sendJson(res, 400, { error: "an event must be an object" });
   }
+  const { annotated, ...fields } = event;
+  if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) return tooLong();
+  let png = null;
+  if (annotated !== undefined) {
+    if (fields.type !== "thread" || typeof fields.still !== "string") {
+      return sendJson(res, 400, { error: "'annotated' goes with a thread on a still" });
+    }
+    try {
+      png = annotatedPng(annotated);
+    } catch (e) {
+      return sendJson(res, e.status, { error: e.message });
+    }
+  }
   let stored;
   try {
-    stored = await appendEvent(scratch, { author: DEFAULT_AUTHOR, ...event });
+    stored = await appendEvent(scratch, { author: DEFAULT_AUTHOR, ...fields });
   } catch (e) {
     const broken = Boolean(e.code) || /still locked/.test(e.message);
     if (broken) console.error(`[mockup] review event not stored: ${e.message}`);
     return sendJson(res, broken ? 500 : 400, { error: e.message });
+  }
+  if (png) {
+    try {
+      storeAnnotated(scratch, stored.id, png);
+    } catch (e) {
+      console.error(`[mockup] annotated still of thread ${stored.id} not stored: ${e.message}`);
+    }
   }
   stream.push();
   return sendJson(res, 201, stored);
