@@ -43,6 +43,9 @@ export function markOf(rev, viewed) {
 /** The most characters a guest's name may hold. */
 export const MAX_NAME = 40;
 
+/** What the viewer, the folder server and the CLI say when a folder refuses remarks. */
+export const READ_ONLY = "read-only folder: remarks off";
+
 /** How long the agent's working state lasts after its last `working` event. */
 export const WORKING_MS = 10 * 60 * 1000;
 

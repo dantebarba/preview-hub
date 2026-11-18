@@ -86,6 +86,7 @@ import {
   pickOf,
   pin,
   progress,
+  READ_ONLY,
   region,
   revealed,
   reviewerOf,
@@ -124,7 +125,6 @@ const UNDO_MS = 5000;
 const MAX_ANSWER_PX = 160;
 const FIT = { z: 1, x: 0, y: 0 };
 const NO_REMARKS = "No remarks on this still yet. Mark an area of it to start one.";
-const READ_ONLY = "read-only folder: remarks off";
 const REMARK_TITLE = "Mark an area of the still and comment on it (c)";
 const PHONE = matchMedia("(max-width: 760px)");
 const SMALL = matchMedia("(max-width: 599.98px), (pointer: coarse)");

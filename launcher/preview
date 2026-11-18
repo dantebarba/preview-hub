@@ -109,6 +109,13 @@ compose_running() { [ -n "$(docker compose -p "$1" -f "$PREVIEW_COMPOSE_FILE" ps
 ## True when the pid file exists and names a live process.
 pid_alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
 
+## Log the time left before the watchdog of $STATE_DIR stops the preview; false when it is down.
+autostop_left() {
+  if ! pid_alive "$STATE_DIR/watchdog.pid" || [ ! -f "$STATE_DIR/deadline" ]; then return 1; fi
+  local left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+  plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
+}
+
 ## Locate the `.preview/` directory (PREVIEW_DIR override, else walk up from $PWD) and set
 ## PREVIEW_DIR (absolute path to it) and PREVIEW_ROOT (the project root that contains it).
 discover_preview_dir() {
@@ -449,12 +456,7 @@ cmd_status() {
     local url; url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)')"
     if compose_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  docker: up"; else plog "  docker: down"; fi
     if ts_port_mapped "$TS_PORT"; then plog "  tailscale serve: up -> $url"; else plog "  tailscale serve (:$TS_PORT): down"; fi
-    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
-      local left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
-      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
-    else
-      plog "  auto-stop watchdog: down"
-    fi
+    autostop_left || plog "  auto-stop watchdog: down"
     local host="" expires="" recorded=""
     if share_forwarder_exists; then
       host="$(share_forwarder_label host)"
@@ -1353,7 +1355,6 @@ cmd_review_cli() {
   review_cli "$@"
 }
 
-## ── stills folders: any directory of images as a preview of its own ─────────
 ## `preview stills serve [<dir>]` runs the /mockup runtime in folder mode on a directory, git or
 ## not: no frontend project, no pages, only the viewer at /stills, with the directory mounted
 ## read-write (read-only when this user cannot write it or its .review/). It needs no .preview/:
@@ -1457,16 +1458,13 @@ folder_running() { [ -n "$(docker ps -q --filter "label=com.docker.compose.proje
 
 ## stills status: this folder's preview, then every folder served on this machine.
 folder_status() {
-  local dir root url left
+  local dir root url
   plog "this folder: '$STILLS_DIR' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT'"
   if [ -d "$STATE_DIR" ]; then
     url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)/')"
     if folder_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  up -> ${url}stills"; else plog "  docker: down"; fi
     [ "$STILLS_MODE" = "rw" ] || plog "  read-only folder: remarks off"
-    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
-      left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
-      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
-    fi
+    autostop_left || true
     if share_forwarder_exists; then plog "  shared: https://$(share_forwarder_label host)/"; fi
   else
     plog "  not served (run: preview stills serve $STILLS_DIR)"

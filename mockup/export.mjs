@@ -18,8 +18,8 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { annotatedDir, EVENTS_FILE, readEvents, revisions, stills } from "./review.mjs";
-import { DEFAULT_KEY, hashOf, keptFile, READMES, REVIEW_DIR } from "./source.mjs";
+import { readEvents, revisions, stills, storePaths } from "./review.mjs";
+import { DEFAULT_KEY, hashOf, keptFile, READMES, REVIEW_DIR, reviewPaths } from "./source.mjs";
 
 /** The file name the variant `key` of the still `name` is exported as, `single` when it is its only one. */
 export function exportName(name, key, single) {
@@ -121,17 +121,17 @@ export function exportStills(dir, dest, { readme = false, title = null } = {}) {
       });
     }
   }
-  writeFileSync(path.join(dest, REVIEW_DIR, "revs.json"), `${JSON.stringify(record, null, 2)}\n`);
+  const to = reviewPaths(dest);
+  writeFileSync(to.revs, `${JSON.stringify(record, null, 2)}\n`);
 
   const first = new Map([...revisions(dir)].map(([name, v]) => [name, v.first]));
-  const lines = existsSync(path.join(dir, EVENTS_FILE)) ? eventLines(dir, first) : [];
-  if (lines.length) writeFileSync(path.join(dest, REVIEW_DIR, "events.jsonl"), lines.join(""));
-  const annotated = annotatedDir(dir);
-  if (existsSync(annotated)) {
-    const to = path.join(dest, REVIEW_DIR, "annotated");
-    mkdirSync(to, { recursive: true });
-    for (const f of readdirSync(annotated).filter((n) => n.endsWith(".png"))) {
-      copyFileSync(path.join(annotated, f), path.join(to, f));
+  const from = storePaths(dir);
+  const lines = existsSync(from.events) ? eventLines(dir, first) : [];
+  if (lines.length) writeFileSync(to.events, lines.join(""));
+  if (existsSync(from.annotated)) {
+    mkdirSync(to.annotated, { recursive: true });
+    for (const f of readdirSync(from.annotated).filter((n) => n.endsWith(".png"))) {
+      copyFileSync(path.join(from.annotated, f), path.join(to.annotated, f));
     }
   }
 

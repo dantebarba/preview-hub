@@ -40,7 +40,7 @@
  * edit to the manifest or a still reloads the open tabs, as Vite does for a page.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { aboutPage, sourceExtras, sourceFile, watchSource } from "./extras.mjs";
@@ -56,6 +56,7 @@ import {
   revisions,
   stills,
   storeAnnotated,
+  storePaths,
   threads,
   working,
 } from "./review.mjs";
@@ -367,7 +368,7 @@ function noStore(res) {
 }
 
 /** Answer with `body` as JSON. */
-function sendJson(res, status, body) {
+export function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": `${JSON_TYPE}; charset=utf-8` });
   res.end(JSON.stringify(body));
 }
@@ -378,12 +379,26 @@ function methodNotAllowed(res, allow) {
   res.end("Method Not Allowed");
 }
 
+/**
+ * Answer a GET or HEAD with the file `file` under `headers`, which name its Content-Type: 405 for
+ * any other method, 404 when the file is gone.
+ */
+export function sendFile(req, res, file, headers) {
+  if (req.method !== "GET" && req.method !== "HEAD") return methodNotAllowed(res, "GET, HEAD");
+  let size;
+  try {
+    size = statSync(file).size;
+  } catch {
+    return sendJson(res, 404, { error: "no such file" });
+  }
+  res.writeHead(200, { ...headers, "Content-Length": size });
+  if (req.method === "HEAD") return res.end();
+  return createReadStream(file).pipe(res);
+}
+
 /** Answer a GET with a file of the viewer (`{ file, type }`), read from this image. */
 function sendViewerFile(req, res, { file, type }) {
-  if (req.method !== "GET" && req.method !== "HEAD") return methodNotAllowed(res, "GET, HEAD");
-  const body = readFileSync(path.join(VIEWER_DIR, file));
-  res.writeHead(200, { "Content-Type": type, "Content-Length": body.length });
-  res.end(req.method === "HEAD" ? undefined : body);
+  sendFile(req, res, path.join(VIEWER_DIR, file), { "Content-Type": type });
 }
 
 /** Answer a GET of `/stills` with the viewer's page. */
@@ -417,7 +432,7 @@ function readBody(req, limit) {
  */
 export function eventStream(scratch) {
   const folder = typeof scratch === "string" ? null : scratch;
-  const file = folder ? folder.paths.events : path.join(scratch, EVENTS_FILE);
+  const file = storePaths(scratch).events;
   const clients = new Set();
   let timer = null;
   let unwatch = null;
@@ -621,13 +636,7 @@ function sendSource(req, res, scratch, name) {
   }
   const found = dir && sourceFile(dir, rel);
   if (!found) return sendJson(res, 404, { error: "no such image" });
-  const body = readFileSync(found.file);
-  res.writeHead(200, {
-    "Content-Type": found.type,
-    "Content-Length": body.length,
-    "X-Content-Type-Options": "nosniff",
-  });
-  return res.end(req.method === "HEAD" ? undefined : body);
+  return sendFile(req, res, found.file, { "Content-Type": found.type, "X-Content-Type-Options": "nosniff" });
 }
 
 /**

@@ -54,6 +54,7 @@ import {
   parseTags,
   parseViewport,
   sideFile,
+  storePaths,
   upgraded,
   variantKey,
   withLock,
@@ -74,7 +75,7 @@ function posix(rel) {
 }
 
 /** The paths of the review of the folder `dir`, in the shape `review.mjs` reads them. */
-function reviewPaths(dir) {
+export function reviewPaths(dir) {
   const root = path.join(dir, REVIEW_DIR);
   return {
     root,
@@ -636,13 +637,7 @@ export function folder(dir) {
   const manifest = existsSync(path.join(root, MANIFEST_FILE));
   const review = reviewPaths(root);
   const paths = manifest
-    ? {
-        manifest: path.join(root, MANIFEST_FILE),
-        stillsLock: path.join(root, "stills", ".lock"),
-        events: path.join(root, "review", "events.jsonl"),
-        eventsLock: path.join(root, "review", ".lock"),
-        annotated: path.join(root, "review", "annotated"),
-      }
+    ? storePaths(root)
     : { events: review.events, eventsLock: review.eventsLock, annotated: review.annotated };
   return {
     dir: root,

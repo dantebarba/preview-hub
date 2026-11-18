@@ -32,18 +32,17 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   addStill,
-  annotatedDir,
   appendEvent,
-  EVENTS_FILE,
   readEvents,
   reviewMarks,
   revisions,
   stills,
+  storePaths,
   threads,
 } from "./review.mjs";
 import { exportStills } from "./export.mjs";
 import { folder, readSource } from "./source.mjs";
-import { markOf } from "./stills/state.js";
+import { markOf, READ_ONLY } from "./stills/state.js";
 
 const POLL_MS = 200;
 
@@ -305,7 +304,7 @@ function reviewShow({ dir, root, io }, [id], { json }) {
     .find((s) => s.name === thread.still)
     ?.variants.find((v) => v.key === thread.variant)
     ?.revs.find((r) => r.n === thread.rev);
-  const annotated = path.relative(root, path.join(annotatedDir(dir), `${thread.id}.png`));
+  const annotated = path.relative(root, path.join(storePaths(dir).annotated, `${thread.id}.png`));
   const files = {
     image: rev ? io.host(rev.file) : null,
     annotated: existsSync(path.join(root, annotated)) ? io.host(annotated) : null,
@@ -327,7 +326,7 @@ function reviewShow({ dir, root, io }, [id], { json }) {
 /** Append `event` as the agent and print its seq, its type and what it is about. */
 async function agentEvent({ dir, root, io }, event) {
   if (typeof dir !== "string" && !readSource(root).writable) {
-    throw new CliError(`${io.host(".")}: read-only folder, remarks off`);
+    throw new CliError(`${io.host(".")}: ${READ_ONLY}`);
   }
   const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author, via: "cli" } });
   const about = aboutText(stored);
@@ -382,15 +381,10 @@ function dirGone(dir) {
   }
 }
 
-/** The event log of `dir`, a scratch dir or a folder source. */
-function eventsFile(dir) {
-  return typeof dir === "string" ? path.join(dir, EVENTS_FILE) : dir.paths.events;
-}
-
 /** The size and mtime of the log, to skip a re-read when it has not changed. */
 function logStamp(dir) {
   try {
-    const s = statSync(eventsFile(dir));
+    const s = statSync(storePaths(dir).events);
     return `${s.size}:${s.mtimeMs}`;
   } catch {
     return "";
