@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { applyThread, markOf } from "./stills/state.js";
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed"];
 
@@ -55,14 +56,30 @@ const MAX_AUTHOR = 100;
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
 
+/** The stills manifest, relative to the scratch dir. */
+export const MANIFEST_FILE = "stills/manifest.json";
+
+/** The event log, relative to the scratch dir. */
+export const EVENTS_FILE = "review/events.jsonl";
+
 /** Paths of the store inside the scratch dir `dir`. */
 function paths(dir) {
   return {
-    manifest: path.join(dir, "stills", "manifest.json"),
+    manifest: path.join(dir, MANIFEST_FILE),
     stillsLock: path.join(dir, "stills", ".lock"),
-    events: path.join(dir, "review", "events.jsonl"),
+    events: path.join(dir, EVENTS_FILE),
     eventsLock: path.join(dir, "review", ".lock"),
   };
+}
+
+/** The annotated still of thread `id`, relative to the scratch dir. */
+export function annotatedFile(id) {
+  return `review/annotated/${id}.png`;
+}
+
+/** True when `bytes` starts with the PNG signature. */
+export function isPng(bytes) {
+  return bytes.subarray(0, PNG.length).equals(PNG);
 }
 
 /** True for a plain object, not an array or null. */
@@ -261,7 +278,7 @@ export async function addStill(dir, { file, name, title, source, size }) {
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
-    if (!fstatSync(fd).isFile() || readSync(fd, head, 0, head.length, 0) !== head.length || !head.equals(PNG)) {
+    if (!fstatSync(fd).isFile() || readSync(fd, head, 0, head.length, 0) !== head.length || !isPng(head)) {
       throw new Error(`${file}: not a PNG image`);
     }
   } finally {
@@ -300,6 +317,25 @@ export async function addStill(dir, { file, name, title, source, size }) {
     }
     return entry;
   });
+}
+
+/**
+ * Keep `png` as the annotated still of thread `id` in `dir`, `review/annotated/<id>.png`. It is
+ * written beside its name and renamed onto it, so a reader never sees half of it. Returns the
+ * file's path.
+ */
+export function storeAnnotated(dir, id, png) {
+  const file = path.join(dir, annotatedFile(id));
+  const partial = sideFile(file, "tmp");
+  mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    writeFileSync(partial, png);
+    renameSync(partial, file);
+  } catch (e) {
+    rmSync(partial, { force: true });
+    throw e;
+  }
+  return file;
 }
 
 /**
@@ -412,32 +448,9 @@ export async function appendEvent(dir, event) {
  * `updated` is the `seq` of the last event on the thread.
  */
 export function threads(dir) {
-  const byId = new Map();
-  for (const e of readEvents(dir).events) {
-    if (e.type === "thread") {
-      byId.set(e.id, {
-        id: e.id,
-        still: e.still,
-        rev: e.rev ?? null,
-        anchor: e.anchor ?? null,
-        body: e.body,
-        author: e.author,
-        at: e.at,
-        seq: e.seq,
-        status: "open",
-        replies: [],
-        updated: e.seq,
-      });
-      continue;
-    }
-    const thread = byId.get(e.thread);
-    if (!thread) continue;
-    thread.updated = e.seq;
-    if (e.type === "reply") thread.replies.push({ id: e.id, author: e.author, body: e.body, at: e.at, seq: e.seq });
-    if (e.type === "resolve") thread.status = "resolved";
-    if (e.type === "reopen") thread.status = "open";
-  }
-  return [...byId.values()];
+  const out = [];
+  for (const e of readEvents(dir).events) applyThread(out, e);
+  return out;
 }
 
 /**
@@ -456,8 +469,7 @@ export function reviewed(dir) {
   const out = {};
   for (const [name, revs] of revisions(dir)) {
     const rev = Math.max(0, ...revs);
-    const viewed = marks.get(name) ?? null;
-    out[name] = { rev, viewed, reviewed: viewed !== null && viewed === rev, changed: viewed !== null && viewed < rev };
+    out[name] = markOf(rev, marks.get(name) ?? null);
   }
   return out;
 }

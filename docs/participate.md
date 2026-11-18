@@ -207,7 +207,10 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   flip (`b`) against the previous one. The **Reviewed** checkbox (`v`) works like "Viewed"
   on a pull request's files: stepping skips the reviewed stills unless "show reviewed" is
   on, the header counts them, and a new revision clears the mark and flags the still
-  "changed since reviewed".
+  "changed since reviewed". A drag on the still draws a box and a tap drops a pin (on a
+  phone once **＋ Remark**, `c`, is on); the remark written next to it opens a thread, shown
+  as a numbered mark and a card in the remarks panel, where it is answered, resolved and
+  reopened.
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
   `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
@@ -217,7 +220,10 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   every new one within about a second, plus an event named `stills` when the stills change;
   `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
   one (415 unless `application/json`, 403 from another origin, 400 for an event the store
-  refuses), `author` defaulting to `{"kind":"human","name":"reviewer"}`.
+  refuses, 413 for an event over 64 KiB), `author` defaulting to
+  `{"kind":"human","name":"reviewer"}`. A `thread` on a still may carry `annotated`, the
+  still with its mark drawn as a `data:image/png;base64,` URL of at most 8 MiB, kept as
+  `review/annotated/<id>.png` and not stored in the event.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;

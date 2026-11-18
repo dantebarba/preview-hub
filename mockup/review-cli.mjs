@@ -23,7 +23,8 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, appendEvent, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { addStill, annotatedFile, appendEvent, EVENTS_FILE, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { markOf } from "./stills/state.js";
 
 const POLL_MS = 200;
 
@@ -130,7 +131,7 @@ function stillsLs({ dir, io }, _args, { json }) {
   const marks = reviewed(dir);
   const open = threads(dir).filter((t) => t.status === "open");
   const rows = stills(dir).map((s) => {
-    const mark = marks[s.name] ?? { rev: 0, viewed: null, reviewed: false, changed: false };
+    const mark = marks[s.name] ?? markOf(0, null);
     const rev = s.revs.find((r) => r.n === mark.rev);
     return {
       name: s.name,
@@ -166,7 +167,7 @@ function reviewShow({ dir, io }, [id], { json }) {
   const rev = stills(dir)
     .find((s) => s.name === thread.still)
     ?.revs.find((r) => r.n === thread.rev);
-  const annotated = path.join("review", "annotated", `${thread.id}.png`);
+  const annotated = annotatedFile(thread.id);
   const files = {
     image: rev ? io.host(rev.file) : null,
     annotated: existsSync(path.join(dir, annotated)) ? io.host(annotated) : null,
@@ -175,8 +176,8 @@ function reviewShow({ dir, io }, [id], { json }) {
   io.out(`thread  ${thread.id}  ${thread.status}`);
   io.out(`on      ${target(thread)}`);
   if (files.image) io.out(`image   ${files.image}`);
-  const notDrawn = "(not drawn yet: the viewer draws it when the thread is opened)";
-  if (thread.still !== null) io.out(`marked  ${files.annotated ?? notDrawn}`);
+  const notDrawn = "(none: not written yet, or the viewer could not draw it; read image at the anchor above)";
+  if (files.annotated || thread.anchor) io.out(`marked  ${files.annotated ?? notDrawn}`);
   for (const e of [thread, ...thread.replies]) {
     io.out("");
     io.out(`#${e.seq} ${e.author.name} (${e.author.kind}) ${e.at}`);
@@ -213,7 +214,7 @@ function dirGone(dir) {
 /** The size and mtime of the log, to skip a re-read when it has not changed. */
 function logStamp(dir) {
   try {
-    const s = statSync(path.join(dir, "review", "events.jsonl"));
+    const s = statSync(path.join(dir, EVENTS_FILE));
     return `${s.size}:${s.mtimeMs}`;
   } catch {
     return "";
