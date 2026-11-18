@@ -744,8 +744,9 @@ function fillSwitcher(group, values, current, label, pick) {
  * Draw the switchers for the still `s`: its variant's device class and tags pressed, its size
  * as a label, or as a picker when the still has several of that class and tags, the chip of
  * the mobile top bar, and the note that says which variant shows when the still has none of
- * the picked class and tags. A switch prefers a variant of this still, and one to a class and
- * tags no still was shot at together picks the first variant at what was switched to.
+ * the picked class and tags. A switch to the picked variant's own class keeps the pick, any
+ * other prefers a variant of this still, and one to a class and tags no still was shot at
+ * together picks the first variant at what was switched to.
  */
 function renderSwitchers(s) {
   const { classes, viewports, tags } = choices(state.stills);
@@ -755,7 +756,8 @@ function renderSwitchers(s) {
   const near = [s, ...state.stills];
   const toClass = (c) => {
     const there = (k) => classOf(k) === c;
-    setPick(pickOf(near, [(k) => there(k) && tagsOf(k) === tagsOf(wanted), there]));
+    const kept = (k) => k === wanted && there(k);
+    setPick(pickOf(near, [kept, (k) => there(k) && tagsOf(k) === tagsOf(wanted), there]));
   };
   const toTags = (t) => {
     const tagged = (k) => tagsOf(k) === t;

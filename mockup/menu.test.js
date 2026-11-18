@@ -280,7 +280,7 @@ test("applyEvent folds each reviewer's viewed and unviewed into their own marks,
   assert.equal(by("dante", { type: "reply", thread: "t", body: "x" }), false);
 });
 
-test("a pick is sticky: a still without that variant shows the same viewport, else its first", () => {
+test("a pick is sticky: a still without that variant shows its first of the class, else its first", () => {
   const stills = [
     variantStill("a", ["desktop", "mobile+light", "mobile+dark"]),
     variantStill("b", ["mobile+light", "custom-360x740@2-touch"]),

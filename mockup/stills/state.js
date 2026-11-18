@@ -115,8 +115,8 @@ export function viewportLabel(viewport) {
  */
 export function classOf(key) {
   const viewport = viewportOf(key);
-  const width = Number(/^custom-(\d+)x/.exec(viewport)?.[1]);
   if (Object.hasOwn(PRESET_CLASS, viewport)) return PRESET_CLASS[viewport];
+  const width = Number(/^custom-(\d+)x/.exec(viewport)?.[1]);
   if (width < TABLET_FROM) return "mobile";
   return width < DESKTOP_FROM ? "tablet" : "desktop";
 }
