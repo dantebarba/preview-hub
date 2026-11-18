@@ -24,6 +24,14 @@
  *                                      drawn as a `data:image/png;base64,` URL of at most 8 MiB,
  *                                      kept as `review/annotated/<id>.png`
  *
+ * The review routes take the scratch dir or, for any folder of images, the handle `folder(dir)`
+ * of `source.mjs` returns. A folder adds to them (see `extras.mjs`): `groups`, `notes`,
+ * `writable` and `about` in the answer of `/_review/stills`, a `stills` event on the stream when
+ * its images or extras change, and
+ *
+ *   GET  /_review/about                { file, html }: the folder's README as sanitized HTML
+ *   GET  /_review/file/<path>          an image of the folder, for the About page
+ *
  * Who writes is the server's to say, never the page's (see `reviewer`): a tailnet user is named
  * by the headers `tailscale serve` adds, anyone else is a guest, who gives a name with each
  * write and may not resolve or reopen a remark.
@@ -35,6 +43,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { aboutPage, sourceExtras, sourceFile, watchSource } from "./extras.mjs";
 import {
   appendEvent,
   EVENTS_FILE,
@@ -218,7 +227,9 @@ function plain(value) {
  * without a revision are left out, as are variants without one. `marks` are the marked
  * revisions of every reviewer, `{ reviewer: { still: { key: rev } } }`, and `working` what the
  * agent is working on (see `working` of the store). `cursor` is the log's last `seq`, read
- * before the rest, so following the events from it misses none.
+ * before the rest, so following the events from it misses none. A folder source, `scratch` as
+ * the handle `folder(dir)` returns, adds `groups`, `notes`, `writable` and `about` (see
+ * `sourceExtras`).
  */
 export function reviewStills(scratch, by = null) {
   const { cursor } = readEvents(scratch);
@@ -232,7 +243,7 @@ export function reviewStills(scratch, by = null) {
     const marked = mine[s.name].variants;
     list.push({ ...s, variants, revs: variants[0].revs, mark: { ...marked[variants[0].key], variants: marked } });
   }
-  return { stills: list, marks: plain(marks), working: working(scratch), cursor };
+  return { stills: list, marks: plain(marks), working: working(scratch), cursor, ...sourceExtras(scratch) };
 }
 
 /**
@@ -395,12 +406,16 @@ function readBody(req, limit) {
  * cursor, and is safe to call at any time; while a client is connected the log's size is also
  * checked every second, for a write no watcher reported, and a read that failed is tried again.
  * `open(res, since)` adds a response, until it closes; `notify(name)` sends a named event
- * without data, and `close()` ends every response.
+ * without data, and `close()` ends every response. A folder source, `scratch` as the handle
+ * `folder(dir)` returns, is watched as well while a client is connected, and a change to it
+ * sends `stills` (see `watchSource`).
  */
 export function eventStream(scratch) {
-  const file = path.join(scratch, EVENTS_FILE);
+  const folder = typeof scratch === "string" ? null : scratch;
+  const file = folder ? folder.paths.events : path.join(scratch, EVENTS_FILE);
   const clients = new Set();
   let timer = null;
+  let unwatch = null;
   let size = -1;
   let ticks = 0;
 
@@ -437,13 +452,16 @@ export function eventStream(scratch) {
   const stop = () => {
     clearInterval(timer);
     timer = null;
+    unwatch?.();
+    unwatch = null;
+  };
+  const notify = (name) => {
+    for (const client of clients) client.res.write(`event: ${name}\ndata: {}\n\n`);
   };
 
   return {
     push,
-    notify(name) {
-      for (const client of clients) client.res.write(`event: ${name}\ndata: {}\n\n`);
-    },
+    notify,
     open(res, since) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "X-Accel-Buffering": "no" });
       res.write("retry: 2000\n\n");
@@ -452,6 +470,7 @@ export function eventStream(scratch) {
       if (!timer) {
         timer = setInterval(tick, POLL_MS);
         timer.unref();
+        if (folder) unwatch = watchSource(folder.dir, () => notify("stills"));
       }
       res.on("close", () => {
         clients.delete(client);
@@ -578,10 +597,39 @@ async function postEvent(req, res, { scratch, stream, who }) {
 }
 
 /**
- * Answer a request under `/_review/`, sent by `who` (see `reviewer`); false when the URL is not
- * one, so the caller goes on.
+ * Answer a GET of `/_review/about` or `/_review/file/<path>`, `name` being what follows
+ * `/_review/`: the README of the folder source `scratch` as `{ file, html }`, or one of its
+ * images. 404 when the folder has none, or for a plain scratch dir.
  */
-async function handleReview(req, res, { scratch, stream, who }) {
+function sendSource(req, res, scratch, name) {
+  if (req.method !== "GET" && req.method !== "HEAD") return methodNotAllowed(res, "GET, HEAD");
+  const dir = typeof scratch === "string" ? null : scratch.dir;
+  if (name === "about") {
+    const page = dir && aboutPage(dir);
+    return page ? sendJson(res, 200, page) : sendJson(res, 404, { error: "no README here" });
+  }
+  let rel = "";
+  try {
+    rel = decodeURIComponent(name.slice("file/".length));
+  } catch {
+    rel = "";
+  }
+  const found = dir && sourceFile(dir, rel);
+  if (!found) return sendJson(res, 404, { error: "no such image" });
+  const body = readFileSync(found.file);
+  res.writeHead(200, {
+    "Content-Type": found.type,
+    "Content-Length": body.length,
+    "X-Content-Type-Options": "nosniff",
+  });
+  return res.end(req.method === "HEAD" ? undefined : body);
+}
+
+/**
+ * Answer a request under `/_review/`, sent by `who` (see `reviewer`); false when the URL is not
+ * one, so the caller goes on. `scratch` is the scratch dir, or the handle of a folder source.
+ */
+export async function handleReview(req, res, { scratch, stream, who }) {
   if (!req.url.startsWith("/_review/")) return false;
   const { pathname, searchParams } = new URL(req.url, "http://mockup");
   const name = pathname.slice("/_review/".length);
@@ -596,6 +644,8 @@ async function handleReview(req, res, { scratch, stream, who }) {
     } catch (e) {
       sendJson(res, 500, { error: e.message });
     }
+  } else if (name === "about" || name.startsWith("file/")) {
+    sendSource(req, res, scratch, name);
   } else if (name === "events" && req.method === "GET") {
     const since = req.headers["last-event-id"] ?? searchParams.get("since") ?? "0";
     if (SINCE.test(since)) stream.open(res, Number(since));
