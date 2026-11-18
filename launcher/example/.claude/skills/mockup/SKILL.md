@@ -23,7 +23,8 @@ With nothing to draw from, ask what to mock up; never guess.
 
 ## 2. Init
 
-`<skill>/scripts/mockup.sh init` creates `.mockup/` (`pages/`, `shots/`, `manifest.json`).
+`<skill>/scripts/mockup.sh init` creates `.mockup/` (`pages/`, `shots/`, `stills/`, `review/`,
+`manifest.json`).
 
 ## 3. Write pages
 
@@ -67,18 +68,27 @@ in the page's error overlay and in `docker logs mk-mockup-<branch>-web-1`.
 
 ## 5. Stills
 
-`<skill>/scripts/mockup.sh shot "/checkout?v=b&sheet=1" b-sheet [390x844]` saves the live page
-to `.mockup/shots/b-sheet.png`, listed on the menu. Read one to check nothing is clipped.
+`<skill>/scripts/mockup.sh shot "/checkout?v=b&sheet=1" b-sheet [390x844] ["B, sheet open"]`
+adds the live page as a still; the same name again makes its next revision. Read the PNG it
+names to check nothing is clipped. The viewer is `/stills`; never write a stills page.
 
-## 6. Stop and report
+## 6. Report, listen, answer
 
-Report the root URL only, one line per variant on what to try, that it is on the hub under
-"<project> mockup", and that it stops in 6h or on `/mockup stop`. Never ask the reviewer to
-type a path. Then ask which option to build, if that was the question.
+Report the root URL, one line per variant on what to try, the stills at `<url>/stills` (the
+card's **Review**), that it is on the hub under "<project> mockup" and stops in 6h or on
+`/mockup stop`. Never ask the reviewer to type a path. Then ask which option to build, if
+that was the question.
+
+With stills out, start `preview review watch` under Monitor before reporting, so no remark is
+missed: each remark marked on a still arrives as a line `#<seq> thread <id> <still> r<n>
+<box|pin|whole> <who>: "<text>"`, replies and reopens alike (skip `viewed`/`unviewed`). For each: `preview review show <id>` and Read its `marked` PNG (else
+`image`); fix the page; re-shoot that still under the same name, so the viewer flags it
+"changed since reviewed"; `preview review reply <id> "<what changed>"`. Resolving is the
+reviewer's. After a restart, resume with `watch --since <last seq>`.
 
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
-`.mockup/` (`KEEP=1` keeps it); `git status` then shows nothing from the mockup. Do not stop
-while the reviewer may still be looking.
+`.mockup/`, remarks included (`KEEP=1` keeps it); `git status` then shows nothing from the
+mockup. Do not stop while the reviewer may still be looking.
 
 ## 7. What the runtime cannot compile
 
