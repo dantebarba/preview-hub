@@ -123,6 +123,8 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 .seg button { padding: 2px 10px; font-size: 12px; }
 #tags button, .as { border-radius: 999px; }
 #fallback { color: #fcd34d; }
+#size { color: #888; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#sizes select { padding: 2px 6px; font-size: 12px; }
 .as { padding: 2px 10px; border-color: transparent; background: none; color: #999; font-size: 12px; white-space: nowrap; }
 .guest .status, .guest #talk-status { display: none; }
 .working { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #7dd3fc; font-size: 12px; }
@@ -254,6 +256,7 @@ header .working { margin: 0; white-space: nowrap; }
 .mobile #variant.fell { border-color: #b45309; color: #fcd34d; }
 .mobile header .what { display: none; }
 .mobile #bar .seg { flex-wrap: wrap; gap: 6px; padding: 6px 4px; }
+.mobile #bar #size { min-height: 32px; color: #999; font-size: 13px; }
 .mobile #bar .seg button { min-height: 44px; padding: 0 14px; font-size: 14px; }
 .mobile .as { min-height: 44px; }
 .mobile #who { place-items: end stretch; padding-bottom: var(--keyboard, 0px); }
