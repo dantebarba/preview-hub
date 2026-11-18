@@ -383,23 +383,26 @@ The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag
 `mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
 `--full-page` records that the whole document was captured. The viewer shows a viewport
 switcher and a row of tag chips only when the stills have more than one of either; the choice
-sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`). Revisions,
-remarks and reviewed marks are per variant.
+sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`); a still
+without the chosen variant shows the same viewport, else its first variant, with a note such
+as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the reviewed
+count is the viewer's own.
 
 **Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
 passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views
 freely; their first write (a remark, a reply, a reviewed mark) asks "What's your name?" once
 per browser, and the server refuses a guest's write with no name (`400 name required`).
-Guest events carry `via: "share"` and read as `Ana (guest)`, so a guest calling themselves
-"dante" is still told apart. Guests remark, reply and mark their own reviewed; **resolve and
-reopen are the owner's and the agent's**, refused to a guest with `403`. Each reviewer has
+Guest events carry `via: "share"`: the viewer shows a `guest` chip (*Ana · guest*) and
+`watch` prints `Ana (guest)`, so a guest calling themselves "dante" is still told apart.
+Guests remark, reply and mark their own reviewed; **resolve and reopen are the owner's and the
+agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each reviewer has
 their own reviewed marks, so a guest's marks hide nothing from the owner; without `--as`,
 `stills ls` says whose marks hold.
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
-"working…" dots on that conversation and its card (on a still's top bar for one with no
-remark), with the note. The agent's `reply` on the thread ends it (a reviewer's does not), as
+"working…" dots and the note on that conversation and its card, and pulses its mark (for a
+still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread ends it (a reviewer's does not), as
 does `preview review idle [thread]`; it expires 10 minutes after the last `working`, so an
 agent that died does not look busy.
 

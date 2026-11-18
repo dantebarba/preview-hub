@@ -88,14 +88,15 @@ that was the question.
 
 With stills out, start `preview review watch` under Monitor before reporting, so no remark is
 missed. Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05-invite
-[mobile+dark] r1 box ... Ana (guest): "..."`); skip the rest. For each: `preview review
-working <id> --note "<what>"` first, so the reviewer sees you on it; `preview review show
-<id>` and Read its `marked` PNG (else `image`); fix the page; re-shoot that still, same name,
-same variant (`mobile+dark` is `--viewport mobile --tag dark`, `custom-390x700` is `--viewport
-390x700`; path, viewport, `fullPage` and tags are in `preview stills ls --json`), so the
-viewer flags it "changed since reviewed"; `preview review reply <id> "Ana, <what changed>"`,
-by the reviewer's name, which ends working (`preview review idle` if you stop without
-replying). Resolving is the human's. After a restart, `watch --since <last seq>`.
+[mobile+dark] r1 box ... Ana (guest): "..."`); skip the rest. Resolving is the human's.
+
+For each: `preview review working <id> --note "<what>"` first, so the reviewer sees you on it;
+`preview review show <id>` and Read its `marked` PNG (else `image`); fix the page; re-shoot
+that still, same name, same variant (`mobile+dark` is `--viewport mobile --tag dark`,
+`custom-390x700` is `--viewport 390x700`; `source.path`, `viewport.fullPage` and `tags` are in
+`preview stills ls --json`), so the viewer flags it "changed since reviewed"; then `preview
+review reply <id> "Ana, <what changed>"` by the reviewer's name, which ends working
+(`preview review idle` if you stop without replying). After a restart, `watch --since <seq>`.
 
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
 `.mockup/`, remarks included (`KEEP=1` keeps it); `git status` then shows nothing from the

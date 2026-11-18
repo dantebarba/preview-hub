@@ -218,22 +218,14 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   fingers (marks land on the zoomed still), the other controls behind **⋯**, the strip a
   grid behind the count, a card opening its conversation full screen, and a swipe on a card
   uncovering Resolve/Reopen (left, with a five-second Undo) or Reply (right).
-  A still shot as several **variants** (viewport and tags, see the README's
-  [Reviewing stills](../README.md#reviewing-stills)) gets a viewport switcher and a row of tag
-  chips, each shown only when there is more than one choice; the choice sticks across stills
-  and stays in the URL (`/stills#<name>@mobile+dark`), and a still without it falls back to
-  the same viewport, else its first variant. Revisions, remarks, marks and the reviewed mark
-  are per variant, and the reviewed count is the viewer's own. While the agent reports
-  `working`, "working…" dots and its note show on that conversation and its card and the mark
-  pulses; the agent's reply, an `idle` or ten minutes clear them.
-  Every write is signed: over the tailnet as the user in the `Tailscale-User-Name` and
-  `Tailscale-User-Login` headers `tailscale serve` adds, `via: "tailnet"`, never asking. A
-  guest on a share link (no such headers) views without being asked; their first write
-  opens a "What's your name?" sheet (a bottom sheet on a phone, a small dialog on a desktop),
-  then finishes the write. Cancel keeps the draft; the name is kept per browser and "as Ana"
-  beside Post changes it. Guests remark, reply and mark their own reviewed, and their events
-  carry `via: "share"` and a `guest` chip. Resolve and reopen are the owner's and the agent's:
-  the viewer hides them from a guest.
+  Variants get a viewport switcher and tag chips, the agent's `working` shows as dots, and
+  every write names its reviewer, as the README's
+  [Reviewing stills](../README.md#reviewing-stills) describes. The runtime reads a tailnet
+  reviewer from the `Tailscale-User-Name` and `Tailscale-User-Login` headers `tailscale serve`
+  adds; a guest on a share link, with no such headers, names themselves in a "What's your
+  name?" sheet on their first write (a bottom sheet on a phone, a small dialog on a desktop),
+  after which the write goes through; Cancel keeps the draft, and "as Ana" beside Post
+  changes the name.
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
   `{stills: [{name, title, source, variants, revs, mark}], cursor}`, `revs` being the first
@@ -283,7 +275,7 @@ cover the change, `dark` and `light` only when both themes are touched. It then 
 `preview review watch` under a monitor and answers each remark: it reports
 `preview review working`, reads the thread and its marked PNG (`preview review show`), fixes
 the page, re-shoots the variant the remark was made on and replies by the reviewer's name
-(`preview review reply`); resolving is left to the humans. The viewer is `/stills`; a
+(`preview review reply`); resolving is left to the owner. The viewer is `/stills`; a
 mockup writes no stills page. `mockup.sh stop` runs `preview stop` and deletes the scratch
 directory, stills and remarks included; the pinned runtime image stays for the next mockup.
 
