@@ -193,6 +193,25 @@ image is rev 1, and a change replaces it.
 
 A folder that cannot be written reads fine with `writable: false`; writing its review fails.
 
+**In the viewer.** Served from a folder, the runtime adds what the source gives to the answer
+of `GET /_review/stills` (see [Reviewers](#reviewers)): `groups` and `notes` as above,
+`writable`, and `about`, `{file}` when there is a README and null when not. A mockup's own
+`.mockup/` adds none of them. The viewer heads the strip with the groups, shows the notes as
+one dismissible line and, with `writable: false`, disables Remark, Reply, Resolve and Reviewed
+under "read-only folder: remarks off". Two more routes serve the About page:
+
+| Route | Answers |
+| ----- | ------- |
+| `GET /_review/about` | `{file, html}`: the README rendered by the runtime, with markdown-it 14.1.0 vendored in the image, as sanitized HTML. Raw HTML shows as text, but `<img>` and `<br>`, read as their markdown; no script, and no `javascript:` or `data:` link. An `http(s)` or `mailto` link opens in a new tab; a relative image is served from the folder, and one that is a still links to it, `#<name>[@<key>]`; an image from elsewhere is a link, never loaded; any other relative link keeps its text and loses its target. 404 without a README. |
+| `GET /_review/file/<path>` | An image of the folder (`png`, `jpg`, `jpeg`, `webp`, `gif`), `<path>` from the folder. Nothing else: not a hidden entry, another kind of file, or a path that leaves the folder, by itself or through a link. |
+
+**Live.** While a viewer is connected the runtime looks at the folder four times a second, and
+once two looks agree on a change (an image rewritten, added or removed, the README or
+`stills.json` edited) it reads the folder, keeping a changed image as its next revision when
+`.review/` exists, and sends `stills` on the event stream; the viewer reads everything again.
+The current image of a folder is rewritten in place, so the viewer asks for it with `?t=<the
+revision's time>` and never shows a stale one.
+
 ## Events
 
 `review/events.jsonl` is an append-only log, one JSON object per line, each terminated by
