@@ -34,7 +34,7 @@ import {
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-export const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed"];
+const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed"];
 
 const FIELDS = {
   thread: ["still", "rev", "anchor", "body"],
@@ -70,6 +70,16 @@ function isObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+/** The sorted field names of `o`, comma-joined, to compare an object's shape. */
+function shape(o) {
+  return Object.keys(o).sort().join(",");
+}
+
+/** A fresh name next to `file` with the suffix `ext`, private to this writer. */
+function sideFile(file, ext) {
+  return `${file}.${process.pid}.${randomBytes(4).toString("hex")}.${ext}`;
+}
+
 /** True for a number in 0..1. */
 function isUnit(v) {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
@@ -91,7 +101,7 @@ function nameProblem(name) {
 /** Why `anchor` is not a valid pin `{x,y}` or region `{x,y,w,h}`, or null when it is. */
 function anchorProblem(anchor) {
   if (!isObject(anchor)) return "'anchor' must be an object";
-  const keys = Object.keys(anchor).sort().join(",");
+  const keys = shape(anchor);
   if (keys !== "x,y" && keys !== "h,w,x,y") return "'anchor' is {x,y} for a pin or {x,y,w,h} for a region";
   if (!isUnit(anchor.x) || !isUnit(anchor.y)) return "'anchor' x and y must be numbers in 0..1";
   if (keys === "x,y") return null;
@@ -120,7 +130,7 @@ function eventProblem(event, stored) {
     }
   }
   const { author } = event;
-  if (!isObject(author) || Object.keys(author).sort().join(",") !== "kind,name") {
+  if (!isObject(author) || shape(author) !== "kind,name") {
     return "'author' must be {kind, name}";
   }
   if (author.kind !== "human" && author.kind !== "agent") return "'author.kind' must be 'human' or 'agent'";
@@ -136,7 +146,9 @@ function eventProblem(event, stored) {
     return "'thread' must be the id of a thread event";
   }
   if (event.type === "thread" && event.still === null) {
-    if (event.rev !== undefined || event.anchor !== undefined) return "a general thread (still: null) has no 'rev' or 'anchor'";
+    if (event.rev !== undefined || event.anchor !== undefined) {
+      return "a general thread (still: null) has no 'rev' or 'anchor'";
+    }
     return null;
   }
   if (fields.includes("still")) {
@@ -159,7 +171,7 @@ function isStale(file) {
  * stale only one moves it; one that moved a lock taken afresh in between links it back.
  */
 function clearStale(file) {
-  const aside = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.stale`;
+  const aside = sideFile(file, "stale");
   try {
     if (!isStale(file)) return false;
     renameSync(file, aside);
@@ -239,9 +251,13 @@ export function stills(dir) {
 export async function addStill(dir, { file, name, title, source, size }) {
   const problem = nameProblem(name);
   if (problem) throw new Error(problem);
-  if (title !== undefined && (typeof title !== "string" || !title.trim())) throw new Error("'title' must be a non-empty string");
+  if (title !== undefined && (typeof title !== "string" || !title.trim())) {
+    throw new Error("'title' must be a non-empty string");
+  }
   if (source !== undefined && (typeof source !== "string" || !source)) throw new Error("'source' must be a page path");
-  if (size !== undefined && (typeof size !== "string" || !SIZE.test(size))) throw new Error("'size' must look like 390x844");
+  if (size !== undefined && (typeof size !== "string" || !SIZE.test(size))) {
+    throw new Error("'size' must look like 390x844");
+  }
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
@@ -256,10 +272,12 @@ export async function addStill(dir, { file, name, title, source, size }) {
     const manifest = stills(dir);
     let entry = manifest.find((s) => s && s.name === name);
     const folded = name.toLowerCase();
-    const clash = manifest.find((s) => typeof s?.name === "string" && s.name !== name && s.name.toLowerCase() === folded);
+    const clash = manifest.find(
+      (s) => typeof s?.name === "string" && s.name !== name && s.name.toLowerCase() === folded
+    );
     if (clash) throw new Error(`'${name}' differs from the still '${clash.name}' only in case`);
     if (!entry) {
-      entry = { name, title: title || name, source: { path: null, size: null }, revs: [] };
+      entry = { name, title: title || name };
       manifest.push(entry);
     }
     if (title !== undefined) entry.title = title;
@@ -272,7 +290,7 @@ export async function addStill(dir, { file, name, title, source, size }) {
     mkdirSync(path.join(dir, "stills", name), { recursive: true });
     copyFileSync(file, path.join(dir, rel));
     entry.revs.push({ n, file: rel, at: new Date().toISOString() });
-    const tmp = `${manifestFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    const tmp = sideFile(manifestFile, "tmp");
     try {
       writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
       renameSync(tmp, manifestFile);

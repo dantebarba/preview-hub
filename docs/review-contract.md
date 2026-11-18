@@ -82,11 +82,11 @@ the state of the review (open threads, reviewed stills) is a fold over the log.
 
 | Field         | Meaning |
 | ------------- | ------- |
-| `seq`         | Position in the log: an integer from 1, one more than the event before it. The cursor readers resume from (see [Cursor](#cursor)). |
+| `seq`         | Position in the log: an integer from 1, above the `seq` of every good event before it. The reference writer makes it one more than the last; a reader accepts any increase. The cursor readers resume from (see [Cursor](#cursor)). |
 | `id`          | The event's id, unique in the log: 8 lowercase hex characters from the reference writer; a reader accepts any 1 to 64 letters, digits, `_` and `-`. A `thread` event's id is the thread's id. |
 | `type`        | One of the types below. |
-| `at`          | When it was appended, ISO 8601 in UTC. |
-| `author`      | `{kind, name}`: `kind` is `"human"` (someone in the viewer) or `"agent"` (the agent answering, or any other program); `name` a non-empty string of at most 100 characters. |
+| `at`          | When it was appended: ISO 8601 date and time with a zone, `YYYY-MM-DDTHH:MM[:SS[.sss]]` then `Z` or `±HH:MM`. The reference writer always writes UTC (`Z`) with milliseconds. |
+| `author`      | `{kind, name}`: `kind` is `"human"` (someone in the viewer) or `"agent"` (the agent answering, or any other program); `name` a string of at most 100 characters, not empty or only whitespace. |
 
 An event carries exactly the fields of its type; any other field makes the line malformed.
 
@@ -123,7 +123,7 @@ An anchor belongs to the revision named in its thread; it is not moved onto late
 
 ## Cursor
 
-`seq` grows by one per appended event, starting at 1, and is never reused. A reader keeps
+`seq` grows with every appended event, starting at 1, and is never reused. A reader keeps
 the highest `seq` it has handled and, on its next read, handles only the events above it.
 Starting from 0 reads everything. Because the log is only ever appended to, a reader can also
 re-read the whole file and skip what it has seen; the reference reader does just that.
@@ -138,6 +138,10 @@ A reader must tolerate the log as it finds it:
 - **An `id` an earlier good line already has** is malformed.
 - **An event naming a thread the log does not open** is ignored by the folds below.
 - **Blank lines** are skipped silently.
+
+Whether a line is good depends on the good lines before it (its `seq` and `id`), so a reader
+that reads only the new part of the file must carry the last good `seq` and the ids it has
+seen from one read to the next. Re-reading the whole file needs no such state.
 
 A writer that died mid-line leaves a torn line; the next append starts with a `\n`, so the
 torn line becomes one malformed line and the next event is whole.

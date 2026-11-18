@@ -27,6 +27,7 @@ import { addStill, appendEvent, readEvents, reviewed, stills, threads } from "./
 const REVIEW = fileURLToPath(new URL("./review.mjs", import.meta.url));
 const HUMAN = { kind: "human", name: "dante" };
 const AGENT = { kind: "agent", name: "claude" };
+const REMARK = { type: "thread", author: HUMAN, still: "invite", rev: 1 };
 
 /** An empty scratch dir, removed when the test ends. */
 function scratch(t) {
@@ -51,10 +52,11 @@ async function withStill(t) {
 
 test("addStill bumps the revision and keeps every revision's file", async (t) => {
   const dir = scratch(t);
-  const first = await addStill(dir, { file: png(dir, "a"), name: "05-invite-user", source: "/invite", size: "390x844" });
-  assert.equal(first.title, "05-invite-user");
+  const name = "05-invite-user";
+  const first = await addStill(dir, { file: png(dir, "a"), name, source: "/invite", size: "390x844" });
+  assert.equal(first.title, name);
   assert.deepEqual(first.source, { path: "/invite", size: "390x844" });
-  const second = await addStill(dir, { file: png(dir, "b"), name: "05-invite-user", title: "Invite a user" });
+  const second = await addStill(dir, { file: png(dir, "b"), name, title: "Invite a user" });
   assert.deepEqual(
     second.revs.map((r) => [r.n, r.file]),
     [
@@ -86,7 +88,7 @@ test("addStill rejects bad names, sizes and files that are not PNGs", async (t) 
 
 test("appendEvent assigns seq, id and at, and readEvents resumes from a cursor", async (t) => {
   const dir = await withStill(t);
-  const a = await appendEvent(dir, { type: "thread", author: HUMAN, still: "invite", rev: 1, anchor: { x: 0.1, y: 0.2 }, body: "pin" });
+  const a = await appendEvent(dir, { ...REMARK, anchor: { x: 0.1, y: 0.2 }, body: "pin" });
   const b = await appendEvent(dir, { type: "reply", author: AGENT, thread: a.id, body: "on it" });
   assert.equal(a.seq, 1);
   assert.equal(b.seq, 2);
@@ -128,8 +130,8 @@ test("appendEvent rejects events that break the schema or name what does not exi
 test("threads folds anchors, replies and resolve/reopen into each thread", async (t) => {
   const dir = await withStill(t);
   const box = { x: 0.1, y: 0.2, w: 0.3, h: 0.4 };
-  const one = await appendEvent(dir, { type: "thread", author: HUMAN, still: "invite", rev: 1, anchor: box, body: "too tight" });
-  const two = await appendEvent(dir, { type: "thread", author: HUMAN, still: "invite", rev: 1, anchor: { x: 0.5, y: 0.5 }, body: "typo" });
+  const one = await appendEvent(dir, { ...REMARK, anchor: box, body: "too tight" });
+  const two = await appendEvent(dir, { ...REMARK, anchor: { x: 0.5, y: 0.5 }, body: "typo" });
   const reply = await appendEvent(dir, { type: "reply", author: AGENT, thread: one.id, body: "fixed in rev 2" });
   await appendEvent(dir, { type: "resolve", author: HUMAN, thread: one.id });
   await appendEvent(dir, { type: "resolve", author: HUMAN, thread: two.id });
@@ -215,7 +217,8 @@ test("appends from two processes at once get distinct, growing seqs and whole li
   const script = `
     const { appendEvent } = await import(${JSON.stringify(REVIEW)});
     for (let i = 0; i < 40; i++) {
-      await appendEvent(process.argv[1], { type: "viewed", author: { kind: "agent", name: process.argv[2] }, still: "invite", rev: 1 });
+      const author = { kind: "agent", name: process.argv[2] };
+      await appendEvent(process.argv[1], { type: "viewed", author, still: "invite", rev: 1 });
     }`;
   const run = promisify(execFile);
   await Promise.all(
