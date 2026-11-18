@@ -460,7 +460,7 @@ body[data-loading] .topbar::before {
 }
 
 .slot[data-open] > .card {
-  translate: calc(var(--action-w) * -1) 0;
+  translate: max(calc(var(--action-w) * -1), calc(var(--card-peek) - 100%)) 0;
 }
 
 .slot[data-dragging] > .card {
@@ -483,6 +483,7 @@ body[data-loading] .topbar::before {
   inset: 0;
   display: flex;
   justify-content: flex-end;
+  padding-left: var(--card-peek);
   border-radius: var(--r-card);
   overflow: hidden;
   background: var(--surface-3);
@@ -496,7 +497,8 @@ body[data-loading] .topbar::before {
 }
 
 .slot__action {
-  flex: 0 0 var(--action-each);
+  flex: 0 1 var(--action-each);
+  min-width: 0;
   padding: 0 0.4rem;
   border: 0;
   color: #fff;
@@ -537,6 +539,10 @@ a.slot__action {
 .slot__action:focus-visible {
   outline: 2px solid #fff;
   outline-offset: -4px;
+}
+
+.slot__action[aria-disabled="true"] {
+  pointer-events: none;
 }
 
 .slot__action:disabled,

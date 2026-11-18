@@ -39,6 +39,7 @@ const DEFAULT_POLL_MS = 10000;
 const MIN_POLL_MS = 1000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ACTION_WIDTH = 84;
+const CARD_PEEK = 48;
 const SWIPE_SLOP = 8;
 
 const appEl = document.getElementById("app");
@@ -517,7 +518,7 @@ function attachGestures(slot, card, id, width) {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      base: openId === id ? -width : 0,
+      base: openId === id ? -Math.min(width, slot.clientWidth - CARD_PEEK) : 0,
       dx: 0,
       swiping: false,
     };
@@ -569,6 +570,7 @@ function createSlot(preview) {
   slot.dataset.id = id;
   slot.style.setProperty("--action-w", `${width}px`);
   slot.style.setProperty("--action-each", `${ACTION_WIDTH}px`);
+  slot.style.setProperty("--card-peek", `${CARD_PEEK}px`);
 
   const branch = str(source.branch) || "unknown";
   const handlers = {

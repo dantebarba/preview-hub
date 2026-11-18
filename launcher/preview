@@ -168,6 +168,15 @@ load_config() {
   fi
 }
 
+## Succeed when $1 is a review path the hub accepts: one leading '/', then printable ASCII with
+## no space and no backslash.
+review_path_ok() {
+  local LC_ALL=C
+  case "$1" in
+    *[![:graph:]]*|*\\*|//*|[!/]*) return 1 ;;
+  esac
+}
+
 ## Validate required config, apply defaults, and derive the compose project and state paths.
 finalize_config() {
   : "${PREVIEW_PROJECT:?PREVIEW_PROJECT must be set in .preview/config.sh}"
@@ -175,10 +184,10 @@ finalize_config() {
   : "${PREVIEW_SERVE_TARGET:?PREVIEW_SERVE_TARGET must be set in .preview/config.sh}"
   PREVIEW_DESC="${PREVIEW_DESC:-}"
   PREVIEW_REVIEW="${PREVIEW_REVIEW:-}"
-  case "$PREVIEW_REVIEW" in
-    ''|/[!/]*|/) ;;
-    *) pwarn "PREVIEW_REVIEW must be a path starting with one '/', ignoring '$PREVIEW_REVIEW'"; PREVIEW_REVIEW="" ;;
-  esac
+  if [ -n "$PREVIEW_REVIEW" ] && ! review_path_ok "$PREVIEW_REVIEW"; then
+    pwarn "PREVIEW_REVIEW must be a path starting with one '/', printable ASCII with no space or backslash, ignoring '$PREVIEW_REVIEW'"
+    PREVIEW_REVIEW=""
+  fi
   PREVIEW_COMPOSE_FILE="${PREVIEW_COMPOSE_FILE:-docker-compose.yml}"
   case "$PREVIEW_COMPOSE_FILE" in
     /*) ;;
