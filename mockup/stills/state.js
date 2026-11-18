@@ -53,9 +53,13 @@ export const READ_ONLY = "read-only folder: remarks off";
 /** How long the agent's working state lasts after its last `working` event. */
 export const WORKING_MS = 10 * 60 * 1000;
 
-const PRESETS = { mobile: "Mobile", "mobile-s": "Mobile S", tablet: "Tablet", desktop: "Desktop" };
+const PRESETS = {
+  mobile: { label: "Mobile", device: "mobile" },
+  "mobile-s": { label: "Mobile S", device: "mobile" },
+  tablet: { label: "Tablet", device: "tablet" },
+  desktop: { label: "Desktop", device: "desktop" },
+};
 const CLASSES = { mobile: "Mobile", tablet: "Tablet", desktop: "Desktop" };
-const PRESET_CLASS = { mobile: "mobile", "mobile-s": "mobile", tablet: "tablet", desktop: "desktop" };
 const TABLET_FROM = 600;
 const DESKTOP_FROM = 1100;
 
@@ -105,7 +109,8 @@ export function keyOf(viewport, tags) {
 
 /** What a switcher calls the viewport part `viewport`: a preset's name, or a custom one's size. */
 export function viewportLabel(viewport) {
-  return own(PRESETS, viewport) ?? viewport.replace(/^custom-/, "").replace("x", "×").replace("-touch", " touch");
+  const custom = () => viewport.replace(/^custom-/, "").replace("x", "×").replace("-touch", " touch");
+  return own(PRESETS, viewport)?.label ?? custom();
 }
 
 /**
@@ -115,7 +120,8 @@ export function viewportLabel(viewport) {
  */
 export function classOf(key) {
   const viewport = viewportOf(key);
-  if (Object.hasOwn(PRESET_CLASS, viewport)) return PRESET_CLASS[viewport];
+  const preset = own(PRESETS, viewport);
+  if (preset) return preset.device;
   const width = Number(/^custom-(\d+)x/.exec(viewport)?.[1]);
   if (width < TABLET_FROM) return "mobile";
   return width < DESKTOP_FROM ? "tablet" : "desktop";
@@ -366,6 +372,14 @@ export function sectionStart(stills, part, all) {
 export function notesLine(notes) {
   if (!notes?.length) return "";
   return notes.length > 1 ? `${notes[0]} · and ${notes.length - 1} more` : notes[0];
+}
+
+/**
+ * The stills of `stills` a count is of once `choose` gave them the pick `pick`: those whose
+ * variant is of the picked device class with the picked tags, and all of them with no pick.
+ */
+export function chosen(stills, pick) {
+  return pick ? stills.filter((s) => sameChoice(s.variant.key, pick)) : stills;
 }
 
 /** How many stills are reviewed, of how many: `{ reviewed, total }`. */

@@ -14,7 +14,8 @@
  * class and tags, and by size where the next still has it; a still without that class and tags
  * shows its first of the class, else its first, with a note. The hash, `#<name>@<key>`, names
  * the variant on screen. Revisions, remarks and the reviewed mark are the shown variant's, and
- * the count is of the marks of whoever is looking; the other reviewers' progress has a line.
+ * the count is of the marks of whoever is looking on the stills that have the picked class and
+ * tags; the other reviewers' progress has a line.
  * The desktop layout shows a still no wider than its viewport, so one shot at 3x is not three
  * times the size.
  *
@@ -75,6 +76,7 @@ import {
   chip,
   choices,
   choose,
+  chosen,
   classLabel,
   classOf,
   counts,
@@ -760,9 +762,8 @@ function renderSwitchers(s) {
     setPick(pickOf(near, [kept, (k) => there(k) && tagsOf(k) === tagsOf(wanted), there]));
   };
   const toTags = (t) => {
-    const tagged = (k) => tagsOf(k) === t;
-    const sized = (k) => k === keyOf(viewportOf(wanted), t);
-    setPick(pickOf(near, [sized, (k) => tagged(k) && classOf(k) === classOf(wanted), tagged]));
+    const sized = keyOf(viewportOf(wanted), t);
+    setPick(pickOf(near, [(k) => k === sized, (k) => sameChoice(k, sized), (k) => tagsOf(k) === t]));
   };
   fillSwitcher(el("viewports"), classes, classOf(key), classLabel, toClass);
   fillSwitcher(el("tags"), tags, tagsOf(key), tagsLabel, toTags);
@@ -848,8 +849,11 @@ function render() {
     el("hint").hidden = true;
     el("talk").hidden = true;
     el("reply").hidden = true;
-    const gone = ["variant", "busy", "viewports", "size", "sizes", "tags", "fallback", "others", "group", "revn"];
-    for (const id of [...gone, "groups"]) el(id).hidden = true;
+    const gone = [
+      ...["variant", "busy", "viewports", "size", "sizes", "tags"],
+      ...["fallback", "others", "group", "revn", "groups"],
+    ];
+    for (const id of gone) el(id).hidden = true;
     state.draft = null;
     return;
   }
@@ -884,10 +888,11 @@ function render() {
   el("group-pick").replaceChildren(...parts.map((p, i) => new Option(`${p.title} (${p.count})`, i, false, i === part)));
   document.title = `${s.title} · stills`;
   el("flag").hidden = !s.mark.changed;
-  const { reviewed, total } = counts(stills);
+  const counted = chosen(stills, state.pick);
+  const { reviewed, total } = counts(counted);
   el("count").textContent = `${reviewed} / ${total} reviewed`;
-  el("place").textContent = `${at + 1}/${total}`;
-  const others = progress(state.marks, stills, markedAs());
+  el("place").textContent = `${at + 1}/${stills.length}`;
+  const others = progress(state.marks, counted, markedAs());
   el("others").hidden = !others.length;
   el("others").textContent = others.map((p) => `${p.name} reviewed ${p.reviewed}/${total}`).join(" · ");
   const over = workingNow().find((w) => !w.thread && (!w.still || (w.still === s.name && (w.variant ?? key) === key)));

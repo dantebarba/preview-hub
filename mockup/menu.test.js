@@ -29,6 +29,7 @@ import {
   chip,
   choices,
   choose,
+  chosen,
   classLabel,
   classOf,
   counts,
@@ -359,13 +360,19 @@ test("a pick is sticky by class and tags, and by size where the next still has i
   ]);
   assert.deepEqual(shown("mobile"), ["mobile", "mobile", "mobile", "tablet", "tablet"]);
   assert.deepEqual(shown("mobile-s"), ["mobile", "mobile", "mobile-s", "tablet", "tablet"]);
-  choose(stills, "custom-1440x1250", {}, "dante");
-  assert.deepEqual(counts(stills), { reviewed: 0, total: 5 });
-  const marks = { dante: { b: { "custom-1440x1000": 1, mobile: 1 }, c: { mobile: 1 } } };
-  choose(stills, "custom-1440x1250", marks, "dante");
-  assert.deepEqual(counts(stills), { reviewed: 1, total: 5 });
-  choose(stills, "mobile", marks, "dante");
-  assert.deepEqual(counts(stills), { reviewed: 2, total: 5 });
+  const counted = (pick, marks) => {
+    choose(stills, pick, marks, "dante");
+    return counts(chosen(stills, pick));
+  };
+  assert.deepEqual(counted("custom-1440x1250", {}), { reviewed: 0, total: 3 });
+  const marks = { dante: { b: { "custom-1440x1000": 1, mobile: 1 }, c: { mobile: 1 }, e: { tablet: 1 } } };
+  assert.deepEqual(counted("custom-1440x1250", marks), { reviewed: 1, total: 3 });
+  assert.deepEqual(counted("custom-1440x1250+dark", marks), { reviewed: 0, total: 3 });
+  assert.deepEqual(counted("mobile", marks), { reviewed: 2, total: 3 });
+  assert.deepEqual(counted(null, marks), { reviewed: 2, total: 5 });
+  assert.deepEqual(progress({ Ana: { e: { tablet: 1 } } }, chosen(stills, "tablet"), "dante"), [
+    { name: "Ana", reviewed: 1 },
+  ]);
 });
 
 test("a still's sizes are its variants of the shown class and tags, labelled by size", () => {

@@ -393,7 +393,7 @@ class and tags sticks across stills, with the exact size where the next still ha
 URL names the variant on screen (`/stills#05-invite-user@mobile+dark`); a still without the
 chosen class and tags shows its first variant of the class, else its first variant, with a
 note such as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the
-reviewed count is the viewer's own, for the chosen class and tags.
+reviewed count is the viewer's own, of the stills that have the chosen class and tags.
 
 **Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
 passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views
