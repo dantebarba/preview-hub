@@ -299,7 +299,8 @@ function readBody(req, limit) {
  * The live side of the review log of `scratch`: the open `GET /_review/events` responses, each
  * with the `seq` it has been sent up to. `push()` sends every client the events above its
  * cursor, and is safe to call at any time; while a client is connected the log's size is also
- * checked every second, for a write no watcher reported. `notify(name)` sends a named event
+ * checked every second, for a write no watcher reported, and a read that failed is tried again.
+ * `open(res, since)` adds a response, until it closes; `notify(name)` sends a named event
  * without data, and `close()` ends every response.
  */
 export function eventStream(scratch) {
@@ -323,6 +324,7 @@ export function eventStream(scratch) {
     try {
       events = readEvents(scratch, Math.min(...[...clients].map((c) => c.cursor))).events;
     } catch {
+      size = -1;
       return;
     }
     for (const client of clients) {
@@ -348,7 +350,7 @@ export function eventStream(scratch) {
     notify(name) {
       for (const client of clients) client.res.write(`event: ${name}\ndata: {}\n\n`);
     },
-    open(req, res, since) {
+    open(res, since) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "X-Accel-Buffering": "no" });
       res.write("retry: 2000\n\n");
       const client = { res, cursor: since };
@@ -357,7 +359,7 @@ export function eventStream(scratch) {
         timer = setInterval(tick, POLL_MS);
         timer.unref();
       }
-      req.on("close", () => {
+      res.on("close", () => {
         clients.delete(client);
         if (!clients.size) stop();
       });
@@ -420,8 +422,8 @@ async function postEvent(req, res, { scratch, stream }) {
 
 /** Answer a request under `/_review/`; false when the URL is not one, so the caller goes on. */
 async function handleReview(req, res, { scratch, stream }) {
+  if (!req.url.startsWith("/_review/")) return false;
   const { pathname, searchParams } = new URL(req.url, "http://mockup");
-  if (!pathname.startsWith("/_review/")) return false;
   const name = pathname.slice("/_review/".length);
   if (Object.hasOwn(VIEWER_ASSETS, name)) {
     sendViewerFile(req, res, VIEWER_ASSETS[name]);
@@ -435,7 +437,7 @@ async function handleReview(req, res, { scratch, stream }) {
     }
   } else if (name === "events" && req.method === "GET") {
     const since = req.headers["last-event-id"] ?? searchParams.get("since") ?? "0";
-    if (SINCE.test(since)) stream.open(req, res, Number(since));
+    if (SINCE.test(since)) stream.open(res, Number(since));
     else sendJson(res, 400, { error: "'since' must be the seq to resume after" });
   } else if (name === "events" && req.method === "POST") {
     await postEvent(req, res, { scratch, stream });

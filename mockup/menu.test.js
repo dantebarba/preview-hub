@@ -122,7 +122,12 @@ test("reviewStills lists each still with its revisions and reviewed mark, and th
 
 test("renderMenu links the viewer and lists the stills by their latest revision, not the shots", () => {
   const stills = [
-    { name: "a", title: "First <1>", revs: [{ n: 1, file: "stills/a/1.png" }, { n: 2, file: "stills/a/2.png" }], mark: markOf(2, 1) },
+    {
+      name: "a",
+      title: "First <1>",
+      revs: [{ n: 1, file: "stills/a/1.png" }, { n: 2, file: "stills/a/2.png" }],
+      mark: markOf(2, 1),
+    },
     { name: "b", title: "Second", revs: [{ n: 1, file: "stills/b/1.png" }], mark: markOf(1, 1) },
   ];
   const html = renderMenu({ manifest: { pages: [] }, error: null }, ["old.png"], { stills, error: null });
@@ -143,7 +148,8 @@ test("renderMenu reports an unreadable stills manifest and falls back to the sho
 
 /** `n` viewer stills named s1..sn at rev 1, those whose number is in `done` reviewed. */
 function viewerStills(n, done = []) {
-  return Array.from({ length: n }, (_, i) => ({ name: `s${i + 1}`, mark: markOf(1, done.includes(i + 1) ? 1 : null) }));
+  const mark = (i) => markOf(1, done.includes(i + 1) ? 1 : null);
+  return Array.from({ length: n }, (_, i) => ({ name: `s${i + 1}`, mark: mark(i) }));
 }
 
 test("stepping skips the reviewed stills: with 23 of 24 reviewed, every step lands on the one left", () => {

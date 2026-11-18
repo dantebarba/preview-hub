@@ -198,6 +198,10 @@ describe("the mockup server", () => {
     return addStill(path.join(app, ".mockup"), { file, name, title });
   };
 
+  test("a URL that does not parse is left to Vite, not answered 500", async () => {
+    assert.notEqual((await fetch(`${base}//`)).status, 500);
+  });
+
   test("serves the stills viewer at the reserved /stills, with its script and styles", async () => {
     const res = await fetch(`${base}/stills`);
     assert.equal(res.status, 200);
@@ -305,7 +309,8 @@ describe("the mockup server", () => {
   test("GET /_review/threads folds the log's threads", async () => {
     await shoot("remarked");
     const dir = path.join(app, ".mockup");
-    const thread = await appendEvent(dir, { type: "thread", author: HUMAN, still: "remarked", rev: 1, body: "Too wide" });
+    const remark = { type: "thread", author: HUMAN, still: "remarked", rev: 1, body: "Too wide" };
+    const thread = await appendEvent(dir, remark);
     const res = await fetch(`${base}/_review/threads`);
     assert.equal(res.status, 200);
     const found = (await res.json()).threads.find((t) => t.id === thread.id);

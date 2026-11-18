@@ -14,9 +14,18 @@ const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const NAME_KEY = "review.name";
 const SWIPE_PX = 60;
 
-const state = { stills: [], at: -1, rev: null, compare: false, all: stored(SHOW_REVIEWED_KEY) === "1", applied: 0 };
+const state = {
+  stills: [],
+  at: -1,
+  rev: null,
+  compare: false,
+  all: stored(SHOW_REVIEWED_KEY) === "1",
+  applied: 0,
+  late: [],
+};
 let thumbs = [];
 let source = null;
+let loads = 0;
 
 /** The element with the id `id`. */
 function el(id) {
@@ -46,9 +55,14 @@ function imageUrl(rev) {
   return `/${rev.file.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-/** The still named in the hash, as an index, or -1. */
+/** The still named in the hash, as an index, or -1 when it names none or is not valid encoding. */
 function hashIndex() {
-  const name = decodeURIComponent(location.hash.slice(1));
+  let name;
+  try {
+    name = decodeURIComponent(location.hash.slice(1));
+  } catch {
+    return -1;
+  }
   return state.stills.findIndex((s) => s.name === name);
 }
 
@@ -106,13 +120,15 @@ function render() {
   el("count").textContent = `${reviewed} / ${total} reviewed`;
   el("viewed").checked = s.mark.reviewed;
   el("viewed").disabled = state.rev !== latest;
-  el("mark").title = state.rev === latest ? "Mark this still reviewed (v)" : `The mark is for rev ${latest}, the latest`;
+  const own = state.rev === latest;
+  el("mark").title = own ? "Mark this still reviewed (v)" : `The mark is for rev ${latest}, the latest`;
   el("revs").hidden = s.revs.length < 2;
   el("compare").hidden = s.revs.length < 2;
   el("rev").replaceChildren(...s.revs.map((r) => new Option(`${r.n} of ${latest}`, r.n, false, r.n === state.rev)));
   el("compare").disabled = index === 0;
   el("compare").setAttribute("aria-pressed", String(before));
-  el("shown").textContent = before ? `showing rev ${shown.n}, before` : s.revs.length > 1 ? `showing rev ${shown.n}` : "";
+  const which = s.revs.length > 1 ? `showing rev ${shown.n}` : "";
+  el("shown").textContent = before ? `${which}, before` : which;
   el("all").checked = state.all;
   el("open").href = url;
   thumbs.forEach((t, i) => {
@@ -146,23 +162,29 @@ function move(delta) {
 /**
  * Fetch the stills and their marks and draw them, keeping the still on screen when it is still
  * there, else the one in the hash, else the first one left to review. A still shown on its
- * latest revision follows a new one; an older revision picked by hand stays.
+ * latest revision follows a new one; an older revision picked by hand stays. Of two loads under
+ * way only the last one started is drawn, and the mark events that arrived over the stream
+ * after the answer was read from the log are folded into it again.
  */
 async function load() {
+  const turn = ++loads;
   let data;
   try {
     const res = await fetch("/_review/stills", { cache: "no-store" });
     data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   } catch (e) {
-    report(`Could not read the stills: ${e.message}`);
+    if (turn === loads) report(`Could not read the stills: ${e.message}`);
     return;
   }
+  if (turn !== loads) return;
   report("");
   const was = state.stills[state.at];
   const current = was?.name;
   const rev = was && state.rev === was.revs.at(-1).n ? null : state.rev;
   state.stills = data.stills;
+  state.late = state.late.filter((e) => e.seq > data.cursor);
+  for (const e of state.late) applyEvent(state.stills, e);
   state.applied = Math.max(state.applied, data.cursor);
   buildStrip();
   let at = state.stills.findIndex((s) => s.name === current);
@@ -187,6 +209,7 @@ function follow() {
     const event = JSON.parse(message.data);
     if (event.seq <= state.applied) return;
     state.applied = event.seq;
+    if (event.type === "viewed" || event.type === "unviewed") state.late.push(event);
     if (applyEvent(state.stills, event)) render();
   };
   source.addEventListener("stills", load);
