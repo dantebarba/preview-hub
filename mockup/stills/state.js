@@ -18,6 +18,10 @@
  * the room's width and height in pixels and the still's height over its width. And for the
  * conversation cards: a card's title, latest message, status chip, unread replies and the crop
  * of the still around its mark.
+ *
+ * A folder source may group its stills: `sections` gives every still its `group` and lists the
+ * groups as runs of the stills, which the strip heads and the group picker jumps between. Its
+ * notes, what an optional file of the folder got wrong, read as one line with `notesLine`.
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -249,6 +253,48 @@ export function edge(stills, at, last, all) {
   if (last) order.reverse();
   const i = order.find((j) => stop(stills, j, all));
   return i === undefined ? at : i;
+}
+
+/** What the stills in no group are listed under, when others are in one. */
+export const NO_GROUP = "Other";
+
+/**
+ * Give every still of `stills` its `group`, the title of the group of `groups` (a source's
+ * `[{ title, stills: [name] }]`) that names it, `NO_GROUP` for one in the group titled null or
+ * in none, and null when there are no groups at all. Returns the sections, the runs of stills
+ * of one group in the order of `stills`: `[{ title, at, count }]`, `at` the index of the first.
+ */
+export function sections(stills, groups) {
+  const titles = new Map();
+  for (const g of groups ?? []) for (const name of g.stills) titles.set(name, g.title ?? NO_GROUP);
+  const out = [];
+  stills.forEach((s, i) => {
+    s.group = titles.size ? (titles.get(s.name) ?? NO_GROUP) : null;
+    if (s.group === null) return;
+    if (out.at(-1)?.title === s.group) out.at(-1).count += 1;
+    else out.push({ title: s.group, at: i, count: 1 });
+  });
+  return out;
+}
+
+/** The index in `parts`, the sections of the stills, of the one the still at `at` is in, or -1. */
+export function sectionAt(parts, at) {
+  return parts.findIndex((p) => at >= p.at && at < p.at + p.count);
+}
+
+/**
+ * The still to land on when the section `part` is picked: its first one to step onto, any still
+ * with `all` and else one not reviewed, or its first when every one of them is reviewed.
+ */
+export function sectionStart(stills, part, all) {
+  for (let i = part.at; i < part.at + part.count; i++) if (stop(stills, i, all)) return i;
+  return part.at;
+}
+
+/** The notes of a source as one line: the first, and how many more there are; empty without any. */
+export function notesLine(notes) {
+  if (!notes?.length) return "";
+  return notes.length > 1 ? `${notes[0]} · and ${notes.length - 1} more` : notes[0];
 }
 
 /** How many stills are reviewed, of how many: `{ reviewed, total }`. */
