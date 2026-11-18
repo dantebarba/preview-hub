@@ -106,7 +106,7 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 #reply { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
 #answer { flex: 1; min-width: 0; resize: none; max-height: 160px; }
 #place, #dock, #shade, #talk { display: none; }
-#toast { position: fixed; z-index: 9; left: 50%; translate: -50% 0; bottom: calc(72px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; background: #2a2a2e; border: 1px solid #555; border-radius: 999px; box-shadow: 0 8px 24px #000a; white-space: nowrap; }
+#toast { position: fixed; z-index: 9; left: 50%; translate: -50% 0; bottom: calc(72px + var(--keyboard, 0px) + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; background: #2a2a2e; border: 1px solid #555; border-radius: 999px; box-shadow: 0 8px 24px #000a; white-space: nowrap; }
 #undo { border-radius: 999px; min-height: 36px; color: #7dd3fc; }
 @media (max-width: 760px) {
   #panel { position: fixed; z-index: 4; left: 0; right: 0; bottom: var(--keyboard, 0px); width: auto; max-height: 60%; border: 0; border-top: 1px solid #555; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }

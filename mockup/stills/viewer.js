@@ -117,6 +117,9 @@ let seen = readSeen();
 let answerFor = null;
 let stick = false;
 let toastTimer = null;
+let compact = false;
+let leaving = false;
+let aim = null;
 
 /** The element with the id `id`. */
 function el(id) {
@@ -141,8 +144,13 @@ function store(key, value) {
   }
 }
 
-/** True when the mobile layout is the one to use: the one forced on this device, else by its screen. */
+/** True when the mobile layout is the one in use, as `applyLayout` last set it. */
 function mobile() {
+  return compact;
+}
+
+/** True when the mobile layout is the one to use: the one forced on this device, else by its screen. */
+function wantsMobile() {
   const forced = stored(LAYOUT_KEY);
   return forced ? forced === "mobile" : SMALL.matches;
 }
@@ -199,7 +207,7 @@ function buildStrip() {
     t.title = s.title;
     t.loading = "lazy";
     t.onclick = () => {
-      state.overview = false;
+      closeSheets();
       show(i);
     };
     strip.appendChild(t);
@@ -484,10 +492,11 @@ function renderRemarks() {
   if (done.length) {
     const group = node("details", "sunk");
     group.open = state.sunk || done.some(([t]) => t.id === state.thread);
-    group.append(node("summary", "", `Resolved (${done.length})`), ...done.map(([, card]) => card));
-    group.ontoggle = () => {
-      state.sunk = group.open;
+    const summary = node("summary", "", `Resolved (${done.length})`);
+    summary.onclick = () => {
+      state.sunk = !group.open;
     };
+    group.append(summary, ...done.map(([, card]) => card));
     el("threads").append(group);
   }
   placeReply(held);
@@ -613,8 +622,7 @@ function render() {
 function select(id) {
   state.thread = id;
   state.panel = true;
-  state.more = false;
-  state.overview = false;
+  closeSheets();
   render();
   el("threads").querySelector(`.slot[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
   const anchor = state.threads.find((t) => t.id === id)?.anchor;
@@ -654,16 +662,25 @@ function openTalk(id, typing = false) {
   if (typing) el("answer").focus();
 }
 
-/** Close the conversation open full screen, taking its step back out of the history. */
+/**
+ * Close the conversation open full screen, taking its step back out of the history; `leaving`
+ * tells the `popstate` of that step to put the hash of the still on screen back.
+ */
 function closeTalk() {
   if (!state.talk) return;
   state.talk = null;
   el("answer").blur();
-  if (history.state?.talk) history.back();
+  if (history.state?.talk) {
+    leaving = true;
+    history.back();
+  }
   render();
 }
 
-/** Leave the conversation for the still, zoomed in on the mark of its thread, on the revision it was made on. */
+/**
+ * Leave the conversation for the still, zoomed in on the mark of its thread, on the revision it
+ * was made on; a revision whose image is still loading is zoomed once it has its shape.
+ */
 function jump() {
   const t = talking();
   if (!t?.anchor) return;
@@ -672,7 +689,16 @@ function jump() {
   state.rev = t.rev;
   state.compare = false;
   render();
-  view = viewOn(t.anchor, box());
+  const still = el("still");
+  if (still.complete && still.naturalWidth) view = viewOn(t.anchor, box());
+  else aim = t.anchor;
+  layoutStage();
+}
+
+/** Lay the still out once its image has loaded, on the mark `jump` was waiting to show when there is one. */
+function settleStill() {
+  if (aim) view = viewOn(aim, box());
+  aim = null;
   layoutStage();
 }
 
@@ -728,6 +754,7 @@ function show(i) {
   state.replying = null;
   state.swiped = null;
   view = FIT;
+  aim = null;
   closeTalk();
   render();
   room.scrollTo(0, 0);
@@ -972,9 +999,14 @@ function toggleSheet(name) {
   if (state.overview) thumbs[state.at]?.scrollIntoView({ block: "center" });
 }
 
-/** Use the mobile or the desktop layout, as `mobile()` says, starting from a fitted still with no sheet open. */
+/**
+ * Use the mobile or the desktop layout, as `wantsMobile()` says, starting from a fitted still
+ * with no sheet and no conversation open.
+ */
 function applyLayout() {
-  const small = mobile();
+  closeTalk();
+  compact = wantsMobile();
+  const small = compact;
   root.classList.toggle("mobile", small);
   el("layout").textContent = small ? "desktop layout" : "phone layout";
   closeSheets();
@@ -1106,7 +1138,7 @@ function moveTouch(e) {
   if (gesture.kind === "pinch") {
     if (fingers.size < 2) return;
     const { mid, wide } = span();
-    view = zoomed(gesture.view, gesture.mid, mid, wide / gesture.wide, box());
+    view = zoomed(gesture.view, gesture.mid, mid, gesture.wide ? wide / gesture.wide : 1, box());
     return layoutStage();
   }
   const dx = at.x - gesture.at.x;
@@ -1158,9 +1190,12 @@ function holdPage(e) {
   if (mobile() && e.cancelable && !e.target.closest("#composer")) e.preventDefault();
 }
 
-/** In the mobile layout a wheel pans the still, and with Ctrl, as a trackpad's pinch sends it, zooms it. */
+/**
+ * In the mobile layout a wheel on the still, not on the composer, pans it, and with Ctrl, as a
+ * trackpad's pinch sends it, zooms it.
+ */
 function wheel(e) {
-  if (!mobile()) return;
+  if (!mobile() || e.target.closest("#composer")) return;
   e.preventDefault();
   const at = local(e);
   const to = e.ctrlKey ? at : { x: at.x - e.deltaX, y: at.y - e.deltaY };
@@ -1235,7 +1270,7 @@ room.addEventListener("pointerup", endTouch);
 room.addEventListener("pointercancel", endTouch);
 room.addEventListener("wheel", wheel, { passive: false });
 room.addEventListener("touchmove", holdPage, { passive: false });
-el("still").addEventListener("load", layoutStage);
+el("still").addEventListener("load", settleStill);
 addEventListener("resize", layoutStage);
 SMALL.addEventListener("change", applyLayout);
 window.visualViewport?.addEventListener("resize", liftSheets);
@@ -1257,6 +1292,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape" && (state.more || state.overview)) return el("shade").click();
   if (e.key === "Escape" && state.replying) return answer(state.replying);
   if (e.key === "Escape" && state.panel) return togglePanel();
+  if (state.talk) return;
   if (e.ctrlKey || e.metaKey || e.altKey || /^(SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
   if (e.target.tagName === "INPUT" && e.target.type !== "checkbox") return;
   if (e.key === "ArrowRight") move(1);
@@ -1308,7 +1344,8 @@ onSwipe(
 );
 
 addEventListener("popstate", () => {
-  if (!state.talk) return;
+  if (!state.talk && !leaving) return;
+  leaving = false;
   state.talk = null;
   render();
 });
