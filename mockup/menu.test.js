@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -17,7 +17,6 @@ import {
   reviewStills,
   rewriteRefs,
   route,
-  storeAnnotated,
 } from "./menu.mjs";
 import { addStill, appendEvent, threads } from "./review.mjs";
 import { applyEvent, applyThread, counts, edge, markOf, moved, opposite, pin, region, step } from "./stills/state.js";
@@ -281,17 +280,6 @@ test("annotatedPng takes a PNG data URL only, of at most 8 MiB", () => {
   assert.equal(refused(42), 400);
   assert.equal(refused(url(Buffer.concat([PNG, Buffer.alloc(8 * 1024 * 1024 - PNG.length)]))), null);
   assert.equal(refused(url(Buffer.concat([PNG, Buffer.alloc(8 * 1024 * 1024)]))), 413);
-});
-
-test("storeAnnotated keeps a thread's PNG under its id, replacing it whole and leaving nothing beside it", (t) => {
-  const dir = scratch(t, {});
-  const file = storeAnnotated(dir, "3f9a0c1e", PNG);
-  assert.equal(file, path.join(dir, "review", "annotated", "3f9a0c1e.png"));
-  assert.deepEqual(readFileSync(file), PNG);
-  const again = Buffer.concat([PNG, Buffer.from("more")]);
-  storeAnnotated(dir, "3f9a0c1e", again);
-  assert.deepEqual(readFileSync(file), again);
-  assert.deepEqual(readdirSync(path.dirname(file)), ["3f9a0c1e.png"]);
 });
 
 test("rewriteRefs resolves ./ references of a nested page against its own directory", (t) => {

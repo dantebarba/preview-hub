@@ -23,7 +23,8 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, annotatedFile, appendEvent, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { addStill, annotatedFile, appendEvent, EVENTS_FILE, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { markOf } from "./stills/state.js";
 
 const POLL_MS = 200;
 
@@ -130,7 +131,7 @@ function stillsLs({ dir, io }, _args, { json }) {
   const marks = reviewed(dir);
   const open = threads(dir).filter((t) => t.status === "open");
   const rows = stills(dir).map((s) => {
-    const mark = marks[s.name] ?? { rev: 0, viewed: null, reviewed: false, changed: false };
+    const mark = marks[s.name] ?? markOf(0, null);
     const rev = s.revs.find((r) => r.n === mark.rev);
     return {
       name: s.name,
@@ -213,7 +214,7 @@ function dirGone(dir) {
 /** The size and mtime of the log, to skip a re-read when it has not changed. */
 function logStamp(dir) {
   try {
-    const s = statSync(path.join(dir, "review", "events.jsonl"));
+    const s = statSync(path.join(dir, EVENTS_FILE));
     return `${s.size}:${s.mtimeMs}`;
   } catch {
     return "";

@@ -18,7 +18,7 @@
  */
 
 import { annotate } from "./annotate.js";
-import { applyEvent, applyThread, counts, edge, moved, opposite, pin, region, step } from "./state.js";
+import { applyEvent, applyThread, counts, edge, fileUrl, moved, opposite, pin, region, step } from "./state.js";
 
 const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const NAME_KEY = "review.name";
@@ -73,9 +73,9 @@ function store(key, value) {
   }
 }
 
-/** The URL of a revision's image, from its path relative to the scratch dir. */
+/** The URL of a revision's image. */
 function imageUrl(rev) {
-  return `/${rev.file.split("/").map(encodeURIComponent).join("/")}`;
+  return fileUrl(rev.file);
 }
 
 /** The still named in the hash, as an index, or -1 when it names none or is not valid encoding. */

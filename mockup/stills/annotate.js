@@ -4,17 +4,18 @@
  * `review/annotated/<id>.png`, so the agent reads one image.
  *
  * The image is drawn at its own size, scaled down to the 16 million pixels a phone's canvas
- * holds; a PNG longer than 10 million characters as a data URL, the runtime's 8 MiB with some
- * room, is drawn again at 70% of the scale, up to four times.
+ * holds; a PNG whose data URL would decode to more than the runtime's `MAX_ANNOTATED_BYTES` is
+ * drawn again at 70% of the scale, up to four times.
  */
 
+import { MAX_ANNOTATED_BYTES, PNG_URL } from "./state.js";
+
 const MAX_PIXELS = 16_000_000;
-const MAX_CHARS = 10_000_000;
+const MAX_CHARS = PNG_URL.length + Math.floor(MAX_ANNOTATED_BYTES / 3) * 4;
 const TRIES = 4;
 const SHRINK = 0.7;
 const INK = "#f43f5e";
 const HALO = "#ffffff";
-const PNG_URL = "data:image/png;base64,";
 
 /**
  * Draw `anchor` on the 2D context `c` of a canvas `width` by `height`: a region as a frame, a

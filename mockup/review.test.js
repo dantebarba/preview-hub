@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { addStill, appendEvent, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { addStill, appendEvent, readEvents, reviewed, stills, storeAnnotated, threads } from "./review.mjs";
 
 const REVIEW = fileURLToPath(new URL("./review.mjs", import.meta.url));
 const HUMAN = { kind: "human", name: "dante" };
@@ -233,4 +233,16 @@ test("appends from two processes at once get distinct, growing seqs and whole li
   assert.equal(events.filter((e) => e.author.name === "one").length, 40);
   assert.equal(new Set(events.map((e) => e.id)).size, 80);
   assert.equal(existsSync(path.join(dir, "review/.lock")), false);
+});
+
+test("storeAnnotated keeps a thread's PNG under its id, replacing it whole and leaving nothing beside it", (t) => {
+  const dir = scratch(t);
+  const first = readFileSync(png(dir, "a"));
+  const file = storeAnnotated(dir, "3f9a0c1e", first);
+  assert.equal(file, path.join(dir, "review", "annotated", "3f9a0c1e.png"));
+  assert.deepEqual(readFileSync(file), first);
+  const again = readFileSync(png(dir, "b"));
+  storeAnnotated(dir, "3f9a0c1e", again);
+  assert.deepEqual(readFileSync(file), again);
+  assert.deepEqual(readdirSync(path.dirname(file)), ["3f9a0c1e.png"]);
 });

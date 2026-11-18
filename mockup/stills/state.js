@@ -5,8 +5,21 @@
  * `mark` its reviewed mark `{ rev, viewed, reviewed, changed }` as `reviewed()` of the review
  * store folds it. The functions here keep those marks in step with the event log, decide
  * where ←/→, Home/End and a swipe land, shape the anchor of a remark being drawn (a pin or a
- * region, in coordinates normalized to the still) and fold the log's threads.
+ * region, in coordinates normalized to the still) and fold the log's threads. The runtime and
+ * the viewer share from here the URL of a file of the scratch dir and the limit of an annotated
+ * still's upload.
  */
+
+/** The prefix of the data URL an annotated still is posted as. */
+export const PNG_URL = "data:image/png;base64,";
+
+/** The most bytes an annotated still's PNG may hold. */
+export const MAX_ANNOTATED_BYTES = 8 * 1024 * 1024;
+
+/** The URL of a file of the scratch dir, from its path relative to it. */
+export function fileUrl(rel) {
+  return `/${String(rel).split("/").map(encodeURIComponent).join("/")}`;
+}
 
 /** The reviewed mark of a still whose latest revision is `rev` and whose marked one is `viewed`. */
 export function markOf(rev, viewed) {
