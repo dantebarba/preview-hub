@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { addStill, appendEvent } from "./review.mjs";
+import { fileUrl } from "./stills/state.js";
 import { allowedHosts, findPostcssConfig, scratchOwner, start, tailwindV4Sources, withPages } from "./server.mjs";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -218,19 +219,32 @@ describe("the mockup server", () => {
   });
 
   test("two shots of one name are rev 2: listed, served and linked from the menu", async () => {
-    await shoot("home", "Home");
-    await shoot("home");
-    const home = await still("home");
-    assert.equal(home.title, "Home");
-    assert.deepEqual(home.revs.map((r) => [r.n, r.file]), [[1, "stills/home/1.png"], [2, "stills/home/2.png"]]);
-    assert.deepEqual(home.mark, { rev: 2, viewed: null, reviewed: false, changed: false });
-    const image = await fetch(`${base}/stills/home/2.png`);
+    await shoot("landing", "Home");
+    await shoot("landing");
+    const landing = await still("landing");
+    assert.equal(landing.title, "Home");
+    const files = landing.revs.map((r) => [r.n, r.file]);
+    assert.deepEqual(files, [[1, "stills/landing/desktop/1.png"], [2, "stills/landing/desktop/2.png"]]);
+    const none = { rev: 2, viewed: null, reviewed: false, changed: false };
+    assert.deepEqual(landing.mark, { ...none, variants: { desktop: none } });
+    const image = await fetch(`${base}/stills/landing/desktop/2.png`);
     assert.equal(image.status, 200);
     assert.notEqual(image.headers.get("cache-control"), "no-store");
     assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
     const menu = await (await fetch(`${base}/`)).text();
     assert.match(menu, /<a href="\/stills">Review the stills/);
-    assert.match(menu, /<a href="\/stills#home"><img src="\/stills\/home\/2\.png"/);
+    assert.match(menu, /<a href="\/stills#landing"><img src="\/stills\/landing\/desktop\/2\.png"/);
+  });
+
+  test("a variant's image is served at the URL fileUrl gives it, its key's + encoded", async () => {
+    const file = path.join(app, "shot.png");
+    writeFileSync(file, PNG);
+    const dir = path.join(app, ".mockup");
+    const { rev } = await addStill(dir, { file, name: "dark", viewport: "mobile", tags: ["dark"] });
+    const image = await fetch(`${base}${fileUrl(rev.file)}`);
+    assert.equal(image.status, 200);
+    assert.notEqual(image.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
   });
 
   test("POST /_review/events takes only JSON (415) and only a good event (400)", async () => {
@@ -245,6 +259,8 @@ describe("the mockup server", () => {
     assert.match((await unknown.json()).error, /no still 'no-such-still'/);
     assert.equal((await post(JSON.stringify({ type: "viewed", still: "posted", rev: 1, extra: 1 }))).status, 400);
     assert.equal((await post(JSON.stringify({ type: "x".repeat(70000) }))).status, 413);
+    assert.equal((await post(JSON.stringify({ type: "working", still: "posted" }))).status, 403);
+    assert.equal((await post(JSON.stringify({ type: "idle" }))).status, 403);
     assert.equal((await still("posted")).mark.reviewed, false);
     assert.equal((await fetch(`${base}/_review/stills`, { method: "POST" })).status, 405);
   });
@@ -271,12 +287,19 @@ describe("the mockup server", () => {
     const stored = await res.json();
     assert.deepEqual(stored.author, { kind: "human", name: "reviewer" });
     assert.ok(stored.seq >= 1 && stored.id && stored.at);
-    assert.deepEqual((await still("marked")).mark, { rev: 1, viewed: 1, reviewed: true, changed: false });
+    const mark = async () => {
+      const { variants, ...m } = (await still("marked")).mark;
+      assert.deepEqual(variants.desktop, m);
+      return m;
+    };
+    assert.deepEqual(await mark(), { rev: 1, viewed: 1, reviewed: true, changed: false });
     await shoot("marked");
-    assert.deepEqual((await still("marked")).mark, { rev: 2, viewed: 1, reviewed: false, changed: true });
+    assert.deepEqual(await mark(), { rev: 2, viewed: 1, reviewed: false, changed: true });
     const named = await post(JSON.stringify({ type: "unviewed", still: "marked", rev: 2, author: HUMAN }));
     assert.deepEqual((await named.json()).author, HUMAN);
-    assert.deepEqual((await still("marked")).mark, { rev: 2, viewed: null, reviewed: false, changed: false });
+    assert.deepEqual(await mark(), { rev: 2, viewed: 1, reviewed: false, changed: true });
+    await post(JSON.stringify({ type: "unviewed", still: "marked", rev: 2 }));
+    assert.deepEqual(await mark(), { rev: 2, viewed: null, reviewed: false, changed: false });
   });
 
   test("GET /_review/events resumes from since, then pushes what is posted and what the CLI appends", async () => {
