@@ -11,35 +11,50 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   annotatedPng,
+  authorOf,
   checkManifest,
   listShots,
   renderMenu,
+  reviewer,
   reviewStills,
   rewriteRefs,
   route,
+  shareDomains,
 } from "./menu.mjs";
-import { addStill, appendEvent, threads } from "./review.mjs";
+import { addStill, appendEvent, threads, working } from "./review.mjs";
 import {
   ago,
   applyEvent,
   applyThread,
+  applyWorking,
   chip,
+  choices,
+  choose,
   counts,
   cropOf,
   edge,
   fitted,
+  keyOf,
   lastMessage,
   markOf,
   MAX_ZOOM,
   moved,
   opposite,
   pin,
+  progress,
   region,
   revealed,
   step,
+  tagsLabel,
+  tagsOf,
   title,
   unread,
+  variantFor,
   viewOn,
+  viewportLabel,
+  viewportOf,
+  workingAt,
+  WORKING_MS,
   zoomed,
 } from "./stills/state.js";
 
@@ -146,8 +161,9 @@ test("reviewStills lists each still with its first variant's revisions, the revi
   await appendEvent(dir, { type: "viewed", author: HUMAN, still: "a", rev: 1 });
   await addStill(dir, { file, name: "a" });
   await addStill(dir, { file, name: "a", viewport: "mobile", tags: ["dark"] });
-  const { stills, cursor } = reviewStills(dir, "dante");
+  const { stills, marks, cursor } = reviewStills(dir, "dante");
   assert.equal(cursor, 1);
+  assert.deepEqual(marks, { dante: { a: { desktop: 1 } } });
   const mark = (rev, viewed) => ({ rev, viewed, reviewed: viewed === rev, changed: viewed !== null && viewed < rev });
   assert.deepEqual(
     stills.map((s) => [s.name, s.title, s.revs.map((r) => r.file), s.variants.map((v) => v.key), s.mark]),
@@ -163,7 +179,7 @@ test("reviewStills lists each still with its first variant's revisions, the revi
     ]
   );
   assert.equal(reviewStills(dir).stills[0].mark.viewed, null);
-  assert.deepEqual(reviewStills(scratch(t, {})), { stills: [], cursor: 0 });
+  assert.deepEqual(reviewStills(scratch(t, {})), { stills: [], marks: {}, working: [], cursor: 0 });
 });
 
 test("renderMenu links the viewer and lists the stills by their latest revision, not the shots", () => {
@@ -223,16 +239,126 @@ test("stepping stays put when every still is reviewed, and wraps over the ones t
   assert.equal(step([], 0, 1, false), 0);
 });
 
-test("applyEvent folds viewed and unviewed into the marks: an older revision is changed, not reviewed", () => {
-  const stills = [{ name: "a", mark: markOf(2, null) }];
-  assert.equal(applyEvent(stills, { type: "viewed", still: "a", rev: 1 }), true);
+/** A viewer still named `name` with a variant at rev `rev` for each of `keys`. */
+function variantStill(name, keys, rev = 1) {
+  const revs = Array.from({ length: rev }, (_, i) => ({ n: i + 1, file: `stills/${name}/${i + 1}.png` }));
+  return { name, variants: keys.map((key) => ({ key, revs })) };
+}
+
+test("applyEvent folds each reviewer's viewed and unviewed into their own marks, per variant", () => {
+  const stills = [variantStill("a", ["desktop", "mobile+dark"], 2)];
+  const marks = {};
+  const by = (name, event) => applyEvent(marks, stills, { ...event, author: { kind: "human", name } });
+  assert.equal(by("dante", { type: "viewed", still: "a", rev: 1 }), true);
+  by("Ana", { type: "viewed", still: "a", variant: "mobile+dark", rev: 2 });
+  by("__proto__", { type: "viewed", still: "a", rev: 2 });
+  assert.deepEqual(marks.dante, { a: { desktop: 1 } });
+  assert.deepEqual(marks.Ana, { a: { "mobile+dark": 2 } });
+  assert.equal({}.a, undefined);
+  choose(stills, null, marks, "dante");
   assert.deepEqual(stills[0].mark, { rev: 2, viewed: 1, reviewed: false, changed: true });
-  applyEvent(stills, { type: "viewed", still: "a", rev: 2 });
-  assert.deepEqual(stills[0].mark, { rev: 2, viewed: 2, reviewed: true, changed: false });
-  applyEvent(stills, { type: "unviewed", still: "a", rev: 2 });
-  assert.deepEqual(stills[0].mark, { rev: 2, viewed: null, reviewed: false, changed: false });
-  assert.equal(applyEvent(stills, { type: "viewed", still: "gone", rev: 1 }), false);
-  assert.equal(applyEvent(stills, { type: "reply", thread: "t", body: "x" }), false);
+  choose(stills, "mobile+dark", marks, "dante");
+  assert.deepEqual(stills[0].mark, markOf(2, null));
+  choose(stills, "mobile+dark", marks, "Ana");
+  assert.equal(stills[0].mark.reviewed, true);
+  choose(stills, "mobile+dark", marks, "");
+  assert.equal(stills[0].mark.viewed, null);
+  choose(stills, "desktop", marks, "constructor");
+  assert.equal(stills[0].mark.viewed, null);
+  assert.deepEqual(progress(marks, stills, "dante"), [{ name: "__proto__", reviewed: 1 }]);
+  choose(stills, "mobile+dark", marks, "dante");
+  assert.deepEqual(progress(marks, stills, "dante"), [{ name: "Ana", reviewed: 1 }]);
+  by("Ana", { type: "unviewed", still: "a", variant: "mobile+dark", rev: 2 });
+  assert.deepEqual(progress(marks, stills, "dante"), []);
+  assert.equal(by("dante", { type: "viewed", still: "gone", rev: 1 }), false);
+  assert.equal(by("dante", { type: "reply", thread: "t", body: "x" }), false);
+});
+
+test("a pick is sticky: a still without that variant shows the same viewport, else its first", () => {
+  const stills = [
+    variantStill("a", ["desktop", "mobile+light", "mobile+dark"]),
+    variantStill("b", ["mobile+light", "custom-360x740@2-touch"]),
+    variantStill("c", ["desktop"]),
+  ];
+  const shown = (pick) => stills.map((s) => variantFor(s, pick).key);
+  assert.deepEqual(shown(null), ["desktop", "mobile+light", "desktop"]);
+  assert.deepEqual(shown("mobile+dark"), ["mobile+dark", "mobile+light", "desktop"]);
+  assert.deepEqual(shown("tablet"), ["desktop", "mobile+light", "desktop"]);
+  assert.deepEqual(choices(stills), {
+    viewports: ["mobile", "desktop", "custom-360x740@2-touch"],
+    tags: ["", "light", "dark"],
+  });
+  assert.deepEqual(choices([stills[2]]), { viewports: ["desktop"], tags: [""] });
+  const parts = [viewportOf("mobile+dark+rtl"), tagsOf("mobile+dark+rtl"), tagsOf("desktop")];
+  assert.deepEqual(parts, ["mobile", "dark+rtl", ""]);
+  assert.deepEqual([keyOf("mobile", "dark"), keyOf("desktop", "")], ["mobile+dark", "desktop"]);
+  const labels = ["mobile-s", "desktop", "custom-360x740@2-touch", "constructor"].map(viewportLabel);
+  assert.deepEqual(labels, ["Mobile S", "Desktop", "360×740@2 touch", "constructor"]);
+  assert.deepEqual([tagsLabel(""), tagsLabel("dark+rtl")], ["default", "dark+rtl"]);
+});
+
+test("applyWorking folds the agent's working states as the store does, ended by its reply or idle", async (t) => {
+  const dir = scratch(t, { "shot.png": PNG });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "home" });
+  const agent = { kind: "agent", name: "claude", via: "cli" };
+  const thread = await appendEvent(dir, { type: "thread", author: HUMAN, still: "home", rev: 1, body: "Wide" });
+  const events = [
+    thread,
+    await appendEvent(dir, { type: "working", author: agent, thread: thread.id, note: "re-shooting" }),
+    await appendEvent(dir, { type: "working", author: agent, still: "home" }),
+    await appendEvent(dir, { type: "working", author: HUMAN, still: "home", variant: "desktop" }),
+    await appendEvent(dir, { type: "reply", author: HUMAN, thread: thread.id, body: "Any news?" }),
+  ];
+  const on = new Map();
+  assert.deepEqual(events.map((e) => applyWorking(on, e)), [false, true, true, false, false]);
+  const now = Date.parse(events.at(-1).at);
+  assert.deepEqual(workingAt(on, now), working(dir, now));
+  const states = workingAt(on, now).map((w) => [w.thread, w.still, w.note]);
+  assert.deepEqual(states, [[thread.id, null, "re-shooting"], [null, "home", null]]);
+  assert.deepEqual(workingAt(on, now + WORKING_MS + 1000), []);
+  const reply = await appendEvent(dir, { type: "reply", author: agent, thread: thread.id, body: "Fixed" });
+  assert.equal(applyWorking(on, reply), true);
+  assert.deepEqual(workingAt(on, now).map((w) => w.still), ["home"]);
+  assert.equal(applyWorking(on, await appendEvent(dir, { type: "idle", author: agent })), true);
+  assert.deepEqual(workingAt(on, now), working(dir, now));
+  assert.equal(on.size, 0);
+});
+
+test("reviewer names a tailnet user by the headers tailscale serve adds, and nobody on a share host", () => {
+  const domains = shareDomains(["box.tail1234.ts.net", ".Share.example"]);
+  assert.deepEqual(domains, [".share.example"]);
+  const login = "dante@example.com";
+  const named = { host: "box.tail1234.ts.net:40000", "tailscale-user-login": login, "tailscale-user-name": "Dante B" };
+  assert.deepEqual(reviewer(named, domains), { name: "Dante B", via: "tailnet" });
+  assert.deepEqual(reviewer({ ...named, "tailscale-user-name": "" }, domains), { name: login, via: "tailnet" });
+  const encoded = { ...named, "tailscale-user-name": "=?utf-8?q?Ana_Mar=C3=ADa?=" };
+  assert.equal(reviewer(encoded, domains).name, "Ana María");
+  const base64 = { ...named, "tailscale-user-name": `=?UTF-8?b?${Buffer.from("José").toString("base64")}?=` };
+  assert.equal(reviewer(base64, domains).name, "José");
+  assert.equal(reviewer({ host: "box.tail1234.ts.net" }, domains), null);
+  assert.equal(reviewer({ host: "box.tail1234.ts.net", "tailscale-user-name": "Dante" }, domains), null);
+  assert.equal(reviewer({ ...named, host: "my-app.share.example" }, domains), null);
+  assert.equal(reviewer({ ...named, host: "SHARE.example:443" }, domains), null);
+  assert.equal(reviewer({ ...named, "tailscale-user-name": "x".repeat(300) }, domains).name.length, 100);
+});
+
+test("authorOf writes a tailnet user's name, and a guest's own, of 1 to 40 characters", () => {
+  const owner = { name: "Dante", via: "tailnet" };
+  assert.deepEqual(authorOf(owner, { name: "Ana" }), { kind: "human", name: "Dante", via: "tailnet" });
+  assert.deepEqual(authorOf(null, { name: "  Ana " }), { kind: "human", name: "Ana", via: "share" });
+  assert.deepEqual(authorOf(null, { name: "x".repeat(40) }).name.length, 40);
+  const refused = (given) => {
+    try {
+      authorOf(null, given);
+    } catch (e) {
+      return [e.status, e.message];
+    }
+    return null;
+  };
+  assert.deepEqual(refused(undefined), [400, "name required"]);
+  assert.deepEqual(refused({ name: " " }), [400, "name required"]);
+  assert.deepEqual(refused({ name: 7 }), [400, "name required"]);
+  assert.equal(refused({ name: "x".repeat(41) })[0], 400);
 });
 
 test("a drag makes a region between its two ends, in either direction, kept inside the still", () => {
@@ -290,7 +416,7 @@ test("applyThread folds the log into the threads as the store does, and takes an
     await appendEvent(dir, { type: "viewed", author: HUMAN, still: "home", rev: 1 }),
   ];
   const folded = [];
-  const stored = () => threads(dir).map(({ variant, ...t }) => t);
+  const stored = () => threads(dir).map((t) => ({ ...t, variant: null }));
   assert.deepEqual(events.map((e) => applyThread(folded, e)), [true, true, true, true, true, true, false]);
   assert.deepEqual(folded, stored());
   const summary = folded.map((f) => [f.status, f.replies.length, f.anchor]);
