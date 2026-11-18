@@ -93,7 +93,7 @@ export const MANIFEST_FILE = "stills/manifest.json";
 export const EVENTS_FILE = "review/events.jsonl";
 
 /** Paths of the store inside the scratch dir `dir`, or the paths a folder source gives. */
-function paths(dir) {
+export function storePaths(dir) {
   if (typeof dir !== "string") return dir.paths;
   return {
     manifest: path.join(dir, MANIFEST_FILE),
@@ -102,11 +102,6 @@ function paths(dir) {
     eventsLock: path.join(dir, "review", ".lock"),
     annotated: path.join(dir, "review", "annotated"),
   };
-}
-
-/** The annotated still of thread `id`, relative to the scratch dir. */
-export function annotatedFile(id) {
-  return `review/annotated/${id}.png`;
 }
 
 /** True when `bytes` starts with the PNG signature. */
@@ -386,7 +381,7 @@ export async function withLock(file, fn) {
  * none yet. A manifest that is not a JSON list throws: only `addStill` writes it.
  */
 function readManifest(dir) {
-  const file = paths(dir).manifest;
+  const file = storePaths(dir).manifest;
   if (!existsSync(file)) return [];
   let manifest;
   try {
@@ -437,7 +432,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
   } finally {
     closeSync(fd);
   }
-  const { manifest: manifestFile, stillsLock } = paths(dir);
+  const { manifest: manifestFile, stillsLock } = storePaths(dir);
   return withLock(stillsLock, () => {
     const manifest = readManifest(dir);
     const folded = name.toLowerCase();
@@ -482,7 +477,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
  * file's path.
  */
 export function storeAnnotated(dir, id, png) {
-  const file = path.join(paths(dir).annotated, `${id}.png`);
+  const file = path.join(storePaths(dir).annotated, `${id}.png`);
   const partial = sideFile(file, "tmp");
   mkdirSync(path.dirname(file), { recursive: true });
   try {
@@ -503,7 +498,7 @@ export function storeAnnotated(dir, id, png) {
  * without its newline is a write in progress and is left for the next read.
  */
 export function readEvents(dir, since = 0) {
-  const file = paths(dir).events;
+  const file = storePaths(dir).events;
   const events = [];
   const problems = [];
   let cursor = since;
@@ -572,7 +567,7 @@ export async function appendEvent(dir, event) {
   const problem = eventProblem(event, false);
   if (problem) throw new Error(problem);
   if (typeof dir !== "string") await dir.keep();
-  const { events: file, eventsLock } = paths(dir);
+  const { events: file, eventsLock } = storePaths(dir);
   return withLock(eventsLock, () => {
     const { events } = readEvents(dir);
     if (event.thread !== undefined && !events.some((e) => e.type === "thread" && e.id === event.thread)) {

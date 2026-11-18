@@ -59,6 +59,7 @@ PORT_BUCKETS=5000
 
 PREVIEW_STOP_ARGS=(stop)
 PREVIEW_STOP_HINT="preview stop"
+STILLS_STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/preview/stills"
 
 PREVIEW_REPO="${PREVIEW_REPO:-dantebarba/preview-hub}"
 PREVIEW_VERSION="${PREVIEW_VERSION:-0.0.0-dev}"
@@ -107,6 +108,13 @@ compose_running() { [ -n "$(docker compose -p "$1" -f "$PREVIEW_COMPOSE_FILE" ps
 
 ## True when the pid file exists and names a live process.
 pid_alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+
+## Log the time left before the watchdog of $STATE_DIR stops the preview; false when it is down.
+autostop_left() {
+  if ! pid_alive "$STATE_DIR/watchdog.pid" || [ ! -f "$STATE_DIR/deadline" ]; then return 1; fi
+  local left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+  plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
+}
 
 ## Locate the `.preview/` directory (PREVIEW_DIR override, else walk up from $PWD) and set
 ## PREVIEW_DIR (absolute path to it) and PREVIEW_ROOT (the project root that contains it).
@@ -448,12 +456,7 @@ cmd_status() {
     local url; url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)')"
     if compose_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  docker: up"; else plog "  docker: down"; fi
     if ts_port_mapped "$TS_PORT"; then plog "  tailscale serve: up -> $url"; else plog "  tailscale serve (:$TS_PORT): down"; fi
-    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
-      local left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
-      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
-    else
-      plog "  auto-stop watchdog: down"
-    fi
+    autostop_left || plog "  auto-stop watchdog: down"
     local host="" expires="" recorded=""
     if share_forwarder_exists; then
       host="$(share_forwarder_label host)"
@@ -502,8 +505,9 @@ cmd_status() {
 
 ## killall: stop every recorded preview (re-invoking `stop` per identity so on_down runs with
 ## the right context and shares are retracted), then sweep strays — share forwarders and
-## compose projects under our prefix and Tailscale mappings inside 40000-59999. Named volumes
-## are kept; `tailscale serve reset` is never used.
+## compose projects under our prefix and Tailscale mappings inside 40000-59999 but those of a
+## served stills folder, which are not a project's. Named volumes are kept; `tailscale serve
+## reset` is never used.
 cmd_killall() {
   local dir id n=0
   for dir in "$STATE_ROOT"/*/; do
@@ -536,7 +540,10 @@ cmd_killall() {
         ;;
     esac
   done
+  local folders
+  folders=" $(cat "$STILLS_STATE_ROOT"/*/base 2>/dev/null | tr '\n' ' ') "
   for port in $(mapped_preview_ports); do
+    case "$folders" in *" $port "*) continue ;; esac
     plog "sweeping stray tailscale mapping :$port..."
     tailscale serve --https="$port" off >/dev/null 2>&1 || true
   done
@@ -1348,7 +1355,6 @@ cmd_review_cli() {
   review_cli "$@"
 }
 
-## ── stills folders: any directory of images as a preview of its own ─────────
 ## `preview stills serve [<dir>]` runs the /mockup runtime in folder mode on a directory, git or
 ## not: no frontend project, no pages, only the viewer at /stills, with the directory mounted
 ## read-write (read-only when this user cannot write it or its .review/). It needs no .preview/:
@@ -1383,7 +1389,7 @@ folder_setup() {
   PREVIEW_SERVE_TARGET="127.0.0.1:$PREVIEW_PORT_1"
   PREVIEW_COMPOSE_PROJECT_PREFIX="stills"
   PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$PREVIEW_SLUG"
-  STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/preview/stills"
+  STATE_ROOT="$STILLS_STATE_ROOT"
   STATE_DIR="$STATE_ROOT/$PREVIEW_SLUG"
   PREVIEW_STATE_DIR="$STATE_DIR"
   PREVIEW_COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
@@ -1452,16 +1458,13 @@ folder_running() { [ -n "$(docker ps -q --filter "label=com.docker.compose.proje
 
 ## stills status: this folder's preview, then every folder served on this machine.
 folder_status() {
-  local dir root url left
+  local dir root url
   plog "this folder: '$STILLS_DIR' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT'"
   if [ -d "$STATE_DIR" ]; then
     url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)/')"
     if folder_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  up -> ${url}stills"; else plog "  docker: down"; fi
     [ "$STILLS_MODE" = "rw" ] || plog "  read-only folder: remarks off"
-    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
-      left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
-      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
-    fi
+    autostop_left || true
     if share_forwarder_exists; then plog "  shared: https://$(share_forwarder_label host)/"; fi
   else
     plog "  not served (run: preview stills serve $STILLS_DIR)"
@@ -1509,7 +1512,6 @@ cmd_stills_folder() {
       fi
       [ "$STILLS_MODE" = "rw" ] || pwarn "$STILLS_DIR is not writable: served read-only, remarks off"
       cmd_start
-      printf '%s\n' "$STILLS_DIR" >"$STATE_DIR/root"
       plog "review it at:   ${PREVIEW_URL}stills"
       plog "agent listens:  preview review watch --dir $STILLS_DIR"
       ;;

@@ -194,5 +194,5 @@ test("an agent's write on a read-only folder says remarks are off", { skip: proc
     chmodSync(path.join(dest, ".review"), 0o755);
   }
   assert.equal(idle.code, 1);
-  assert.equal(idle.err, "/host/kept: read-only folder, remarks off");
+  assert.equal(idle.err, "/host/kept: read-only folder: remarks off");
 });

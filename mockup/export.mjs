@@ -16,19 +16,10 @@
  * holds a review already or an image it would replace.
  */
 
-import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { annotatedFile, EVENTS_FILE, readEvents, revisions, stills } from "./review.mjs";
-
-const REVIEW_DIR = ".review";
-const DEFAULT_KEY = "desktop";
-const READMES = ["README.md", "readme.md", "Readme.md", "index.md"];
-
-/** The hex SHA-256 of the file `file`. */
-function hashOf(file) {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
-}
+import { readEvents, revisions, stills, storePaths } from "./review.mjs";
+import { DEFAULT_KEY, hashOf, keptFile, READMES, REVIEW_DIR, reviewPaths } from "./source.mjs";
 
 /** The file name the variant `key` of the still `name` is exported as, `single` when it is its only one. */
 export function exportName(name, key, single) {
@@ -82,14 +73,16 @@ function eventLines(dir, first) {
 
 /**
  * Export the stills and review of the mockup scratch dir `dir` into the folder `dest`, made when
- * missing; `readme` also writes a README. Returns `{ stills, images, revisions, events, wrote,
- * skipped }`: counts, and the extras written or left alone because they existed. Throws when
- * `dest` holds a review already or one of the images to write.
+ * missing; `readme` also writes a README, headed by the mockup's title, else by `title`, else by
+ * the name of `dest`. Returns `{ stills, images, revisions, events, wrote, skipped }`: counts,
+ * and the extras written or left alone because they existed; nothing is written when there is
+ * no still to export. Throws when `dest` holds a review already or one of the images to write.
  */
-export function exportStills(dir, dest, { readme = false } = {}) {
+export function exportStills(dir, dest, { readme = false, title = null } = {}) {
   const list = stills(dir)
     .map((s) => ({ ...s, variants: s.variants.filter((v) => v.revs.length) }))
     .filter((s) => s.variants.length);
+  if (!list.length) return { stills: 0, images: 0, revisions: 0, events: 0, wrote: [], skipped: [] };
   const plan = list.map((s) => ({
     still: s,
     files: s.variants.map((v) => ({ variant: v, file: exportName(s.name, v.key, s.variants.length === 1) })),
@@ -111,7 +104,7 @@ export function exportStills(dir, dest, { readme = false } = {}) {
       const kept = [];
       for (const rev of variant.revs) {
         const from = path.join(dir, rev.file);
-        const rel = `${REVIEW_DIR}/revs/${still.name}/${variant.key}/${rev.n}.png`;
+        const rel = keptFile(still.name, variant.key, rev.n, "png");
         mkdirSync(path.dirname(path.join(dest, rel)), { recursive: true });
         copyFileSync(from, path.join(dest, rel));
         kept.push({ n: rev.n, hash: hashOf(from), ext: "png", at: rev.at, rel });
@@ -128,17 +121,17 @@ export function exportStills(dir, dest, { readme = false } = {}) {
       });
     }
   }
-  writeFileSync(path.join(dest, REVIEW_DIR, "revs.json"), `${JSON.stringify(record, null, 2)}\n`);
+  const to = reviewPaths(dest);
+  writeFileSync(to.revs, `${JSON.stringify(record, null, 2)}\n`);
 
   const first = new Map([...revisions(dir)].map(([name, v]) => [name, v.first]));
-  const lines = existsSync(path.join(dir, EVENTS_FILE)) ? eventLines(dir, first) : [];
-  if (lines.length) writeFileSync(path.join(dest, REVIEW_DIR, "events.jsonl"), lines.join(""));
-  const annotated = path.dirname(path.join(dir, annotatedFile("x")));
-  if (existsSync(annotated)) {
-    const to = path.join(dest, REVIEW_DIR, "annotated");
-    mkdirSync(to, { recursive: true });
-    for (const f of readdirSync(annotated).filter((n) => n.endsWith(".png"))) {
-      copyFileSync(path.join(annotated, f), path.join(to, f));
+  const from = storePaths(dir);
+  const lines = existsSync(from.events) ? eventLines(dir, first) : [];
+  if (lines.length) writeFileSync(to.events, lines.join(""));
+  if (existsSync(from.annotated)) {
+    mkdirSync(to.annotated, { recursive: true });
+    for (const f of readdirSync(from.annotated).filter((n) => n.endsWith(".png"))) {
+      copyFileSync(path.join(from.annotated, f), path.join(to.annotated, f));
     }
   }
 
@@ -150,11 +143,10 @@ export function exportStills(dir, dest, { readme = false } = {}) {
     writeFileSync(file, body);
     return wrote.push(name);
   };
-  const entries = plan.map(({ still, files }) => ({ name: still.name, title: still.title, file: files[0].file }));
   extra(
     "stills.json",
     `${JSON.stringify(
-      entries.map(({ name, title }) => ({ name, title })),
+      plan.map(({ still }) => ({ name: still.name, title: still.title })),
       null,
       2
     )}\n`
@@ -162,7 +154,7 @@ export function exportStills(dir, dest, { readme = false } = {}) {
   const hasReadme = READMES.some((f) => existsSync(path.join(dest, f)));
   if (readme && hasReadme) skipped.push(READMES.find((f) => existsSync(path.join(dest, f))));
   else if (readme) {
-    const heading = mockupTitle(dir) ?? path.basename(path.resolve(dest));
+    const heading = mockupTitle(dir) ?? title ?? path.basename(path.resolve(dest));
     const rows = plan.map(({ still, files }) => ({
       name: still.name,
       title: still.title,

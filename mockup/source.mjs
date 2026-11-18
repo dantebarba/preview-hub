@@ -54,6 +54,7 @@ import {
   parseTags,
   parseViewport,
   sideFile,
+  storePaths,
   upgraded,
   variantKey,
   withLock,
@@ -61,11 +62,11 @@ import {
 
 const IMAGE = /\.(png|jpe?g|webp|gif)$/i;
 const SKIP = new Set(["node_modules"]);
-const READMES = ["README.md", "readme.md", "Readme.md", "index.md"];
+export const READMES = ["README.md", "readme.md", "Readme.md", "index.md"];
 const PRESETS = new Set(["mobile", "mobile-s", "tablet", "desktop", "web"]);
 const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
-const REVIEW_DIR = ".review";
-const DEFAULT_KEY = "desktop";
+export const REVIEW_DIR = ".review";
+export const DEFAULT_KEY = "desktop";
 const natural = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 
 /** `rel` with forward slashes, as files are named in a source. */
@@ -74,7 +75,7 @@ function posix(rel) {
 }
 
 /** The paths of the review of the folder `dir`, in the shape `review.mjs` reads them. */
-function reviewPaths(dir) {
+export function reviewPaths(dir) {
   const root = path.join(dir, REVIEW_DIR);
   return {
     root,
@@ -494,12 +495,12 @@ function enrich(dir, list, notes, { manifest }) {
 }
 
 /** The hex SHA-256 of the file `file`. */
-function hashOf(file) {
+export function hashOf(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
 /** The kept revision `n` of a variant of `name`, relative to the folder. */
-function keptFile(name, key, n, ext) {
+export function keptFile(name, key, n, ext) {
   return `${REVIEW_DIR}/revs/${name}/${key}/${n}.${ext}`;
 }
 
@@ -636,13 +637,7 @@ export function folder(dir) {
   const manifest = existsSync(path.join(root, MANIFEST_FILE));
   const review = reviewPaths(root);
   const paths = manifest
-    ? {
-        manifest: path.join(root, MANIFEST_FILE),
-        stillsLock: path.join(root, "stills", ".lock"),
-        events: path.join(root, "review", "events.jsonl"),
-        eventsLock: path.join(root, "review", ".lock"),
-        annotated: path.join(root, "review", "annotated"),
-      }
+    ? storePaths(root)
     : { events: review.events, eventsLock: review.eventsLock, annotated: review.annotated };
   return {
     dir: root,

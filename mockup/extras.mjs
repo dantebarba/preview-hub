@@ -59,7 +59,7 @@ export function sourceExtras(scratch) {
 }
 
 /** The image type of the file name `rel`, or undefined when it is not an image. */
-function typeOf(rel) {
+export function typeOf(rel) {
   return TYPES[path.posix.extname(rel).slice(1).toLowerCase()];
 }
 

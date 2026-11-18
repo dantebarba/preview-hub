@@ -1,8 +1,8 @@
 /**
  * Tests of the runtime's folder mode on a real HTTP server: a plain folder of images at
  * `/stills`, only revision images served, the Host check, a remark landing in `.review/`, a
- * rewritten image as rev 2 with the old bytes kept, the `stills` event when an image changes,
- * and a read-only folder. Run with `npm test` from mockup/.
+ * rewritten image as rev 2 with the old bytes kept, rewrites with no viewer open each kept, the
+ * `stills` event when an image changes, and a read-only folder. Run with `npm test` from mockup/.
  */
 
 import { test } from "node:test";
@@ -129,6 +129,21 @@ test("serving a writable folder keeps its images as rev 1, so a rewrite is rev 2
   const before = await fetch(`${url}${fileUrl(still.revs[0].file)}`);
   assert.deepEqual(Buffer.from(await before.arrayBuffer()), png("one"));
   assert.match(before.headers.get("cache-control"), /immutable/);
+});
+
+test("rewrites with no viewer open are each kept as a revision", async (t) => {
+  const dir = folderOf(t, { "a.png": png("one") });
+  const { url } = await serve(t, dir);
+  const kept = () => JSON.parse(readFileSync(path.join(dir, ".review", "revs.json"), "utf8")).a.desktop.length;
+  for (const [n, tag] of [[2, "two"], [3, "three"]]) {
+    writeFileSync(path.join(dir, "a.png"), png(tag));
+    const start = Date.now();
+    while (kept() < n && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 50));
+  }
+  const [still] = (await reviewStills(url)).stills;
+  assert.deepEqual(still.revs.map((r) => r.n), [1, 2, 3]);
+  const second = await fetch(`${url}${fileUrl(still.revs[1].file)}`);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), png("two"));
 });
 
 test("a remark lands in .review/events.jsonl, and only .review/ is added", async (t) => {
