@@ -19,10 +19,12 @@
 #   preview share      # publish this checkout's running preview on the internet, behind a key
 #   preview unshare    # retract it
 #   preview shares     # every share, with its URL and time left
-#   preview stills ... # add a still revision to a variant of this checkout's mockup, list them
+#   preview stills ... # add a still revision to a variant of this checkout's mockup, list them,
+#                      # export them to a folder; serve any folder of images as a preview of its
+#                      # own (stills serve|stop|status|share|unshare [<dir>])
 #   preview review ... # list, show, answer and watch the mockup's review remarks, report the
-#                      # agent working or idle; works with the preview stopped
-#                      # (docs/review-contract.md has the store)
+#                      # agent working or idle; works with the preview stopped; --dir <dir> works
+#                      # on any folder of images instead (docs/review-contract.md has the store)
 #
 # ── One preview per identity, deterministically ──────────────────────────────
 # The identity is the checked-out git branch (short SHA when detached), overridable with
@@ -54,6 +56,9 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 
 PORT_RANGE_START=40000
 PORT_BUCKETS=5000
+
+PREVIEW_STOP_ARGS=(stop)
+PREVIEW_STOP_HINT="preview stop"
 
 PREVIEW_REPO="${PREVIEW_REPO:-dantebarba/preview-hub}"
 PREVIEW_VERSION="${PREVIEW_VERSION:-0.0.0-dev}"
@@ -133,13 +138,18 @@ resolve_identity() {
   [ -n "$PREVIEW_SLUG" ] || PREVIEW_SLUG="detached"
 }
 
+## Print the first 8 hex digits of the SHA-256 of $1, or nothing when no hashing tool is found.
+sha8() {
+  printf '%s' "$1" \
+    | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null || openssl dgst -sha256 2>/dev/null; } \
+    | grep -oE '[0-9a-f]{64}' | head -n1 | cut -c1-8
+}
+
 ## Derive the deterministic 4-port block from sha256(PREVIEW_ID). Sets PREVIEW_BASE, TS_PORT
 ## and PREVIEW_PORT_0..3 (PREVIEW_PORT_0 == TS_PORT == PREVIEW_BASE).
 compute_ports() {
   local hash
-  hash="$(printf '%s' "$PREVIEW_ID" \
-    | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null || openssl dgst -sha256 2>/dev/null; } \
-    | grep -oE '[0-9a-f]{64}' | head -n1 | cut -c1-8)"
+  hash="$(sha8 "$PREVIEW_ID")"
   [ -n "$hash" ] || die "could not hash PREVIEW_ID (need one of: shasum, sha256sum, openssl)"
   PREVIEW_BASE=$(( PORT_RANGE_START + (16#$hash % PORT_BUCKETS) * 4 ))
   TS_PORT=$PREVIEW_BASE
@@ -322,14 +332,15 @@ stop_watchdog() {
   rm -f "$dir/watchdog.pid" "$dir/deadline"
 }
 
-## (Re)arm the detached auto-stop watchdog: after TIMEOUT_SECONDS it re-invokes this engine as
-## `stop` with the identity and .preview location pinned, so it stops exactly this preview even
-## if the checkout has since switched branches. Resets the timer on every start.
+## (Re)arm the detached auto-stop watchdog: after TIMEOUT_SECONDS it re-invokes this engine with
+## PREVIEW_STOP_ARGS (`stop`, or `stills stop <dir>` for a folder) and the identity and .preview
+## location pinned, so it stops exactly this preview even if the checkout has since switched
+## branches. Resets the timer on every start.
 reset_watchdog() {
   stop_watchdog "$STATE_DIR"
   echo "$(( $(date +%s) + TIMEOUT_SECONDS ))" >"$STATE_DIR/deadline"
-  nohup bash -c 'sleep "$1" && PREVIEW_ID="$2" PREVIEW_DIR="$3" "$4" stop' _ \
-    "$TIMEOUT_SECONDS" "$PREVIEW_ID" "$PREVIEW_DIR" "$SELF" >/dev/null 2>&1 &
+  nohup bash -c 'sleep "$1" && PREVIEW_ID="$2" PREVIEW_DIR="$3" "${@:4}"' _ \
+    "$TIMEOUT_SECONDS" "$PREVIEW_ID" "${PREVIEW_DIR:-}" "$SELF" "${PREVIEW_STOP_ARGS[@]}" >/dev/null 2>&1 &
   echo $! >"$STATE_DIR/watchdog.pid"
   disown -a 2>/dev/null || true
 }
@@ -409,7 +420,7 @@ cmd_start() {
 
   echo
   plog "preview is up:  $PREVIEW_URL"
-  plog "auto-stops in $(( TIMEOUT_SECONDS / 3600 ))h (or run: preview stop)"
+  plog "auto-stops in $(( TIMEOUT_SECONDS / 3600 ))h (or run: $PREVIEW_STOP_HINT)"
 }
 
 ## stop: tear down this checkout's preview. Order: unshare when shared -> on_down (best effort)
@@ -1216,6 +1227,24 @@ cmd_hub() {
 ## docs/review-contract.md. The logic lives in the runtime image, so the viewer and the CLI share
 ## one module and the host needs only docker.
 
+## Read the arguments of `stills export`, <dir> [--readme], into EXPORT_DIR, the folder made
+## and resolved to an absolute path, and EXPORT_README; dies with the usage on anything else.
+export_args() {
+  local dir="" usage="usage: preview stills export <dir> [--readme]"
+  EXPORT_README=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --readme) EXPORT_README=1 ;;
+      -*) die "$usage" ;;
+      *) [ -z "$dir" ] || die "$usage"; dir="$1" ;;
+    esac
+    shift
+  done
+  [ -n "$dir" ] || die "$usage"
+  mkdir -p "$dir" || die "$dir: cannot create it"
+  EXPORT_DIR="$(cd "$dir" && pwd -P)"
+}
+
 ## True when the path $2 inside container $1 is on a writable mount: the mount whose destination
 ## is the longest prefix of the path is read-write.
 container_writable() {
@@ -1238,9 +1267,16 @@ container_writable() {
 ## so the store stays writable by both.
 review_cli() {
   local cid image png="" watch=0 i
-  local env=(-e "MOCKUP_HOST_DIR=$PREVIEW_ROOT")
+  local env=(-e "MOCKUP_HOST_DIR=$PREVIEW_ROOT") mounts=()
   [ -z "${REVIEW_AUTHOR:-}" ] || env+=(-e "REVIEW_AUTHOR=$REVIEW_AUTHOR")
   [ "${1:-}" = "review" ] && [ "${2:-}" = "watch" ] && watch=1
+  if [ "${1:-}" = "stills" ] && [ "${2:-}" = "export" ]; then
+    export_args "${@:3}"
+    watch=1
+    env+=(-e "MOCKUP_EXPORT_HOST_DIR=$EXPORT_DIR")
+    mounts=(-v "$EXPORT_DIR:/export")
+    set -- stills export /export ${EXPORT_README:+--readme}
+  fi
   if [ "${1:-}" = "stills" ] && [ "${2:-}" = "add" ]; then
     local rest=("${@:3}")
     for ((i = 0; i < ${#rest[@]}; i++)); do
@@ -1271,7 +1307,7 @@ review_cli() {
       image="$PREVIEW_MOCKUP_IMAGE"
     fi
     set -- docker run --rm -i --init --user "$(id -u):$(id -g)" "${env[@]}" -v "$PREVIEW_ROOT:/mockup" \
-      "$image" node /srv/review-cli.mjs --dir /mockup "$@"
+      ${mounts[@]+"${mounts[@]}"} "$image" node /srv/review-cli.mjs --dir /mockup "$@"
   fi
   if [ -n "$png" ]; then exec "$@" <"$png"; else exec "$@"; fi
 }
@@ -1282,6 +1318,18 @@ review_cli() {
 ## identity, mockup-<branch>, unless PREVIEW_ID is set. Help and a bare group need no project
 ## and print the CLI's own usage.
 cmd_review_cli() {
+  if [ "$1" = "stills" ]; then
+    case "${2:-}" in
+      serve|stop|status|share|unshare) cmd_stills_folder "${@:2}"; return ;;
+    esac
+  fi
+  local a
+  for a in "${@:2}"; do
+    case "$a" in
+      --) break ;;
+      --dir|--dir=*) folder_review_cli "$@"; return ;;
+    esac
+  done
   case "${2:-}" in
     -h|--help|help|"")
       if [ -n "${2:-}" ]; then set -- --help; else set -- "$1"; fi
@@ -1298,6 +1346,229 @@ cmd_review_cli() {
   fi
   setup
   review_cli "$@"
+}
+
+## ── stills folders: any directory of images as a preview of its own ─────────
+## `preview stills serve [<dir>]` runs the /mockup runtime in folder mode on a directory, git or
+## not: no frontend project, no pages, only the viewer at /stills, with the directory mounted
+## read-write (read-only when this user cannot write it or its .review/). It needs no .preview/:
+## the identity derives from the directory's absolute path, so the same folder always gets the
+## same ports and URL, and its state lives in $XDG_STATE_HOME/preview/stills/<slug>/ with the
+## compose file written there. Everything else is the engine's: Tailscale, the hub card (titled
+## "<folder> stills", with the Review action), the watchdog and sharing.
+
+## Set up the engine's variables for the folder $1 (default .), as `setup` does for a checkout,
+## and define its hooks. Also sets STILLS_DIR (absolute), STILLS_MODE (rw or ro) and STILLS_USER.
+folder_setup() {
+  local dir="${1:-.}" name hash
+  [ -d "$dir" ] || die "$dir: no such directory"
+  STILLS_DIR="$(cd "$dir" && pwd -P)"
+  name="$(basename "$STILLS_DIR")"
+  [ "$STILLS_DIR" != "/" ] || name="root"
+  hash="$(sha8 "$STILLS_DIR")"
+  [ -n "$hash" ] || die "could not hash '$STILLS_DIR' (need one of: shasum, sha256sum, openssl)"
+  PREVIEW_ID="$(slugify "$name" | cut -c1-40 | sed -E 's/-+$//')"
+  PREVIEW_ID="${PREVIEW_ID:-folder}-$hash"
+  PREVIEW_SLUG="$PREVIEW_ID"
+  TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-21600}"
+  compute_ports
+  PREVIEW_BRANCH="$name stills"
+  PREVIEW_WORKTREE="$STILLS_DIR"
+  PREVIEW_ROOT="$STILLS_DIR"
+  PREVIEW_DIR=""
+  PREVIEW_PROJECT="stills"
+  PREVIEW_DESC="Stills folder"
+  PREVIEW_REVIEW="/stills"
+  PREVIEW_LABEL_SERVICE="web"
+  PREVIEW_SERVE_TARGET="127.0.0.1:$PREVIEW_PORT_1"
+  PREVIEW_COMPOSE_PROJECT_PREFIX="stills"
+  PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$PREVIEW_SLUG"
+  STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/preview/stills"
+  STATE_DIR="$STATE_ROOT/$PREVIEW_SLUG"
+  PREVIEW_STATE_DIR="$STATE_DIR"
+  PREVIEW_COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
+  PREVIEW_LABELS_OVERRIDE="$STATE_DIR/labels.yml"
+  PREVIEW_STOP_ARGS=(stills stop "$STILLS_DIR")
+  PREVIEW_STOP_HINT="preview stills stop $STILLS_DIR"
+  STILLS_MODE="ro"
+  if [ -w "$STILLS_DIR" ] && { [ ! -e "$STILLS_DIR/.review" ] || [ -w "$STILLS_DIR/.review" ]; }; then
+    STILLS_MODE="rw"
+  fi
+  STILLS_USER="$(id -u):$(id -g)"
+  export_mockup_image
+  export PREVIEW_ID PREVIEW_SLUG PREVIEW_BRANCH PREVIEW_WORKTREE PREVIEW_ROOT PREVIEW_DIR
+  export PREVIEW_BASE TS_PORT PREVIEW_PORT_0 PREVIEW_PORT_1 PREVIEW_PORT_2 PREVIEW_PORT_3
+  export PREVIEW_PROJECT PREVIEW_DESC PREVIEW_REVIEW PREVIEW_COMPOSE_FILE PREVIEW_COMPOSE_PROJECT_PREFIX
+  export PREVIEW_COMPOSE_PROJECT PREVIEW_STATE_DIR PREVIEW_LABELS_OVERRIDE STILLS_DIR STILLS_MODE STILLS_USER
+  export -f dc plog pwarn
+
+  ## Write the folder's compose file and bring its one container up.
+  on_up() {
+    folder_compose >"$PREVIEW_COMPOSE_FILE"
+    dc up -d
+  }
+
+  ## Wait for the viewer to answer.
+  on_healthcheck() {
+    for _ in $(seq 1 60); do
+      curl -fs -o /dev/null "http://127.0.0.1:$PREVIEW_PORT_1/stills" && return 0
+      sleep 0.5
+    done
+    pwarn "stills server did not answer on :$PREVIEW_PORT_1; see: docker logs $PREVIEW_COMPOSE_PROJECT-web-1"
+    return 1
+  }
+
+  ## Remove the folder's container, also when its compose file is gone.
+  on_down() {
+    if [ -f "$PREVIEW_COMPOSE_FILE" ]; then dc down --remove-orphans >/dev/null 2>&1 || true; fi
+    docker ps -aq --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" 2>/dev/null \
+      | xargs -r docker rm -f >/dev/null 2>&1 || true
+  }
+}
+
+## Print the compose file of a folder preview: the runtime image in folder mode as the calling
+## user, the folder at /stills, bound to loopback on PREVIEW_PORT_1. Every value is a ${...}
+## interpolation of what folder_setup exports, so no path is ever quoted into YAML.
+folder_compose() {
+  cat <<'YAML'
+# Written by `preview stills serve`: the /mockup runtime in folder mode on one directory.
+services:
+  web:
+    image: ${PREVIEW_MOCKUP_IMAGE}
+    user: "${STILLS_USER}"
+    init: true
+    ports:
+      - "127.0.0.1:${PREVIEW_PORT_1}:80"
+    environment:
+      PREVIEW_ALLOWED_HOSTS: "${PREVIEW_ALLOWED_HOSTS:-}"
+      STILLS_DIR: /stills
+    volumes:
+      - "${STILLS_DIR}:/stills:${STILLS_MODE}"
+YAML
+}
+
+## True when compose project $1 has a running container.
+folder_running() { [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$1" 2>/dev/null || true)" ]; }
+
+## stills status: this folder's preview, then every folder served on this machine.
+folder_status() {
+  local dir root url left
+  plog "this folder: '$STILLS_DIR' -> ports $PREVIEW_BASE-$(( PREVIEW_BASE + 3 )), project '$PREVIEW_COMPOSE_PROJECT'"
+  if [ -d "$STATE_DIR" ]; then
+    url="$(cat "$STATE_DIR/url" 2>/dev/null || echo '(unknown)/')"
+    if folder_running "$PREVIEW_COMPOSE_PROJECT"; then plog "  up -> ${url}stills"; else plog "  docker: down"; fi
+    [ "$STILLS_MODE" = "rw" ] || plog "  read-only folder: remarks off"
+    if pid_alive "$STATE_DIR/watchdog.pid" && [ -f "$STATE_DIR/deadline" ]; then
+      left=$(( $(cat "$STATE_DIR/deadline") - $(date +%s) )); [ "$left" -lt 0 ] && left=0
+      plog "  auto-stop: in $(( left / 60 ))m $(( left % 60 ))s"
+    fi
+    if share_forwarder_exists; then plog "  shared: https://$(share_forwarder_label host)/"; fi
+  else
+    plog "  not served (run: preview stills serve $STILLS_DIR)"
+  fi
+  plog "every folder served on this machine:"
+  local any=0
+  for dir in "$STATE_ROOT"/*/; do
+    [ -d "$dir" ] || continue
+    any=1
+    dir="${dir%/}"
+    root="$(cat "$dir/root" 2>/dev/null || basename "$dir")"
+    url="$(cat "$dir/url" 2>/dev/null || echo '(starting)/')"
+    if folder_running "$PREVIEW_COMPOSE_PROJECT_PREFIX-$(basename "$dir")"; then
+      plog "  • $root  ${url}stills  [up]"
+    else
+      plog "  • $root  ${url}stills  [down]"
+    fi
+  done
+  [ "$any" -eq 1 ] || plog "  (none)"
+}
+
+## Dispatch `stills serve|stop|status|share|unshare [<dir>] [options]`: the one argument that is
+## not an option is the folder, default the working directory; options go to `share` only.
+cmd_stills_folder() {
+  local sub="$1" dir=""
+  local -a opts=()
+  shift
+  PREVIEW_SLUG="stills"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h|--help) stills_folder_usage; return 0 ;;
+      --hours) [ "$#" -ge 2 ] || { stills_folder_usage; return 2; }; opts+=("$1" "$2"); shift ;;
+      -*) opts+=("$1") ;;
+      *) [ -z "$dir" ] || { stills_folder_usage; return 2; }; dir="$1" ;;
+    esac
+    shift
+  done
+  if [ "$sub" != "share" ] && [ "${#opts[@]}" -gt 0 ]; then stills_folder_usage; return 2; fi
+  folder_setup "${dir:-.}"
+  case "$sub" in
+    serve)
+      if [ -d "$STATE_DIR" ] && folder_running "$PREVIEW_COMPOSE_PROJECT"; then
+        plog "already served: $(cat "$STATE_DIR/url" 2>/dev/null)stills"
+        return 0
+      fi
+      [ "$STILLS_MODE" = "rw" ] || pwarn "$STILLS_DIR is not writable: served read-only, remarks off"
+      cmd_start
+      printf '%s\n' "$STILLS_DIR" >"$STATE_DIR/root"
+      plog "review it at:   ${PREVIEW_URL}stills"
+      plog "agent listens:  preview review watch --dir $STILLS_DIR"
+      ;;
+    stop) cmd_stop ;;
+    status) folder_status ;;
+    share) cmd_share ${opts[@]+"${opts[@]}"} ;;
+    unshare) cmd_unshare ;;
+  esac
+}
+
+stills_folder_usage() {
+  cat >&2 <<'EOF'
+usage: preview stills serve|stop|status [<dir>]
+       preview stills share [<dir>] [--hours N] [--yes] | unshare [<dir>]
+       preview stills ls --dir <dir> | preview review ... --dir <dir>
+
+  serve    serve the folder <dir> (default .) for review as a preview of its own: Tailscale
+           URL, a hub card "<folder> stills" with the Review action, the auto-stop watchdog.
+           Images are the only requirement; the review goes to <dir>/.review/, created on
+           the first write. A folder this user cannot write is served read-only, remarks off.
+  stop     stop serving it
+  status   whether it is served, and every folder served on this machine
+  share    publish it on the internet behind a key, as 'preview share' does
+  unshare  retract its share
+
+The same folder always gets the same URL: its identity derives from its absolute path.
+EOF
+}
+
+## Run the review CLI on a folder: `stills ls` or a `review` command with `--dir <dir>` anywhere
+## among its arguments. The folder is mounted at /stills in a throwaway container of the runtime
+## image (the served folder's, when it is served), read-only when this user cannot write it, so
+## an agent can work with any folder, served or not.
+folder_review_cli() {
+  local dir="" image cid
+  local -a args=() env=()
+  PREVIEW_SLUG="stills"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --) args+=("$@"); break ;;
+      --dir) [ "$#" -ge 2 ] || die "--dir needs a directory"; dir="$2"; shift ;;
+      --dir=*) dir="${1#--dir=}" ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  [ -n "$dir" ] || die "--dir needs a directory"
+  case "${args[0]} ${args[1]:-}" in
+    "stills ls"|"review "?*) ;;
+    *) die "--dir goes with 'stills ls' and the 'review' commands; a folder's stills are its images" ;;
+  esac
+  folder_setup "$dir"
+  env=(-e "MOCKUP_HOST_DIR=$STILLS_DIR")
+  [ -z "${REVIEW_AUTHOR:-}" ] || env+=(-e "REVIEW_AUTHOR=$REVIEW_AUTHOR")
+  image="$PREVIEW_MOCKUP_IMAGE"
+  cid="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" 2>/dev/null | head -n1 || true)"
+  [ -z "$cid" ] || image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
+  exec docker run --rm -i --init --user "$STILLS_USER" "${env[@]}" -v "$STILLS_DIR:/stills:$STILLS_MODE" \
+    "$image" node /srv/review-cli.mjs --folder /stills "${args[@]}"
 }
 
 ## ── init: scaffold a project's preview files ────────────────────────────────
@@ -1448,7 +1719,8 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview share [--hours N] [--yes] | unshare | shares
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
-       preview stills {add|ls} ... | review {ls|show|reply|resolve|reopen|working|idle|watch} ...
+       preview stills {add|ls|export} ... | review {ls|show|reply|resolve|reopen|working|idle|watch} ...
+       preview stills {serve|stop|status|share|unshare} [<dir>]
        preview self-update
        preview --version
 
@@ -1462,10 +1734,13 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   unshare      retract this checkout's share
   shares       every share with its URL and time left, from any directory
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
-  stills ...   add a still revision to a variant (viewport + tags) of this mockup, or list its
-               stills and their variants; see 'preview stills --help'
+  stills ...   add a still revision to a variant (viewport + tags) of this mockup, list its
+               stills and their variants, or export them to a folder; see 'preview stills --help'
+  stills serve serve any folder of images (default .) for review as a preview of its own, and
+               stills stop|status|share|unshare [<dir>]; see 'preview stills serve --help'
   review ...   list, show and answer this mockup's review remarks, report the agent working or
-               idle, or watch for new remarks as they land, one line each; see 'preview review --help'
+               idle, or watch for new remarks as they land, one line each; with --dir <dir>, the
+               remarks of any folder of images; see 'preview review --help'
   self-update  replace this CLI with the newest release from GitHub
   --version    print the version this launcher was stamped with
 
