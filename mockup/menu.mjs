@@ -314,7 +314,7 @@ export function route(url, app) {
   if (pathname === "/" || pathname === "/index.html") return { menu: true };
   if (pathname === "/stills" || pathname === "/stills/") return { viewer: true };
   if (REV_IMAGE.test(pathname) && /%2B|%40/i.test(pathname)) {
-    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/g, "@")}${search}` };
+    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
   }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
   const slug = SLUG.exec(pathname);

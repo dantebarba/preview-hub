@@ -24,6 +24,7 @@ set -euo pipefail
 skill="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 root="$PWD"
 scratch="$root/.mockup"
+shot_usage="shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]"
 PREVIEW_ID="mockup-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
 export PREVIEW_ID
 
@@ -77,7 +78,7 @@ case "${1:-status}" in
     if [ "${KEEP:-0}" = "1" ]; then echo "stopped; kept $scratch"; else rm -rf "$scratch"; echo "stopped and removed $scratch"; fi
     ;;
   shot)
-    usage="usage: mockup.sh shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]"
+    usage="usage: mockup.sh $shot_usage"
     [ "$#" -ge 3 ] || { echo "$usage" >&2; exit 2; }
     page="$2" name="$3" title="" full=() tags=() viewports=() positional=()
     shift 3
@@ -110,8 +111,10 @@ case "${1:-status}" in
     port=$(( $(cat "$(state_dir)/base") + 1 ))
     cid="$(mockup_container "$port")"
     [ -n "$cid" ] || { echo "no mockup container on port $port; mockup.sh start first" >&2; exit 1; }
-    docker exec "$cid" test -f /srv/capture.mjs \
-      || { echo "this mockup runtime cannot shoot devices; run 'preview self-update', then mockup.sh stop and start" >&2; exit 1; }
+    docker exec "$cid" test -f /srv/capture.mjs || {
+      echo "this mockup runtime cannot shoot devices; run 'preview self-update', then mockup.sh stop and start" >&2
+      exit 1
+    }
     mkdir -p "$scratch/shots"
     i=0
     for v in "${viewports[@]}"; do
@@ -129,5 +132,5 @@ case "${1:-status}" in
       ( cd "$scratch" && preview "${add[@]}" )
     done
     ;;
-  *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]" >&2; exit 2 ;;
+  *) echo "usage: mockup.sh init|start [desc]|status|stop|$shot_usage" >&2; exit 2 ;;
 esac

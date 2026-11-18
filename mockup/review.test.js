@@ -35,9 +35,9 @@ import {
   threads,
   upgraded,
   variantKey,
-  WORKING_MS,
   working,
 } from "./review.mjs";
+import { WORKING_MS } from "./stills/state.js";
 
 const REVIEW = fileURLToPath(new URL("./review.mjs", import.meta.url));
 const HUMAN = { kind: "human", name: "dante" };

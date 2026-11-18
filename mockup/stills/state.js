@@ -215,7 +215,7 @@ export function applyWorking(on, event) {
   }
   if (event.type !== "reply" && event.type !== "idle") return false;
   const size = on.size;
-  if (event.thread) on.delete(`thread ${event.thread}`);
+  if (event.thread) on.delete(workingKey(event));
   else on.clear();
   return on.size !== size;
 }

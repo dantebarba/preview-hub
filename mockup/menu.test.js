@@ -153,7 +153,7 @@ test("route reserves /stills for the viewer, even over a page of that name", (t)
   });
 });
 
-test("reviewStills lists each still with its first variant's revisions, the reviewer's mark and the cursor", async (t) => {
+test("reviewStills lists each still with its first variant's revisions, the reviewer's mark, the cursor", async (t) => {
   const dir = scratch(t, { "shot.png": PNG });
   const file = path.join(dir, "shot.png");
   await addStill(dir, { file, name: "a", title: "First" });

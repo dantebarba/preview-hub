@@ -402,9 +402,9 @@ the owner; without `--as`, `stills ls` says whose marks hold.
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
 "working…" dots and the note on that conversation and its card, and pulses its mark (for a
-still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread ends it (a reviewer's does not), as
-does `preview review idle [thread]`; it expires 10 minutes after the last `working`, so an
-agent that died does not look busy.
+still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread
+ends it (a reviewer's does not), as does `preview review idle [thread]`; it expires 10 minutes
+after the last `working`, so an agent that died does not look busy.
 
 The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
 T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)

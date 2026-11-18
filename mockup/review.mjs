@@ -38,8 +38,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { applyThread, applyWorking, markOf, reviewerOf, viewportOf, workingAt } from "./stills/state.js";
 
-export { WORKING_MS } from "./stills/state.js";
-
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
 const FIELDS = {
@@ -59,7 +57,6 @@ const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
 const ID = /^[\w-]{1,64}$/;
 const SIZE = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/;
 const CUSTOM = /^([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(\+touch)?$/;
-const CUSTOM_KEY = /^custom-([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(-touch)?$/;
 const TAG = /^[a-z0-9][a-z0-9_.-]{0,31}$/;
 const KEY = /^[a-z0-9][\w.@-]{0,63}(\+[a-z0-9][\w.-]{0,31}){0,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
@@ -76,7 +73,7 @@ const LOCK_STALE_MS = 10000;
  * The viewport presets a variant is shot at, by name: CSS size, device pixel ratio, and
  * `mobile`, which means touch, a mobile user agent and a phone's viewport handling.
  */
-export const VIEWPORTS = {
+const VIEWPORTS = {
   mobile: { width: 390, height: 844, dpr: 3, mobile: true },
   "mobile-s": { width: 375, height: 812, dpr: 3, mobile: true },
   tablet: { width: 820, height: 1180, dpr: 2, mobile: true },
@@ -169,7 +166,7 @@ function sameDevice(a, b) {
 }
 
 /** The key of `viewport`: its preset's name, or `custom-<W>x<H>[@<dpr>][-touch]`. */
-export function viewportKey(viewport) {
+function viewportKey(viewport) {
   if (viewport.preset !== "custom") return viewport.preset;
   const dpr = viewport.dpr === 1 ? "" : `@${viewport.dpr}`;
   return `custom-${viewport.width}x${viewport.height}${dpr}${viewport.mobile ? "-touch" : ""}`;
@@ -202,9 +199,8 @@ function legacyViewport(size) {
 /** The viewport a variant key names, for a v2 variant stored without a readable one. */
 function keyViewport(key) {
   const head = viewportOf(key);
-  const m = CUSTOM_KEY.exec(head);
-  if (m) return parseViewport(`${m[1]}x${m[2]}${m[3] ? `@${m[3]}` : ""}${m[4] ? "+touch" : ""}`);
-  return Object.hasOwn(VIEWPORTS, head) ? parseViewport(head) : null;
+  const spec = head.startsWith("custom-") ? head.slice("custom-".length).replace(/-touch$/, "+touch") : head;
+  return (spec === head ? Object.hasOwn(VIEWPORTS, spec) : CUSTOM.test(spec)) ? parseViewport(spec) : null;
 }
 
 /** The revisions of `revs` a reader can use: `{ n, file, at }` with a number and a file. */
