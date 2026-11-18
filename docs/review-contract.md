@@ -135,6 +135,64 @@ its variants) rewrites that entry in v2 shape, `source.size` dropped and its old
 moved, as they are, into its variant; the other entries are left as they were. A new revision
 of the upgraded variant takes the next number and lands in `stills/<name>/<key>/<n>.png`.
 
+## Folder sources
+
+Any local directory of images is a stills source too, git or not: a folder such as
+`docs/mockups/<topic>/` on a mockup branch. The reference reader is
+[`mockup/source.mjs`](../mockup/source.mjs): `openSource(dir)` returns
+`{stills, groups, about?, notes, writable}`, `stills` in the manifest's shape above, so a
+`.mockup/` is just one more source.
+
+**Images are the only requirement.** Every `png`, `jpg`, `jpeg`, `webp` and `gif` under the
+folder is a still, in natural order of its name (`2` before `10`, `20` before `20b`), titled
+from it (`05-invite-user` is "05 invite user"). An image in a subfolder is named by its path,
+`admin/01-list.png` being `admin.01-list`. `.review/`, hidden entries and `node_modules` are
+skipped.
+
+Everything else is optional and only adds to that, highest priority first; each fills only
+what it knows and leaves the rest to the next:
+
+| The folder also has | It adds |
+| ------------------- | ------- |
+| `stills/manifest.json` | The stills, variants and revisions as declared: the folder is a scratch dir in the [layout](#layout) above, its log in `review/`. |
+| `stills.json`, `[{name, title, group?, file?}]` | Titles, order and groups. An entry finds its still by `file` (a path from the folder), else by `name`; with both, `name` renames the still of `file`. |
+| `README.md` (or `index.md`) | Order of appearance of the images it references (`![alt](x.png)`, `<img src>`, a link to an image), groups from the nearest `#`, `##` or `###` heading above each, titles from the text cells of its table row (less one the file name starts with, such as its number) or else its alt text, and the document itself as `about: {file, markdown}`, the viewer's About page. |
+| subfolders with images | Each subfolder is a group, only when nothing above gives groups. |
+| `name@<key>.png` | The variant `<key>` of the still `name`, such as `onboarding@mobile+dark.png`; `<key>` is a [variant key](#variant-keys), `web` or `WxH[@dpr]` for its viewport. A plain `name.png` is its `desktop` variant and its first. |
+
+`groups` is `[{title, stills: [name]}]` in the order of `stills`, a still in no group in the
+group titled `null`; it is empty when nothing gives groups. Stills a README or `stills.json`
+leaves out follow the ones it orders, in name order.
+
+**Nothing breaks the read.** A missing extra falls back silently. A broken or partial one is
+used for what it gives and its problem is a line of `notes`, such as `stills.json: line 3:
+Expected double-quoted property name`; so are a reference to an image that is not there
+(dropped), a `@` that is not a variant key (the image is its own still) and two images of one
+still and variant (the first kept).
+
+**Revisions by content hash.** Without a manifest, a still's revision is its content. The
+review of the folder lives in `<dir>/.review/`, created by the first write (a remark, a
+reviewed mark, keeping the revisions) and never by reading; commit it or ignore it:
+
+```
+.review/
+  events.jsonl                       the event log, as below
+  .lock                              held while an event is being appended
+  annotated/<id>.png                 thread <id>'s still with its mark drawn
+  revs.json                          {name: {key: [{n, hash, ext, size, mtimeMs, at}]}}, hash a SHA-256
+  revs.lock                          held while revisions are being kept
+  revs/<name>/<key>/<n>.<ext>        the bytes of every revision kept
+```
+
+The first write keeps every image as rev 1. From then on, a read that finds an image whose
+content differs from its last kept revision makes it rev N+1 and keeps its bytes, so a remark
+on rev N still points at the pixels it was made on and before/after works. A revision's
+`file` is the image in the folder for the current one and `.review/revs/...` for the older
+ones: the folder itself only ever holds the current images. Until `.review/` exists every
+image is rev 1, and a change replaces it.
+
+A folder that cannot be written reads fine with `writable: false`; writing its review fails.
+
 ## Events
 
 `review/events.jsonl` is an append-only log, one JSON object per line, each terminated by
