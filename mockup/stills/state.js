@@ -22,6 +22,10 @@
  * A folder source may group its stills: `sections` gives every still its `group` and lists the
  * groups as runs of the stills, which the strip heads and the group picker jumps between. Its
  * notes, what an optional file of the folder got wrong, read as one line with `notesLine`.
+ *
+ * A variant has a device class, `classOf` its key: Mobile, Tablet or Desktop, a preset by its
+ * name and a custom size by its width. The switcher lists the classes and a pick is sticky by
+ * class and tags (see `variantFor`); the sizes of a class are a detail of a still, `sizesOf`.
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -50,6 +54,10 @@ export const READ_ONLY = "read-only folder: remarks off";
 export const WORKING_MS = 10 * 60 * 1000;
 
 const PRESETS = { mobile: "Mobile", "mobile-s": "Mobile S", tablet: "Tablet", desktop: "Desktop" };
+const CLASSES = { mobile: "Mobile", tablet: "Tablet", desktop: "Desktop" };
+const PRESET_CLASS = { mobile: "mobile", "mobile-s": "mobile", tablet: "tablet", desktop: "desktop" };
+const TABLET_FROM = 600;
+const DESKTOP_FROM = 1100;
 
 /** The value `o` holds under `key` itself, never one it inherits. */
 function own(o, key) {
@@ -100,15 +108,60 @@ export function viewportLabel(viewport) {
   return own(PRESETS, viewport) ?? viewport.replace(/^custom-/, "").replace("x", "×").replace("-touch", " touch");
 }
 
+/**
+ * The device class of the variant key `key`, "mobile", "tablet" or "desktop": a preset's own
+ * (`mobile-s` is a mobile), and a custom size's by its width, a mobile under 600, a tablet
+ * under 1100 and else a desktop, as is a viewport part that names no size.
+ */
+export function classOf(key) {
+  const viewport = viewportOf(key);
+  const width = Number(/^custom-(\d+)x/.exec(viewport)?.[1]);
+  if (Object.hasOwn(PRESET_CLASS, viewport)) return PRESET_CLASS[viewport];
+  if (width < TABLET_FROM) return "mobile";
+  return width < DESKTOP_FROM ? "tablet" : "desktop";
+}
+
+/** What a switcher calls the device class `name`. */
+export function classLabel(name) {
+  return CLASSES[name];
+}
+
+/** True when the variant keys `a` and `b` are the same choice of a switcher: one device class, the same tags. */
+export function sameChoice(a, b) {
+  return classOf(a) === classOf(b) && tagsOf(a) === tagsOf(b);
+}
+
+/**
+ * The size of `variant` as a label: a custom viewport's from its key (`1440×1250`), a preset's
+ * from its stored viewport (`390×844`), after its name with `named` (`Mobile S · 375×812`), or
+ * just its name when no size is stored.
+ */
+export function sizeLabel(variant, named) {
+  const viewport = viewportOf(variant.key);
+  const name = viewportLabel(viewport);
+  const { width, height } = variant.viewport ?? {};
+  if (!Object.hasOwn(PRESETS, viewport) || !width || !height) return name;
+  return named ? `${name} · ${width}×${height}` : `${width}×${height}`;
+}
+
+/**
+ * The variants of `still` a size picker switches between while its variant `key` shows: those
+ * of the same device class with the same tags, `key`'s own among them.
+ */
+export function sizesOf(still, key) {
+  return still.variants.filter((v) => sameChoice(v.key, key));
+}
+
 /** What a switcher calls the tags part `tags`: the tags, or "default" for none. */
 export function tagsLabel(tags) {
   return tags || "default";
 }
 
 /**
- * What the stills can be switched between: `{ viewports, tags }`, the viewport parts and the
- * tags parts of their variants' keys, each once; the presets first, in their order, then the
- * custom viewports, and the tags as first met.
+ * What the stills can be switched between: `{ classes, viewports, tags }`, the device classes
+ * of their variants, mobile then tablet then desktop, and the viewport parts and the tags parts
+ * of their keys, each once; the presets first, in their order, then the custom viewports, and
+ * the tags as first met.
  */
 export function choices(stills) {
   const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
@@ -116,28 +169,43 @@ export function choices(stills) {
   const rank = (v) => (order.includes(v) ? order.indexOf(v) : order.length);
   const viewports = [...new Set(keys.map(viewportOf))];
   viewports.sort((a, b) => rank(a) - rank(b));
-  return { viewports, tags: [...new Set(keys.map(tagsOf))] };
+  const found = new Set(keys.map(classOf));
+  return { classes: Object.keys(CLASSES).filter((c) => found.has(c)), viewports, tags: [...new Set(keys.map(tagsOf))] };
 }
 
 /**
- * The pick a switcher makes of `key`, a variant key put together from a viewport and tags:
- * `key` when a still of `stills` has that variant, else the first variant `fits` takes, so
- * the pick is always one that exists; null when there is none.
+ * The pick a switcher makes among the variant keys of `stills`, in their order: the first key
+ * the first test of `wants` takes, else the first one the next test takes, and so on, so the
+ * pick is always one that exists; null when no test takes any.
  */
-export function pickOf(stills, key, fits) {
+export function pickOf(stills, wants) {
   const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
-  return keys.includes(key) ? key : (keys.find(fits) ?? null);
+  for (const fits of wants) {
+    const key = keys.find(fits);
+    if (key !== undefined) return key;
+  }
+  return null;
 }
 
 /**
- * The variant of `still` the pick `pick`, a variant key, lands on: that variant, else the
- * first one at the same viewport, else its first; its first as well when nothing is picked.
+ * The variant key of `stills` a link's `key` names: that key, or the custom viewport's one it
+ * gives by its size alone, `1440x1250` for `custom-1440x1250`; null when no still has it.
+ */
+export function linkedKey(stills, key) {
+  return pickOf(stills, [(k) => k === key, (k) => k === `custom-${key}`]);
+}
+
+/**
+ * The variant of `still` the pick `pick`, a variant key, lands on: that variant, else its first
+ * one of the same device class with the same tags, else its first of that class, else its
+ * first; its first as well when nothing is picked.
  */
 export function variantFor(still, pick) {
   const { variants } = still;
   if (!pick) return variants[0];
-  const same = variants.find((v) => viewportOf(v.key) === viewportOf(pick));
-  return variants.find((v) => v.key === pick) ?? same ?? variants[0];
+  const same = variants.filter((v) => classOf(v.key) === classOf(pick));
+  const exact = variants.find((v) => v.key === pick);
+  return exact ?? same.find((v) => tagsOf(v.key) === tagsOf(pick)) ?? same[0] ?? variants[0];
 }
 
 /**

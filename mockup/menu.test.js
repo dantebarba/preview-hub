@@ -29,26 +29,32 @@ import {
   chip,
   choices,
   choose,
+  classLabel,
+  classOf,
   counts,
   cropOf,
   edge,
   fitted,
   keyOf,
   lastMessage,
+  linkedKey,
   markOf,
   MAX_ZOOM,
   moved,
   opposite,
+  pickOf,
   pin,
   progress,
   region,
   revealed,
+  sameChoice,
+  sizeLabel,
+  sizesOf,
   step,
   tagsLabel,
   tagsOf,
   title,
   unread,
-  pickOf,
   variantFor,
   viewOn,
   viewportLabel,
@@ -285,21 +291,114 @@ test("a pick is sticky: a still without that variant shows the same viewport, el
   assert.deepEqual(shown("mobile+dark"), ["mobile+dark", "mobile+light", "desktop"]);
   assert.deepEqual(shown("tablet"), ["desktop", "mobile+light", "desktop"]);
   assert.deepEqual(choices(stills), {
+    classes: ["mobile", "desktop"],
     viewports: ["mobile", "desktop", "custom-360x740@2-touch"],
     tags: ["", "light", "dark"],
   });
-  const picked = (key, fits) => pickOf(stills, key, fits);
-  assert.equal(picked("mobile+dark", () => false), "mobile+dark");
-  assert.equal(picked("desktop+dark", (k) => viewportOf(k) === "desktop"), "desktop");
-  assert.equal(picked("custom-360x740@2-touch+dark", (k) => tagsOf(k) === "dark"), "mobile+dark");
-  assert.equal(picked("typo", () => false), null);
-  assert.deepEqual(choices([stills[2]]), { viewports: ["desktop"], tags: [""] });
+  const is = (key) => (k) => k === key;
+  assert.equal(pickOf(stills, [is("mobile+dark")]), "mobile+dark");
+  assert.equal(pickOf(stills, [is("desktop+dark"), (k) => viewportOf(k) === "desktop"]), "desktop");
+  assert.equal(pickOf(stills, [is("custom-360x740@2-touch+dark"), (k) => tagsOf(k) === "dark"]), "mobile+dark");
+  assert.equal(pickOf([stills[1], ...stills], [(k) => classOf(k) === "mobile"]), "mobile+light");
+  assert.equal(pickOf(stills, [is("typo")]), null);
+  assert.deepEqual(choices([stills[2]]), { classes: ["desktop"], viewports: ["desktop"], tags: [""] });
   const parts = [viewportOf("mobile+dark+rtl"), tagsOf("mobile+dark+rtl"), tagsOf("desktop")];
   assert.deepEqual(parts, ["mobile", "dark+rtl", ""]);
   assert.deepEqual([keyOf("mobile", "dark"), keyOf("desktop", "")], ["mobile+dark", "desktop"]);
   const labels = ["mobile-s", "desktop", "custom-360x740@2-touch", "constructor"].map(viewportLabel);
   assert.deepEqual(labels, ["Mobile S", "Desktop", "360×740@2 touch", "constructor"]);
   assert.deepEqual([tagsLabel(""), tagsLabel("dark+rtl")], ["default", "dark+rtl"]);
+});
+
+test("a variant's device class is its preset's, and a custom size's by its width", () => {
+  const classes = (keys) => keys.map(classOf);
+  assert.deepEqual(classes(["mobile", "mobile-s", "tablet", "desktop"]), ["mobile", "mobile", "tablet", "desktop"]);
+  assert.deepEqual(classes(["mobile-s+dark+rtl", "custom-360x740@2-touch+dark"]), ["mobile", "mobile"]);
+  assert.deepEqual(classes(["custom-599x900", "custom-600x900", "custom-1099x900"]), ["mobile", "tablet", "tablet"]);
+  assert.deepEqual(classes(["custom-1100x900", "custom-1440x1250@2"]), ["desktop", "desktop"]);
+  assert.deepEqual(classes(["constructor", "custom-wide", ""]), ["desktop", "desktop", "desktop"]);
+  assert.deepEqual(["mobile", "tablet", "desktop"].map(classLabel), ["Mobile", "Tablet", "Desktop"]);
+  assert.equal(sameChoice("custom-1440x1250+dark", "desktop+dark"), true);
+  assert.equal(sameChoice("custom-1440x1250+dark", "desktop"), false);
+  assert.equal(sameChoice("mobile-s", "tablet"), false);
+});
+
+test("the switcher lists device classes, not sizes: one mobile preset and 13 desktop heights are two", () => {
+  const heights = Array.from({ length: 13 }, (_, i) => `custom-1440x${1000 + 50 * i}`);
+  const stills = heights.map((key, i) => variantStill(`s${i}`, ["mobile", key]));
+  const { classes, viewports } = choices(stills);
+  assert.deepEqual(classes, ["mobile", "desktop"]);
+  assert.equal(viewports.length, 14);
+  const mixed = [variantStill("a", ["desktop", "custom-800x600"]), variantStill("b", ["custom-320x480"])];
+  assert.deepEqual(choices(mixed).classes, ["mobile", "tablet", "desktop"]);
+  assert.deepEqual(choices(heights.map((key, i) => variantStill(`s${i}`, [key]))).classes, ["desktop"]);
+});
+
+test("a pick is sticky by class and tags, and by size where the next still has it", () => {
+  const stills = [
+    variantStill("a", ["mobile", "custom-1440x1250", "custom-1440x1250+dark"]),
+    variantStill("b", ["mobile", "custom-1440x1000+dark", "custom-1440x1000", "custom-1440x1100"]),
+    variantStill("c", ["mobile-s", "mobile", "custom-1440x1250"]),
+    variantStill("d", ["tablet", "custom-1440x900+dark"]),
+    variantStill("e", ["tablet"]),
+  ];
+  const shown = (pick) => stills.map((s) => variantFor(s, pick).key);
+  assert.deepEqual(shown("custom-1440x1250"), [
+    "custom-1440x1250",
+    "custom-1440x1000",
+    "custom-1440x1250",
+    "custom-1440x900+dark",
+    "tablet",
+  ]);
+  assert.deepEqual(shown("custom-1440x1250+dark"), [
+    "custom-1440x1250+dark",
+    "custom-1440x1000+dark",
+    "custom-1440x1250",
+    "custom-1440x900+dark",
+    "tablet",
+  ]);
+  assert.deepEqual(shown("mobile"), ["mobile", "mobile", "mobile", "tablet", "tablet"]);
+  assert.deepEqual(shown("mobile-s"), ["mobile", "mobile", "mobile-s", "tablet", "tablet"]);
+  choose(stills, "custom-1440x1250", {}, "dante");
+  assert.deepEqual(counts(stills), { reviewed: 0, total: 5 });
+  const marks = { dante: { b: { "custom-1440x1000": 1, mobile: 1 }, c: { mobile: 1 } } };
+  choose(stills, "custom-1440x1250", marks, "dante");
+  assert.deepEqual(counts(stills), { reviewed: 1, total: 5 });
+  choose(stills, "mobile", marks, "dante");
+  assert.deepEqual(counts(stills), { reviewed: 2, total: 5 });
+});
+
+test("a still's sizes are its variants of the shown class and tags, labelled by size", () => {
+  const sized = (key, width, height) => ({ key, viewport: { width, height }, revs: [] });
+  const still = {
+    name: "a",
+    variants: [
+      sized("mobile", 390, 844),
+      sized("mobile-s", 375, 812),
+      sized("mobile+dark", 390, 844),
+      sized("custom-360x740@2-touch", 360, 740),
+      sized("custom-1440x1250", 1440, 1250),
+    ],
+  };
+  const keys = (key) => sizesOf(still, key).map((v) => v.key);
+  assert.deepEqual(keys("mobile-s"), ["mobile", "mobile-s", "custom-360x740@2-touch"]);
+  assert.deepEqual(keys("mobile+dark"), ["mobile+dark"]);
+  assert.deepEqual(keys("custom-1440x1250"), ["custom-1440x1250"]);
+  const labels = still.variants.map((v) => sizeLabel(v));
+  assert.deepEqual(labels, ["390×844", "375×812", "390×844", "360×740@2 touch", "1440×1250"]);
+  assert.equal(sizeLabel(still.variants[1], true), "Mobile S · 375×812");
+  assert.equal(sizeLabel(still.variants[4], true), "1440×1250");
+  assert.equal(sizeLabel({ key: "desktop+dark" }), "Desktop");
+});
+
+test("a link's key names its variant, a custom one by its size alone too", () => {
+  const stills = [variantStill("a", ["mobile", "custom-1440x1250", "custom-1440x1250+dark"])];
+  assert.equal(linkedKey(stills, "custom-1440x1250"), "custom-1440x1250");
+  assert.equal(linkedKey(stills, "1440x1250"), "custom-1440x1250");
+  assert.equal(linkedKey(stills, "1440x1250+dark"), "custom-1440x1250+dark");
+  assert.equal(linkedKey(stills, "mobile"), "mobile");
+  assert.equal(linkedKey(stills, "1440x1000"), null);
+  assert.equal(linkedKey(stills, "tablet"), null);
 });
 
 test("applyWorking folds the agent's working states as the store does, ended by its reply or idle", async (t) => {
