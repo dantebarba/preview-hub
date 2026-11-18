@@ -176,7 +176,7 @@ function reviewShow({ dir, io }, [id], { json }) {
   io.out(`thread  ${thread.id}  ${thread.status}`);
   io.out(`on      ${target(thread)}`);
   if (files.image) io.out(`image   ${files.image}`);
-  const notDrawn = "(none: the viewer could not draw it; read image at the anchor above)";
+  const notDrawn = "(none: not written yet, or the viewer could not draw it; read image at the anchor above)";
   if (files.annotated || thread.anchor) io.out(`marked  ${files.annotated ?? notDrawn}`);
   for (const e of [thread, ...thread.replies]) {
     io.out("");

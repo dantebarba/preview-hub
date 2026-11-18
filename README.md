@@ -353,7 +353,7 @@ the running container or in a throwaway one, so they work with the preview
 stopped and need only `docker` on the host.
 
 ```sh
-preview stills add shots/05-invite-user.png --name 05-invite-user \
+preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
   --title "Invite a user" --source "/invite?v=b" --size 390x844   # rev 1, then 2, ...
 preview stills ls                     # each still's latest rev, reviewed or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
