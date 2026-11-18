@@ -11,11 +11,13 @@
     <a id="menu" href="/" aria-label="Back to the menu" title="Back to the menu">☰</a>
     <button id="prev" aria-label="Previous still" title="Previous still (←)">←</button>
     <button id="next" aria-label="Next still" title="Next still (→)">→</button>
-    <b id="title"></b>
+    <span id="name"><b id="title"></b><span id="group" hidden></span></span>
     <span id="flag" hidden>changed since reviewed</span>
+    <span id="revn" hidden></span>
     <button id="variant" title="The variant on screen" hidden></button>
     <span id="busy" hidden></span>
     <span id="count"></span>
+    <button id="about" class="about" title="What these stills are about" hidden>About</button>
     <button id="place" aria-label="All the stills" aria-expanded="false" hidden></button>
     <label id="mark" title="Mark this still reviewed (v)">
       <input type="checkbox" id="viewed"> <span>Reviewed</span>
@@ -25,6 +27,7 @@
     <span id="viewports" class="seg" role="group" aria-label="Viewport" hidden></span>
     <span id="tags" class="seg" role="group" aria-label="Tags" hidden></span>
     <span id="fallback" hidden></span>
+    <label id="groups" hidden>group <select id="group-pick" aria-label="Group"></select></label>
     <label id="revs" hidden>rev <select id="rev" aria-label="Revision"></select></label>
     <button id="compare" hidden aria-pressed="false" title="Flip to the previous revision and back (b)">before / after</button>
     <span id="shown"></span>
@@ -33,10 +36,13 @@
     <span id="others" hidden></span>
     <label id="filter"><input type="checkbox" id="all"> show reviewed</label>
     <a id="open" target="_blank" rel="noopener">open full size</a>
+    <button id="about-more" class="about" hidden>About</button>
     <button id="layout" title="Switch between the phone and the desktop layout, remembered on this device"></button>
   </div>
   <p id="hint" hidden>Drag a box on the still, or tap it for a pin.</p>
   <p id="error" role="alert" hidden></p>
+  <p id="readonly" hidden>read-only folder: remarks off</p>
+  <p id="notes" role="status" hidden><span id="notes-text"></span><button id="notes-close" aria-label="Dismiss">×</button></p>
   <div id="work">
     <main>
       <div id="stage">
@@ -102,6 +108,15 @@
         aria-label="Your name" placeholder="Your name">
       <button id="continue" class="go" disabled>Continue</button>
     </form>
+  </div>
+  <div id="readme" hidden>
+    <section id="readme-box" role="dialog" aria-modal="true" aria-labelledby="readme-title">
+      <div id="readme-head">
+        <b id="readme-title">About</b>
+        <button id="readme-close" aria-label="Close">×</button>
+      </div>
+      <article id="readme-body" class="md"></article>
+    </section>
   </div>
   <div id="toast" role="status" hidden><span id="toast-text"></span><button id="undo">Undo</button></div>
   <script type="module" src="/_review/viewer.js"></script>
