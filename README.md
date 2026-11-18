@@ -378,11 +378,13 @@ mobile user agent):
 | `desktop` (`web`) | 1440×900 | 1 | mouse |
 
 Tags are free labels (`dark`, `light`, `rtl`, `empty`, `logged-out`); `dark` and `light` set
-`prefers-color-scheme` when the still is shot. The variant's key is the viewport and its tags,
-sorted: `--viewport mobile --tag dark` is `mobile+dark`. `--full-page` records that the whole
-document was captured. The viewer shows a viewport switcher and a row of tag chips only when
-the stills have more than one of either; the choice sticks across stills and stays in the URL
-(`/stills#05-invite-user@mobile+dark`). Revisions, remarks and reviewed marks are per variant.
+`prefers-color-scheme` when the still is shot, so they go in separate shots, never together.
+The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag dark` is
+`mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
+`--full-page` records that the whole document was captured. The viewer shows a viewport
+switcher and a row of tag chips only when the stills have more than one of either; the choice
+sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`). Revisions,
+remarks and reviewed marks are per variant.
 
 **Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
 passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views
@@ -396,9 +398,10 @@ their own reviewed marks, so a guest's marks hide nothing from the owner; withou
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
-"working…" dots on that conversation and its card, with the note. A `reply` on the thread
-ends it, as does `preview review idle [thread]`; it expires 10 minutes after the last
-`working`, so an agent that died does not look busy.
+"working…" dots on that conversation and its card (on a still's top bar for one with no
+remark), with the note. The agent's `reply` on the thread ends it (a reviewer's does not), as
+does `preview review idle [thread]`; it expires 10 minutes after the last `working`, so an
+agent that died does not look busy.
 
 The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
 T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)

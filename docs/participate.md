@@ -225,9 +225,10 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   the same viewport, else its first variant. Revisions, remarks, marks and the reviewed mark
   are per variant, and the reviewed count is the viewer's own. While the agent reports
   `working`, "working…" dots and its note show on that conversation and its card and the mark
-  pulses; a reply, an `idle` or ten minutes clear them.
+  pulses; the agent's reply, an `idle` or ten minutes clear them.
   Every write is signed: over the tailnet as the user in the `Tailscale-User-Name` and
-  `Tailscale-User-Login` headers `tailscale serve` adds, `via: "tailnet"`, never asking. A guest on a share link (no such headers) views without being asked; their first write
+  `Tailscale-User-Login` headers `tailscale serve` adds, `via: "tailnet"`, never asking. A
+  guest on a share link (no such headers) views without being asked; their first write
   opens a "What's your name?" sheet (a bottom sheet on a phone, a small dialog on a desktop),
   then finishes the write. Cancel keeps the draft; the name is kept per browser and "as Ana"
   beside Post changes it. Guests remark, reply and mark their own reviewed, and their events
@@ -235,8 +236,9 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   the viewer hides them from a guest.
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
-  `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
-  `{rev, viewed, reviewed, changed}`; `GET /_review/threads` is `{threads}`;
+  `{stills: [{name, title, source, variants, revs, mark}], cursor}`, `revs` being the first
+  variant's and `mark` `{rev, viewed, reviewed, changed, variants}`, the reviewer's own;
+  `GET /_review/threads` is `{threads}`;
   `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
   `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
   every new one within about a second, plus an event named `stills` when the stills change;

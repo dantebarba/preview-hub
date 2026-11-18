@@ -73,10 +73,11 @@ desktop --title "B, sheet open"` adds the live page as a still, one **variant** 
 `--viewport`; the same name and variant again makes its next revision. Viewports are the
 presets `mobile` (390×844, the default), `mobile-s` (375×812, iPhone mini), `tablet`,
 `desktop`, or `WxH[@dpr][+touch]`; each shot is a real device (pixel ratio, touch, mobile UA).
-Shoot the smallest matrix that covers the change: the viewports it affects; `--tag dark`
-and `--tag light` (one shot each) only when it touches both themes; free tags (`--tag empty`)
-for other states; `--full-page` for screens that scroll, never a guessed height. Read the PNGs
-it names to check nothing is clipped. The viewer is `/stills`; never write a stills page.
+Shoot the smallest matrix that covers the change: the viewports it affects; a `--tag dark`
+call and a separate `--tag light` call (never both in one) only when it touches both themes;
+free tags (`--tag empty`) for other states; `--full-page` for screens that scroll, never a
+guessed height. Read the PNGs it names to check nothing is clipped. The viewer is `/stills`;
+never write a stills page.
 
 ## 6. Report, listen, answer
 
@@ -90,11 +91,11 @@ missed. Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05
 [mobile+dark] r1 box ... Ana (guest): "..."`); skip the rest. For each: `preview review
 working <id> --note "<what>"` first, so the reviewer sees you on it; `preview review show
 <id>` and Read its `marked` PNG (else `image`); fix the page; re-shoot that still, same name,
-same variant (`mobile+dark` is `--viewport mobile --tag dark`; path, `fullPage` and tags are in
-`preview stills ls --json`), so the viewer flags it "changed since reviewed"; `preview review
-reply <id> "Ana, <what changed>"`, by the reviewer's name, which ends working (`preview review
-idle` if you stop without replying). Resolving is the human's. After a restart, `watch --since
-<last seq>`.
+same variant (`mobile+dark` is `--viewport mobile --tag dark`, `custom-390x700` is `--viewport
+390x700`; path, viewport, `fullPage` and tags are in `preview stills ls --json`), so the
+viewer flags it "changed since reviewed"; `preview review reply <id> "Ana, <what changed>"`,
+by the reviewer's name, which ends working (`preview review idle` if you stop without
+replying). Resolving is the human's. After a restart, `watch --since <last seq>`.
 
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
 `.mockup/`, remarks included (`KEEP=1` keeps it); `git status` then shows nothing from the

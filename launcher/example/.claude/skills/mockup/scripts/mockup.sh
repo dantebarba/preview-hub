@@ -15,10 +15,10 @@
 #                                         that variant of <name>. V is mobile (default), mobile-s,
 #                                         tablet, desktop/web or WxH[@dpr][+touch]; each
 #                                         --viewport is one shot. T is a free tag added to every
-#                                         shot's variant; dark and light set the colour scheme.
-#                                         --full-page shoots the whole document. The old
-#                                         positional form `shot <path> <name> [WxH] [title]`
-#                                         still works.
+#                                         shot's variant; dark and light set the colour scheme
+#                                         and go in separate calls. --full-page shoots the
+#                                         whole document. The old positional form
+#                                         `shot <path> <name> [WxH] [title]` still works.
 set -euo pipefail
 
 skill="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
