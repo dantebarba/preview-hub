@@ -14,6 +14,10 @@
  * The runtime and the `preview` CLI both write here, so every write takes a lock file next to
  * what it changes (`stills/.lock`, `review/.lock`). `docs/review-contract.md` is the contract:
  * a reader needs nothing else.
+ *
+ * Every function that reads or writes the review takes `dir` as that scratch dir or as a folder
+ * source, the handle `folder` of `source.mjs` returns for any directory of images: its stills
+ * come from the folder and its log, locks and annotated stills live in `<folder>/.review/`.
  */
 
 import { randomBytes } from "node:crypto";
@@ -88,13 +92,15 @@ export const MANIFEST_FILE = "stills/manifest.json";
 /** The event log, relative to the scratch dir. */
 export const EVENTS_FILE = "review/events.jsonl";
 
-/** Paths of the store inside the scratch dir `dir`. */
+/** Paths of the store inside the scratch dir `dir`, or the paths a folder source gives. */
 function paths(dir) {
+  if (typeof dir !== "string") return dir.paths;
   return {
     manifest: path.join(dir, MANIFEST_FILE),
     stillsLock: path.join(dir, "stills", ".lock"),
     events: path.join(dir, EVENTS_FILE),
     eventsLock: path.join(dir, "review", ".lock"),
+    annotated: path.join(dir, "review", "annotated"),
   };
 }
 
@@ -119,7 +125,7 @@ function shape(o) {
 }
 
 /** A fresh name next to `file` with the suffix `ext`, private to this writer. */
-function sideFile(file, ext) {
+export function sideFile(file, ext) {
   return `${file}.${process.pid}.${randomBytes(4).toString("hex")}.${ext}`;
 }
 
@@ -197,7 +203,7 @@ function legacyViewport(size) {
 }
 
 /** The viewport a variant key names, for a v2 variant stored without a readable one. */
-function keyViewport(key) {
+export function keyViewport(key) {
   const head = viewportOf(key);
   const spec = head.startsWith("custom-") ? head.slice("custom-".length).replace(/-touch$/, "+touch") : head;
   return (spec === head ? Object.hasOwn(VIEWPORTS, spec) : CUSTOM.test(spec)) ? parseViewport(spec) : null;
@@ -347,7 +353,7 @@ function clearStale(file) {
  * only while it is still the one this call created. A lock older than LOCK_STALE_MS is left by
  * a writer that died and is taken over.
  */
-async function withLock(file, fn) {
+export async function withLock(file, fn) {
   mkdirSync(path.dirname(file), { recursive: true });
   const deadline = Date.now() + LOCK_WAIT_MS;
   let ino;
@@ -394,9 +400,11 @@ function readManifest(dir) {
 
 /**
  * The stills of `dir`, as listed in `stills/manifest.json`, each in v2 shape (see `upgraded`)
- * whatever shape it is stored in; entries without a name are left out.
+ * whatever shape it is stored in; entries without a name are left out. A folder source gives
+ * its own.
  */
 export function stills(dir) {
+  if (typeof dir !== "string") return dir.stills();
   return readManifest(dir).map(upgraded).filter(Boolean);
 }
 
@@ -474,7 +482,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
  * file's path.
  */
 export function storeAnnotated(dir, id, png) {
-  const file = path.join(dir, annotatedFile(id));
+  const file = path.join(paths(dir).annotated, `${id}.png`);
   const partial = sideFile(file, "tmp");
   mkdirSync(path.dirname(file), { recursive: true });
   try {
@@ -557,11 +565,13 @@ export function revisions(dir) {
  * the contract). Validates it, and that its thread, still and revision exist; assigns `seq`
  * (one past the log's last), `id` and `at`; and appends it as one line with a single write on
  * an `O_APPEND` descriptor, under the log's lock. Returns the stored event; throws on an
- * invalid one.
+ * invalid one. A folder source first keeps the revisions of its images, the first write
+ * creating its `.review/`.
  */
 export async function appendEvent(dir, event) {
   const problem = eventProblem(event, false);
   if (problem) throw new Error(problem);
+  if (typeof dir !== "string") await dir.keep();
   const { events: file, eventsLock } = paths(dir);
   return withLock(eventsLock, () => {
     const { events } = readEvents(dir);
