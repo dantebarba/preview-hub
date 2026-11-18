@@ -7,13 +7,16 @@
  * stills, skipping the reviewed ones unless "show reviewed" is on; `v` toggles the reviewed
  * mark and `b` flips between a revision and the one before it. The hash keeps the position.
  *
- * A still has variants, a viewport with tags. A viewport switcher and a row of tags show when
- * the stills have more than one of either; the pick is kept across stills and in the hash,
- * `#<name>@<key>`, and a still without that variant shows the one at the same viewport, else its
- * first, with a note. Revisions, remarks and the reviewed mark are the shown variant's, and the
- * count is of the marks of whoever is looking; the other reviewers' progress has a line. The
- * desktop layout shows a still no wider than its viewport, so one shot at 3x is not three times
- * the size.
+ * A still has variants, a viewport with tags. A viewport is of a device class, Mobile, Tablet or
+ * Desktop: a switcher of the classes and a row of tags show when the stills have more than one
+ * of either, and the size of the variant on screen is a muted label next to them, or a size
+ * picker when the still has several of that class and tags. The pick is kept across stills by
+ * class and tags, and by size where the next still has it; a still without that class and tags
+ * shows its first of the class, else its first, with a note. The hash, `#<name>@<key>`, names
+ * the variant on screen. Revisions, remarks and the reviewed mark are the shown variant's, and
+ * the count is of the marks of whoever is looking; the other reviewers' progress has a line.
+ * The desktop layout shows a still no wider than its viewport, so one shot at 3x is not three
+ * times the size.
  *
  * Who is looking is the server's to say: a tailnet user has a name, a guest is asked for one,
  * by the name sheet, on the first write, which then goes on by itself, or is dropped with its
@@ -72,6 +75,8 @@ import {
   chip,
   choices,
   choose,
+  classLabel,
+  classOf,
   counts,
   cropOf,
   edge,
@@ -79,6 +84,7 @@ import {
   fitted,
   keyOf,
   lastMessage,
+  linkedKey,
   MAX_NAME,
   moved,
   notesLine,
@@ -90,16 +96,18 @@ import {
   region,
   revealed,
   reviewerOf,
+  sameChoice,
   sectionAt,
   sections,
   sectionStart,
+  sizeLabel,
+  sizesOf,
   step,
   tagsLabel,
   tagsOf,
   title,
   unread,
   viewOn,
-  viewportLabel,
   viewportOf,
   workingAt,
   workingKey,
@@ -733,22 +741,36 @@ function fillSwitcher(group, values, current, label, pick) {
 }
 
 /**
- * Draw the switchers for the still `s`: its variant's viewport and tags pressed, the chip of
- * the mobile top bar, and the note that says which variant shows when the pick is not one of
- * this still's. A switch to a viewport and tags no still was shot at together picks the first
- * variant at what was switched to.
+ * Draw the switchers for the still `s`: its variant's device class and tags pressed, its size
+ * as a label, or as a picker when the still has several of that class and tags, the chip of
+ * the mobile top bar, and the note that says which variant shows when the still has none of
+ * the picked class and tags. A switch prefers a variant of this still, and one to a class and
+ * tags no still was shot at together picks the first variant at what was switched to.
  */
 function renderSwitchers(s) {
-  const { viewports, tags } = choices(state.stills);
+  const { classes, viewports, tags } = choices(state.stills);
   const { key } = s.variant;
   const wanted = state.pick ?? key;
-  const fell = key !== wanted;
-  const toViewport = (v) => setPick(pickOf(state.stills, keyOf(v, tagsOf(wanted)), (k) => viewportOf(k) === v));
-  const toTags = (t) => setPick(pickOf(state.stills, keyOf(viewportOf(wanted), t), (k) => tagsOf(k) === t));
-  fillSwitcher(el("viewports"), viewports, viewportOf(key), viewportLabel, toViewport);
+  const fell = !sameChoice(key, wanted);
+  const near = [s, ...state.stills];
+  const toClass = (c) => {
+    const there = (k) => classOf(k) === c;
+    setPick(pickOf(near, [(k) => there(k) && tagsOf(k) === tagsOf(wanted), there]));
+  };
+  const toTags = (t) => {
+    const tagged = (k) => tagsOf(k) === t;
+    const sized = (k) => k === keyOf(viewportOf(wanted), t);
+    setPick(pickOf(near, [sized, (k) => tagged(k) && classOf(k) === classOf(wanted), tagged]));
+  };
+  fillSwitcher(el("viewports"), classes, classOf(key), classLabel, toClass);
   fillSwitcher(el("tags"), tags, tagsOf(key), tagsLabel, toTags);
-  el("variant").hidden = viewports.length < 2 && tags.length < 2;
-  el("variant").textContent = key;
+  const sizes = sizesOf(s, key);
+  el("size").hidden = viewports.length < 2 || sizes.length > 1;
+  el("size").textContent = sizeLabel(s.variant);
+  el("sizes").hidden = sizes.length < 2;
+  el("size-pick").replaceChildren(...sizes.map((v) => new Option(sizeLabel(v, true), v.key, false, v.key === key)));
+  el("variant").hidden = classes.length < 2 && tags.length < 2;
+  el("variant").textContent = [classLabel(classOf(key)), tagsOf(key)].filter(Boolean).join(" · ");
   el("variant").classList.toggle("fell", fell);
   el("fallback").hidden = !fell;
   el("fallback").textContent = `showing ${key}`;
@@ -824,9 +846,8 @@ function render() {
     el("hint").hidden = true;
     el("talk").hidden = true;
     el("reply").hidden = true;
-    for (const id of ["variant", "busy", "viewports", "tags", "fallback", "others", "group", "revn", "groups"]) {
-      el(id).hidden = true;
-    }
+    const gone = ["variant", "busy", "viewports", "size", "sizes", "tags", "fallback", "others", "group", "revn"];
+    for (const id of [...gone, "groups"]) el(id).hidden = true;
     state.draft = null;
     return;
   }
@@ -894,7 +915,7 @@ function render() {
   });
   for (const { head, part: p } of heads) head.hidden = thumbs.slice(p.at, p.at + p.count).every((t) => t.hidden);
   if (!mobile) thumbs[at].scrollIntoView({ block: "nearest", inline: "center" });
-  const hash = state.pick ? `#${s.name}@${state.pick}` : `#${s.name}`;
+  const hash = state.pick ? `#${s.name}@${sameChoice(key, state.pick) ? key : state.pick}` : `#${s.name}`;
   if (location.hash !== hash) history.replaceState(history.state, "", hash);
   for (const delta of [1, -1]) new Image().src = imageUrl(stills[step(stills, at, delta, state.all)].revs.at(-1));
   if (index > 0) new Image().src = imageUrl(s.revs[index - 1]);
@@ -1126,7 +1147,7 @@ async function refresh(turn) {
   state.threads = threads;
   state.late = state.late.filter((e) => e.seq > data.cursor);
   for (const e of state.late) apply(e);
-  state.pick = state.pick && pickOf(state.stills, state.pick, () => false);
+  state.pick = state.pick && linkedKey(state.stills, state.pick);
   derive();
   state.applied = Math.max(state.applied, data.cursor);
   parts = sections(state.stills, state.groups);
@@ -1645,6 +1666,7 @@ el("readme").onclick = (e) => {
 };
 el("readme-body").onclick = followAbout;
 el("group-pick").onchange = pickGroup;
+el("size-pick").onchange = (e) => setPick(e.target.value);
 el("notes-close").onclick = () => {
   dismissed = state.notes.join("\n");
   render();
@@ -1802,7 +1824,7 @@ onSwipe(
 addEventListener("hashchange", () => {
   const i = hashIndex();
   const { key } = hashParts();
-  const pick = key && pickOf(state.stills, key, () => false);
+  const pick = key && linkedKey(state.stills, key);
   if (pick && pick !== state.pick) setPick(pick);
   if (i !== -1 && i !== state.at) show(i);
 });
