@@ -1,0 +1,30 @@
+html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px/1.4 system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+[hidden] { display: none !important; }
+a { color: #7dd3fc; }
+header, #bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 8px 14px; background: #1b1b1f; }
+header { border-bottom: 1px solid #333; }
+#bar { padding-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #333; color: #aaa; font-size: 13px; }
+#menu { text-decoration: none; font-size: 18px; }
+#title { font-size: 15px; overflow-wrap: anywhere; }
+#count { color: #999; margin-left: auto; white-space: nowrap; }
+#flag { background: #7c2d12; color: #fed7aa; border-radius: 999px; padding: 1px 10px; font-size: 12px; white-space: nowrap; }
+#mark { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid #444; border-radius: 6px; cursor: pointer; user-select: none; }
+#mark:has(input:checked) { border-color: #3ecf8e; color: #3ecf8e; }
+#mark:has(input:disabled) { opacity: .5; cursor: default; }
+#filter { display: flex; align-items: center; gap: 6px; margin-left: auto; cursor: pointer; user-select: none; }
+button, select { background: #2a2a2e; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 4px 12px; font: inherit; cursor: pointer; }
+header button { font-size: 16px; }
+button:disabled { opacity: .4; cursor: default; }
+button[aria-pressed="true"] { border-color: #f59e0b; color: #fcd34d; }
+#error { margin: 0; padding: 6px 14px; background: #450a0a; color: #fca5a5; }
+main { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12px; }
+#stage { position: relative; line-height: 0; }
+#stage img { max-width: 100%; height: auto; box-shadow: 0 0 0 1px #333; background: #fff; }
+#empty { color: #999; margin: 40px 0; }
+nav { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px; background: #1b1b1f; border-top: 1px solid #333; }
+nav:empty { display: none; }
+nav img { height: 64px; min-width: 24px; opacity: .55; cursor: pointer; border: 2px solid transparent; border-radius: 3px; flex: none; background: #222; }
+nav img.done { opacity: .25; }
+nav img.changed { border-bottom-color: #f59e0b; }
+nav img.on { opacity: 1; border-color: #3ecf8e; }

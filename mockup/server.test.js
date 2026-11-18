@@ -1,15 +1,20 @@
 /**
  * Tests of the /mockup runtime against a real Vite server on a throwaway project: clean URLs,
- * the `/app/` prefix, PostCSS and Tailwind detection, tsconfig paths from a page, and a hot
- * update received over the HMR websocket after a file changes. Run with `npm test` from mockup/.
+ * the `/app/` prefix, PostCSS and Tailwind detection, tsconfig paths from a page, a hot update
+ * received over the HMR websocket after a file changes, and the stills viewer with its
+ * `/_review/` routes. Run with `npm test` from mockup/.
  */
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { allowedHosts, findPostcssConfig, start, tailwindV4Sources, withPages } from "./server.mjs";
+import { addStill, appendEvent } from "./review.mjs";
+import { allowedHosts, findPostcssConfig, scratchOwner, start, tailwindV4Sources, withPages } from "./server.mjs";
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const HUMAN = { kind: "human", name: "dante" };
 
 /** Write `files` (relative path to contents) under `dir`. */
 function write(dir, files) {
@@ -17,6 +22,46 @@ function write(dir, files) {
     mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     writeFileSync(path.join(dir, rel), body);
   }
+}
+
+/**
+ * Open the server-sent event stream at `url`. Returns `{ next, close }`: `next()` resolves to
+ * the next frame that carries data, as `{ id, event, data }` with `data` parsed, and rejects
+ * when none comes within 10s.
+ */
+async function eventSource(url, headers = {}) {
+  const controller = new AbortController();
+  const res = await fetch(url, { headers, signal: controller.signal });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /^text\/event-stream/);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const frames = [];
+  let buffer = "";
+  const next = async () => {
+    const deadline = AbortSignal.timeout(10000);
+    while (!frames.length) {
+      const expired = new Promise((_, reject) => {
+        deadline.addEventListener("abort", () => reject(new Error("no event within 10s")), { once: true });
+      });
+      const { value, done } = await Promise.race([reader.read(), expired]);
+      if (done) throw new Error("the event stream ended");
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+      for (const part of parts) {
+        const frame = { id: null, event: "message", data: null };
+        for (const line of part.split("\n")) {
+          if (line.startsWith("id: ")) frame.id = line.slice(4);
+          if (line.startsWith("event: ")) frame.event = line.slice(7);
+          if (line.startsWith("data: ")) frame.data = JSON.parse(line.slice(6));
+        }
+        if (frame.data !== null) frames.push(frame);
+      }
+    }
+    return frames.shift();
+  };
+  return { next, close: () => controller.abort() };
 }
 
 const FAKE_TAILWIND = `
@@ -135,6 +180,139 @@ describe("the mockup server", () => {
     }
   });
 
+  /** POST `body` to the review log with the content type `type`. */
+  const post = (body, type = "application/json") =>
+    fetch(`${base}/_review/events`, { method: "POST", headers: { "Content-Type": type }, body });
+
+  /** The entry of the still `name` in `GET /_review/stills`. */
+  const still = async (name) => {
+    const res = await fetch(`${base}/_review/stills`);
+    assert.equal(res.status, 200);
+    return (await res.json()).stills.find((s) => s.name === name);
+  };
+
+  /** Add a revision of the still `name` to the project's review store. */
+  const shoot = (name, title) => {
+    const file = path.join(app, "shot.png");
+    writeFileSync(file, PNG);
+    return addStill(path.join(app, ".mockup"), { file, name, title });
+  };
+
+  test("serves the stills viewer at the reserved /stills, with its script and styles", async () => {
+    const res = await fetch(`${base}/stills`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.match(res.headers.get("content-type"), /^text\/html/);
+    assert.match(await res.text(), /src="\/_review\/viewer\.js"/);
+    for (const [file, type] of [["viewer.js", /javascript/], ["state.js", /javascript/], ["viewer.css", /css/]]) {
+      const asset = await fetch(`${base}/_review/${file}`);
+      assert.equal(asset.status, 200, file);
+      assert.match(asset.headers.get("content-type"), type);
+    }
+    assert.equal((await fetch(`${base}/_review/nope`)).status, 404);
+  });
+
+  test("two shots of one name are rev 2: listed, served and linked from the menu", async () => {
+    await shoot("home", "Home");
+    await shoot("home");
+    const home = await still("home");
+    assert.equal(home.title, "Home");
+    assert.deepEqual(home.revs.map((r) => [r.n, r.file]), [[1, "stills/home/1.png"], [2, "stills/home/2.png"]]);
+    assert.deepEqual(home.mark, { rev: 2, viewed: null, reviewed: false, changed: false });
+    const image = await fetch(`${base}/stills/home/2.png`);
+    assert.equal(image.status, 200);
+    assert.notEqual(image.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
+    const menu = await (await fetch(`${base}/`)).text();
+    assert.match(menu, /<a href="\/stills">Review the stills/);
+    assert.match(menu, /<a href="\/stills#home"><img src="\/stills\/home\/2\.png"/);
+  });
+
+  test("POST /_review/events takes only JSON (415) and only a good event (400)", async () => {
+    await shoot("posted");
+    const viewed = JSON.stringify({ type: "viewed", still: "posted", rev: 1 });
+    assert.equal((await post(viewed, "text/plain")).status, 415);
+    assert.equal((await fetch(`${base}/_review/events`, { method: "POST", body: viewed })).status, 415);
+    assert.equal((await post("{")).status, 400);
+    assert.equal((await post("[]")).status, 400);
+    const unknown = await post(JSON.stringify({ type: "viewed", still: "no-such-still", rev: 1 }));
+    assert.equal(unknown.status, 400);
+    assert.match((await unknown.json()).error, /no still 'no-such-still'/);
+    assert.equal((await post(JSON.stringify({ type: "viewed", still: "posted", rev: 1, extra: 1 }))).status, 400);
+    assert.equal((await post(JSON.stringify({ type: "x".repeat(70000) }))).status, 413);
+    assert.equal((await still("posted")).mark.reviewed, false);
+    assert.equal((await fetch(`${base}/_review/stills`, { method: "POST" })).status, 405);
+  });
+
+  test("a post from another origin is refused, one from the page's own origin stored", async () => {
+    await shoot("origin");
+    const send = (origin) =>
+      fetch(`${base}/_review/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: origin },
+        body: JSON.stringify({ type: "viewed", still: "origin", rev: 1 }),
+      });
+    assert.equal((await send("http://localhost:5173")).status, 403);
+    assert.equal((await send("null")).status, 403);
+    assert.equal((await still("origin")).mark.reviewed, false);
+    assert.equal((await send(base)).status, 201);
+    assert.equal((await still("origin")).mark.reviewed, true);
+  });
+
+  test("the reviewed mark is an event: set, cleared by a new revision, which is flagged changed", async () => {
+    await shoot("marked");
+    const res = await post(JSON.stringify({ type: "viewed", still: "marked", rev: 1 }));
+    assert.equal(res.status, 201);
+    const stored = await res.json();
+    assert.deepEqual(stored.author, { kind: "human", name: "reviewer" });
+    assert.ok(stored.seq >= 1 && stored.id && stored.at);
+    assert.deepEqual((await still("marked")).mark, { rev: 1, viewed: 1, reviewed: true, changed: false });
+    await shoot("marked");
+    assert.deepEqual((await still("marked")).mark, { rev: 2, viewed: 1, reviewed: false, changed: true });
+    const named = await post(JSON.stringify({ type: "unviewed", still: "marked", rev: 2, author: HUMAN }));
+    assert.deepEqual((await named.json()).author, HUMAN);
+    assert.deepEqual((await still("marked")).mark, { rev: 2, viewed: null, reviewed: false, changed: false });
+  });
+
+  test("GET /_review/events resumes from since, then pushes what is posted and what the CLI appends", async () => {
+    const dir = path.join(app, ".mockup");
+    await shoot("live");
+    const first = await appendEvent(dir, { type: "viewed", author: HUMAN, still: "live", rev: 1 });
+    const second = await appendEvent(dir, { type: "unviewed", author: HUMAN, still: "live", rev: 1 });
+    const stream = await eventSource(`${base}/_review/events?since=${first.seq}`);
+    try {
+      const resumed = await stream.next();
+      assert.equal(resumed.id, String(second.seq));
+      assert.deepEqual(resumed.data, second);
+      const posted = await (await post(JSON.stringify({ type: "viewed", still: "live", rev: 1 }))).json();
+      assert.deepEqual((await stream.next()).data, posted);
+      const appended = await appendEvent(dir, { type: "unviewed", author: HUMAN, still: "live", rev: 1 });
+      assert.deepEqual((await stream.next()).data, appended);
+      await shoot("live");
+      assert.equal((await stream.next()).event, "stills");
+    } finally {
+      stream.close();
+    }
+    const again = await eventSource(`${base}/_review/events?since=0`, { "Last-Event-ID": String(second.seq) });
+    try {
+      assert.equal((await again.next()).data.seq, second.seq + 1);
+    } finally {
+      again.close();
+    }
+    assert.equal((await fetch(`${base}/_review/events?since=abc`)).status, 400);
+  });
+
+  test("GET /_review/threads folds the log's threads", async () => {
+    await shoot("remarked");
+    const dir = path.join(app, ".mockup");
+    const thread = await appendEvent(dir, { type: "thread", author: HUMAN, still: "remarked", rev: 1, body: "Too wide" });
+    const res = await fetch(`${base}/_review/threads`);
+    assert.equal(res.status, 200);
+    const found = (await res.json()).threads.find((t) => t.id === thread.id);
+    assert.equal(found.body, "Too wide");
+    assert.equal(found.status, "open");
+  });
+
   test("reloads the open tabs when the manifest changes", async () => {
     const ws = new WebSocket(base.replace("http", "ws"), "vite-hmr");
     const reload = new Promise((resolve, reject) => {
@@ -185,6 +363,15 @@ test("tailwindV4Sources adds @source lines only to stylesheets that import tailw
   assert.match(out.code, /@source "\/app\/\.mockup\/pages";/);
   assert.equal(plugin.transform("body{}", "/app/src/plain.css"), null);
   assert.equal(plugin.transform('@import "tailwindcss";', "/app/src/index.ts"), null);
+});
+
+test("scratchOwner names the scratch dir's owner only to a server started as root", (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "mockup-owner-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { uid, gid } = statSync(dir);
+  assert.equal(scratchOwner(dir, 1000), null);
+  assert.equal(scratchOwner(path.join(dir, "missing"), 0), null);
+  assert.deepEqual(scratchOwner(dir, 0), uid === 0 ? null : { uid, gid });
 });
 
 test("allowedHosts splits PREVIEW_ALLOWED_HOSTS", () => {
