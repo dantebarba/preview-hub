@@ -46,7 +46,7 @@ const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
 const APP_REF = /\b(src|href)=(["'])\/app\//g;
 const SHOT = /\.(png|jpe?g|webp)$/i;
-const REV_IMAGE = /^\/stills\/[^/]+\/\d+\.png$/;
+const REV_IMAGE = /^\/stills\/[^/]+\/(?:[^/]+\/)?\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
@@ -142,20 +142,19 @@ export function checkManifest(scratch) {
 
 /**
  * What the viewer reads at `/_review/stills`: `{ stills, cursor }`. Each still is its manifest
- * entry, `{ name, title, source, revs }`, plus `mark`, its reviewed mark `{ rev, viewed,
- * reviewed, changed }`; entries without a name or a revision are left out. `cursor` is the
+ * entry in v2 shape, `{ name, title, source, variants }`, plus `revs`, the revisions of its
+ * first variant, and `mark`, the reviewed mark `{ rev, viewed, reviewed, changed, variants }`
+ * the reviewer named `by` left on it; stills without a revision are left out. `cursor` is the
  * log's last `seq`, read before the marks, so following the events from it misses none.
  */
-export function reviewStills(scratch) {
+export function reviewStills(scratch, by = DEFAULT_AUTHOR.name) {
   const { cursor } = readEvents(scratch);
-  const marks = reviewed(scratch);
+  const marks = reviewed(scratch, by);
   const list = [];
   for (const s of stills(scratch)) {
-    if (!s || typeof s.name !== "string" || !Array.isArray(s.revs) || !marks[s.name]) continue;
-    const revs = s.revs.filter((r) => r && Number.isInteger(r.n) && typeof r.file === "string");
-    if (!revs.length) continue;
-    const title = typeof s.title === "string" && s.title ? s.title : s.name;
-    list.push({ name: s.name, title, source: s.source ?? null, revs, mark: marks[s.name] });
+    const revs = s.variants[0]?.revs ?? [];
+    if (!revs.length || !marks[s.name]) continue;
+    list.push({ ...s, revs, mark: marks[s.name] });
   }
   return { stills: list, cursor };
 }
