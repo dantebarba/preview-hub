@@ -427,15 +427,14 @@ function readBody(req, limit) {
  * checked every second, for a write no watcher reported, and a read that failed is tried again.
  * `open(res, since)` adds a response, until it closes; `notify(name)` sends a named event
  * without data, and `close()` ends every response. A folder source, `scratch` as the handle
- * `folder(dir)` returns, is watched as well while a client is connected, and a change to it
- * sends `stills` (see `watchSource`).
+ * `folder(dir)` returns, is watched as well until `close()`, connected client or not, so a
+ * change is kept as its next revision when it happens, and sends `stills` (see `watchSource`).
  */
 export function eventStream(scratch) {
   const folder = typeof scratch === "string" ? null : scratch;
   const file = storePaths(scratch).events;
   const clients = new Set();
   let timer = null;
-  let unwatch = null;
   let size = -1;
   let ticks = 0;
 
@@ -472,12 +471,11 @@ export function eventStream(scratch) {
   const stop = () => {
     clearInterval(timer);
     timer = null;
-    unwatch?.();
-    unwatch = null;
   };
   const notify = (name) => {
     for (const client of clients) client.res.write(`event: ${name}\ndata: {}\n\n`);
   };
+  const unwatch = folder ? watchSource(folder.dir, () => notify("stills")) : null;
 
   return {
     push,
@@ -490,7 +488,6 @@ export function eventStream(scratch) {
       if (!timer) {
         timer = setInterval(tick, POLL_MS);
         timer.unref();
-        if (folder) unwatch = watchSource(folder.dir, () => notify("stills"));
       }
       res.on("close", () => {
         clients.delete(client);
@@ -500,6 +497,7 @@ export function eventStream(scratch) {
     },
     close() {
       stop();
+      unwatch?.();
       for (const client of clients) client.res.end();
       clients.clear();
     },
