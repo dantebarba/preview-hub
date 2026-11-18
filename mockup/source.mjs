@@ -238,7 +238,10 @@ function readJson(dir, rel) {
   }
 }
 
-/** `text` without its markdown emphasis, code ticks, links and HTML tags, spaces collapsed. */
+/**
+ * `text` without its markdown emphasis, code ticks, links and HTML tags, a `\|` or `\\` of a
+ * table cell unescaped, spaces collapsed.
+ */
 function plainText(text) {
   return text
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
@@ -246,6 +249,7 @@ function plainText(text) {
     .replace(/<[^>]+>/g, "")
     .replace(/(\*\*|__|`)/g, "")
     .replace(/(^|\W)[*_](\S[^*_]*?)[*_](?=\W|$)/g, "$1$2")
+    .replace(/\\([\\|])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }

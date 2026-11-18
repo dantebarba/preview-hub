@@ -386,6 +386,11 @@ function sendViewerFile(req, res, { file, type }) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
+/** Answer a GET of `/stills` with the viewer's page. */
+export function sendViewerPage(req, res) {
+  sendViewerFile(req, res, VIEWER_PAGE);
+}
+
 /** The request's body as a Buffer, or null once it passes `limit` bytes. */
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
@@ -401,7 +406,7 @@ function readBody(req, limit) {
 }
 
 /**
- * The live side of the review log of `scratch`: the open `GET /_review/events` responses, each
+ * The live side of the review log of `scratch`, a scratch dir or a folder source: the open `GET /_review/events` responses, each
  * with the `seq` it has been sent up to. `push()` sends every client the events above its
  * cursor, and is safe to call at any time; while a client is connected the log's size is also
  * checked every second, for a write no watcher reported, and a read that failed is tried again.

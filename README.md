@@ -363,7 +363,21 @@ preview review reply 3f9a0c1e "Wrapped the label; see rev 2"      # also ends wo
 preview review idle                   # or idle <thread>; working also expires after 10 minutes
 preview review resolve 3f9a0c1e       # or reopen
 preview review watch --since 12       # one line per new human event, until stopped
+preview stills export docs/mockups/invite --readme   # keep the stills and remarks in a folder
 ```
+
+Any folder of images can be reviewed the same way, git or not, with no `.preview/` and no
+mockup: images are the only requirement.
+
+```sh
+preview stills serve docs/mockups/invite    # a preview of its own: URL, hub card "invite stills", watchdog
+preview stills status docs/mockups/invite   # or stop | share | unshare; the same folder keeps its URL
+preview review watch --dir docs/mockups/invite   # every review command, and stills ls, take --dir
+```
+
+Its remarks live in `<dir>/.review/`, created on the first write; a folder the host user cannot
+write is served read-only, remarks off. The [review contract](docs/review-contract.md#folder-sources)
+has what a folder may add and what `.review/` holds.
 
 A still is one screen with one or more **variants**, each a viewport and free tags with
 revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset or a
