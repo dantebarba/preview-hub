@@ -341,6 +341,49 @@ services:
       preview.desc: "${PREVIEW_LABEL_DESC}"
 ```
 
+### Reviewing stills
+
+A mockup's stills are reviewed in place: the human marks an area of a still and
+comments on it in the viewer, and the agent hears about it and answers from its
+shell. `preview stills` and `preview review` are the agent's side. Run them from
+the frontend root (they find `.mockup/` and its `mockup-<branch>` identity the way
+`mockup.sh` does) or from inside `.mockup/`. They run the review CLI of the
+`/mockup` runtime image ([`mockup/review-cli.mjs`](mockup/review-cli.mjs)), in
+the running container or in a throwaway one, so they work with the preview
+stopped and need only `docker` on the host.
+
+```sh
+preview stills add shots/05-invite-user.png --name 05-invite-user \
+  --title "Invite a user" --source "/invite?v=b" --size 390x844   # rev 1, then 2, ...
+preview stills ls                     # each still's latest rev, reviewed or not, open threads
+preview review ls --open              # one line per thread; --json for the full fold
+preview review show 3f9a0c1e          # body, anchor, rev, replies, the still and the marked PNG
+preview review reply 3f9a0c1e "Wrapped the label; see rev 2"
+preview review resolve 3f9a0c1e       # or reopen
+preview review watch --since 12       # one line per new human event, until stopped
+```
+
+`watch` is the backchannel: run it under a monitor and every remark, reply,
+resolve, reopen and reviewed mark a human makes arrives as one line within a
+fraction of a second. It is a stable stream, the seam other tools plug into:
+
+```
+#13 thread 3f9a0c1e 05-invite-user r1 box 0.12,0.40 0.50x0.08 dante: "The button overflows"
+#14 reply 3f9a0c1e dante: "Still wraps at 320px"
+#15 resolve 3f9a0c1e dante
+#16 viewed 05-invite-user r2 dante
+```
+
+Each line starts with the event's `seq`; pass the last one to `--since` to resume
+without missing or repeating anything (without it, `watch` starts at the end of the
+log). Anchors are normalized to the still: `pin x,y`, `box x,y wxh`, or `whole`.
+Bodies are JSON strings, so a newline never splits a line. `--json` prints each
+event as its JSON line from the log instead. Agent events are left out, so the
+agent never wakes on its own replies. `watch` exits non-zero when `.mockup/` is
+removed, and it outlives `preview stop`. Replies are written as
+`{kind: "agent", name: $REVIEW_AUTHOR}` (default `agent`). The store and its events
+are specified in [`docs/review-contract.md`](docs/review-contract.md).
+
 ## Configuration
 
 All configuration comes from the environment. The **hub server** (the container,
