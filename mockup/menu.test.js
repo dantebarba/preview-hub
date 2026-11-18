@@ -159,6 +159,7 @@ test("reviewStills lists each still with its first variant's revisions, the revi
   await addStill(dir, { file, name: "a", title: "First" });
   await addStill(dir, { file, name: "b" });
   await appendEvent(dir, { type: "viewed", author: HUMAN, still: "a", rev: 1 });
+  writeFileSync(file, Buffer.concat([PNG, Buffer.from("2")]));
   await addStill(dir, { file, name: "a" });
   await addStill(dir, { file, name: "a", viewport: "mobile", tags: ["dark"] });
   const { stills, marks, cursor } = reviewStills(dir, "dante");
