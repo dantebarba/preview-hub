@@ -464,7 +464,9 @@ does not end them. A target is a CSS selector, else the text (or label) of an el
 | `sleep(ms)` | a last resort |
 
 `click`, `hover`, `type` and `press` return once the page has settled again, each capped at
-`MOCKUP_SHOT_WAIT_MS`; a target not found fails the shot, naming it. A failing shot fails
+`MOCKUP_SHOT_WAIT_MS`; a target not found fails the shot, naming it. A page that is still for
+300 ms counts as settled, so after an action whose answer comes later without touching the
+page meanwhile (an in-page mock on a timer), `waitFor` what it brings. A failing shot fails
 alone and the batch goes on. It prints one JSON line per shot and variant (ok or failed and
 why, time taken, uncaught page exceptions and console errors minus `ignore`, the PNG under
 `.mockup/shots/` and what was added, `rev 3` or `unchanged`), then a summary, and exits 1 when

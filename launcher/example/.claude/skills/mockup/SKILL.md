@@ -102,6 +102,8 @@ export default {
 Steps: `click(textOrSelector, { within })`, `hover`, `type(selector, text)`, `press(key)`,
 `waitFor(textOrSelector, { text, gone, timeout })`, `evaluate(fnOrString)` (a string sees
 `$$` and `byText`); each action waits for the page to settle, so `sleep(ms)` is a last resort.
+Settled means 300 ms with no DOM change: after an action whose answer comes later (an in-page
+mock on a timer, a debounce), `waitFor` the text or element it brings.
 `tags: [["dark"], ["light"]]` shoots both themes. Read its JSON lines: a failed shot names why
 (a missing target), `exceptions` and `consoleErrors` flag a broken page, `added` is `rev <n>`
 or `unchanged`, `file` the PNG to check. Use presets with `fullPage`, never guessed heights,

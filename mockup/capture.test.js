@@ -433,7 +433,7 @@ test("the batch CLI fails one shot alone, names its missing target, reports exce
   assert.equal(by.throws.added, "rev 1");
   assert.match(by.throws.exceptions.join(" "), /kaboom/);
   assert.deepEqual(by.throws.consoleErrors, []);
-  assert.deepEqual(r.out.at(-1).summary.failed, 1);
+  assert.deepEqual([r.out.at(-1).summary.failed, r.out.at(-1).summary.exceptions], [1, 1]);
   assert.deepEqual(stills(store).map((s) => s.name).sort(), ["good", "throws"]);
   const strict = await run("--strict", "--only", "throws");
   assert.equal(strict.code, 1);

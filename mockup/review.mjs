@@ -478,7 +478,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
   });
 }
 
-/** True when the files `a` and `b` hold the same bytes; false when `b` cannot be read. */
+/** True when the files `a` and `b` hold the same bytes; false when either is missing. */
 function sameBytes(a, b) {
   try {
     if (statSync(a).size !== statSync(b).size) return false;

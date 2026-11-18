@@ -34,10 +34,10 @@
  * tags })` drive the page before the shot with real input (see `openTab`). A failing shot fails
  * alone. It prints one JSON line per shot and variant, `{ name, variant, ok, error, ms,
  * exceptions, consoleErrors, fullPage, width, height, file, added }`, then `{ summary: { shots,
- * ok, failed, added, unchanged, ms } }`, and exits 1 when a shot failed. With `--add DIR`, each
- * still is added to the mockup scratch dir `DIR` through `addStill`, `added` being `rev <n>` or
- * `unchanged`; a shot whose steps failed is never added, and one with page exceptions is added
- * unless `--strict`, which fails it.
+ * ok, failed, added, unchanged, exceptions, ms } }`, and exits 1 when a shot failed. With
+ * `--add DIR`, each still is added to the mockup scratch dir `DIR` through `addStill`, `added`
+ * being `rev <n>` or `unchanged`; a shot whose steps failed is never added, and one with page
+ * exceptions is added unless `--strict`, which fails it.
  */
 
 import { spawn } from "node:child_process";
@@ -496,22 +496,38 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
     return settle(wait, Date.now());
   }
 
-  async function lookup(what, target, opts, timeout = wait) {
+  async function poll(target, opts, timeout, done, fail) {
     const deadline = Date.now() + timeout;
     for (;;) {
       let found;
       try {
         found = await run(inPage(pageTarget, { target, ...opts }));
       } catch {
-        found = { missing: target };
+        found = null;
       }
-      if (!found.missing) return found;
-      if (Date.now() >= deadline) {
-        const where = opts.within && found.missing !== opts.within ? ` within '${opts.within}'` : "";
-        throw new Error(`${what} '${target}': no element matches '${found.missing}'${where}`);
-      }
+      if (found && done(found)) return found;
+      if (Date.now() >= deadline) throw new Error(fail(found));
       await sleep(POLL_MS);
     }
+  }
+
+  function lookup(what, target, opts, timeout = wait) {
+    return poll(target, opts, timeout, (found) => !found.missing, (found) => {
+      const missing = found?.missing ?? target;
+      const where = opts.within && missing !== opts.within ? ` within '${opts.within}'` : "";
+      return `${what} '${target}': no element matches '${missing}'${where}`;
+    });
+  }
+
+  async function act(input) {
+    const since = Date.now();
+    await input();
+    await settle(wait, since);
+  }
+
+  async function resize(height) {
+    await setMetrics(height);
+    await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
   }
 
   async function tap(x, y) {
@@ -528,47 +544,33 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
   const page = {
     async click(target, { within: scope } = {}) {
       const at = await lookup("click", target, { within: scope, locate: true });
-      const since = Date.now();
-      await tap(at.x, at.y);
-      await settle(wait, since);
+      await act(() => tap(at.x, at.y));
     },
     async hover(target, { within: scope } = {}) {
       const at = await lookup("hover", target, { within: scope, locate: true });
-      const since = Date.now();
-      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at.x, y: at.y });
-      await settle(wait, since);
+      await act(() => send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at.x, y: at.y }));
     },
     async type(target, text, { within: scope } = {}) {
       const at = await lookup("type", target, { within: scope, locate: true, focus: true });
-      const since = Date.now();
-      await tap(at.x, at.y);
-      await send("Input.insertText", { text: String(text) });
-      await settle(wait, since);
+      await act(async () => {
+        await tap(at.x, at.y);
+        await send("Input.insertText", { text: String(text) });
+      });
     },
     async press(key) {
       const fields = keyFields(key);
-      const since = Date.now();
-      await send("Input.dispatchKeyEvent", { type: "keyDown", ...fields });
-      await send("Input.dispatchKeyEvent", { type: "keyUp", ...fields, text: undefined });
-      await settle(wait, since);
+      await act(async () => {
+        await send("Input.dispatchKeyEvent", { type: "keyDown", ...fields });
+        await send("Input.dispatchKeyEvent", { type: "keyUp", ...fields, text: undefined });
+      });
     },
     async waitFor(target, { text, gone = false, timeout = wait, within: scope } = {}) {
       if (!gone) {
         await lookup("waitFor", target, { within: scope, text }, timeout);
         return;
       }
-      const deadline = Date.now() + timeout;
-      for (;;) {
-        let found;
-        try {
-          found = await run(inPage(pageTarget, { target, within: scope, text }));
-        } catch {
-          found = { count: 1 };
-        }
-        if (!found.count) return;
-        if (Date.now() >= deadline) throw new Error(`waitFor '${target}' gone: still there after ${timeout / 1000}s`);
-        await sleep(POLL_MS);
-      }
+      const fail = () => `waitFor '${target}' gone: still there after ${timeout / 1000}s`;
+      await poll(target, { within: scope, text }, timeout, (found) => !found.count, fail);
     },
     async evaluate(fn) {
       const expression =
@@ -593,8 +595,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
           whole = false;
           if (height !== vp.height) {
             height = vp.height;
-            await setMetrics(height);
-            await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
+            await resize(height);
           }
           break;
         }
@@ -602,8 +603,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
           const back = Math.min(maxHeight, Math.max(last.height, last.document));
           if (back !== height) {
             height = back;
-            await setMetrics(height);
-            await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
+            await resize(height);
           }
           break;
         }
@@ -611,8 +611,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
         if (need <= height) break;
         last = { height, document: m.document, hidden: m.hidden };
         height = need;
-        await setMetrics(height);
-        await settle(Math.min(wait, RESIZE_WAIT_MS), Date.now());
+        await resize(height);
       }
     }
     const { data } = await send("Page.captureScreenshot", { format: "png" });
@@ -701,14 +700,25 @@ export async function capture({
   chrome,
 }) {
   const vp = parseViewport(viewport, fullPage);
-  const sorted = parseTags(tags);
-  colorScheme(sorted);
+  const sorted = shotTags(tags);
   const wait = waitCap(waitMs);
   return withBrowser(chrome, async (browser) => {
     const shot = await shootOne(browser, { url, vp, tags: sorted, fullPage, maxHeight, steps, wait });
     writeFileSync(out, shot.png);
     return { file: out, width: shot.width, height: shot.height, fullPage: shot.fullPage };
   });
+}
+
+/** `tags` as `parseTags` gives them, refused when they ask for two colour schemes. */
+function shotTags(tags) {
+  const sorted = parseTags(tags);
+  colorScheme(sorted);
+  return sorted;
+}
+
+/** True when `page` is an http(s) URL rather than a path on the mockup. */
+function isUrl(page) {
+  return /^https?:\/\//.test(page);
 }
 
 /** True for a plain object, not an array or null. */
@@ -720,11 +730,7 @@ function isObject(v) {
 function tagSets(value, where) {
   if (!Array.isArray(value)) throw new Error(`${where}: 'tags' is a list of tags, or a list of tag lists`);
   const sets = value.length && value.every(Array.isArray) ? value : [value];
-  return sets.map((set) => {
-    const tags = parseTags(set);
-    colorScheme(tags);
-    return tags;
-  });
+  return sets.map(shotTags);
 }
 
 /**
@@ -754,7 +760,7 @@ export function expandRecipe(recipe, only) {
     if (title !== undefined && (typeof title !== "string" || !title.trim())) {
       throw new Error(`${where}: 'title' must be a non-empty string`);
     }
-    if (typeof page !== "string" || !/^(\/|https?:\/\/)/.test(page)) {
+    if (typeof page !== "string" || !(page.startsWith("/") || isUrl(page))) {
       throw new Error(`${where}: 'path' is a page path starting with / or an http(s) URL`);
     }
     if (steps !== undefined && typeof steps !== "function") throw new Error(`${where}: 'steps' must be a function`);
@@ -828,7 +834,7 @@ async function pool(items, n, fn) {
  * with `strict` for one with page exceptions, which fails it. Shots are added and reported in
  * the recipe's order, so the stills keep it: `report(line)` gets each shot's line, then the
  * summary. Resolves to the summary, `{ shots, ok, failed, added,
- * unchanged, ms }`.
+ * unchanged, exceptions, ms }`, `exceptions` counting the shots that had any.
  */
 export async function runBatch({
   recipe,
@@ -846,7 +852,7 @@ export async function runBatch({
   const ignore = ignorePatterns(recipe);
   const wait = waitCap(waitMs);
   const started = Date.now();
-  const summary = { shots: shots.length, ok: 0, failed: 0, added: 0, unchanged: 0, ms: 0 };
+  const summary = { shots: shots.length, ok: 0, failed: 0, added: 0, unchanged: 0, exceptions: 0, ms: 0 };
   mkdirSync(outDir, { recursive: true });
   if (!shots.length) {
     report({ summary });
@@ -861,6 +867,7 @@ export async function runBatch({
       } catch (e) {
         Object.assign(line, { ok: false, error: `adding the still: ${e.message}` });
       }
+      if (line.exceptions?.length) summary.exceptions += 1;
       if (line.ok) summary.ok += 1;
       else summary.failed += 1;
       if (line.added === "unchanged") summary.unchanged += 1;
@@ -873,7 +880,7 @@ export async function runBatch({
       const t0 = Date.now();
       const line = { name: shot.name, variant: shot.key, ok: false };
       try {
-        const url = /^https?:\/\//.test(shot.path) ? shot.path : new URL(shot.path, base).href;
+        const url = isUrl(shot.path) ? shot.path : new URL(shot.path, base).href;
         const result = await shootOne(browser, { ...shot, url, wait, ignore });
         Object.assign(line, {
           exceptions: result.exceptions,
@@ -911,7 +918,7 @@ export function addTo(dir) {
       file,
       name: shot.name,
       title: shot.title,
-      source: /^https?:\/\//.test(shot.path) ? undefined : shot.path,
+      source: isUrl(shot.path) ? undefined : shot.path,
       viewport: shot.viewport,
       tags: shot.tags,
       fullPage: line.fullPage,
