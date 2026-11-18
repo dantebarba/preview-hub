@@ -88,6 +88,8 @@ test("stills add records a revision from a file or stdin, and stills ls shows it
     stdin: Buffer.concat([PNG, Buffer.from("b")]),
   });
   assert.equal(r.out, "invite [desktop] r2 /host/.mockup/stills/invite/desktop/2.png");
+  r = await cli(dir, ["stills", "add", "-", "--name", "invite"], { env, stdin: Buffer.concat([PNG, Buffer.from("b")]) });
+  assert.equal(r.out, "invite [desktop] r2 /host/.mockup/stills/invite/desktop/2.png unchanged");
   await appendEvent(dir, { type: "viewed", author: HUMAN, still: "invite", rev: 1 });
   await appendEvent(dir, { type: "thread", author: HUMAN, still: "invite", rev: 2, body: "x" });
   r = await cli(dir, ["stills", "ls", "--as", "dante"]);

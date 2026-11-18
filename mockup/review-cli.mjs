@@ -192,7 +192,7 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, viewport, s
     throw new CliError(`${file}: no such file`);
   }
   try {
-    const { entry, variant, rev } = await addStill(dir, {
+    const { entry, variant, rev, unchanged } = await addStill(dir, {
       file,
       name,
       title,
@@ -201,7 +201,7 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, viewport, s
       tags: tag,
       fullPage,
     });
-    io.out(`${entry.name} [${variant.key}] r${rev.n} ${io.host(rev.file)}`);
+    io.out(`${entry.name} [${variant.key}] r${rev.n} ${io.host(rev.file)}${unchanged ? " unchanged" : ""}`);
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   }
