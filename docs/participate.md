@@ -194,11 +194,30 @@ The compose service is the `/mockup` runtime, `ghcr.io/dantebarba/preview-mockup
 name at its own release tag as `PREVIEW_MOCKUP_IMAGE` before the hooks run, and the
 scaffolded compose file reads only that, so no project file names the image or its
 version; set the variable yourself to run another build. It mounts the frontend root
-read-only at `/app` and `.mockup/shots/` read-write, and runs one Vite dev server, the
-same for every project, with its own pinned plugins; the project's Vite config is never
-read. What it serves:
+read-only at `/app` and `.mockup/shots/`, `.mockup/stills/` and `.mockup/review/`
+read-write, and runs one Vite dev server, the same for every project, with its own pinned
+plugins; the project's Vite config is never read. The server starts as root and carries on
+as the owner of `.mockup/`, so what it writes there stays the host user's. What it serves:
 
-- `/`: a menu rendered per request from `.mockup/manifest.json` and the `shots/` listing.
+- `/`: a menu rendered per request from `.mockup/manifest.json` and the stills of
+  `stills/manifest.json` (the bare `shots/` listing for a mockup that has none).
+- `/stills#<name>`: the stills viewer, served from the image; the slug is reserved, so a
+  `pages/stills.html` is not served there. ←/→, Home/End, a swipe and the thumbnail strip
+  step through the stills; a still with several revisions gets a picker and a before/after
+  flip (`b`) against the previous one. The **Reviewed** checkbox (`v`) works like "Viewed"
+  on a pull request's files: stepping skips the reviewed stills unless "show reviewed" is
+  on, the header counts them, and a new revision clears the mark and flags the still
+  "changed since reviewed".
+- `/_review/`: what the viewer reads and writes, over the store of
+  [`review-contract.md`](review-contract.md). `GET /_review/stills` is
+  `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
+  `{rev, viewed, reviewed, changed}`; `GET /_review/threads` is `{threads}`;
+  `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
+  `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
+  every new one within about a second, plus an event named `stills` when the stills change;
+  `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
+  one (415 unless `application/json`, 403 from another origin, 400 for an event the store
+  refuses), `author` defaulting to `{"kind":"human","name":"reviewer"}`.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;
@@ -212,7 +231,8 @@ read. What it serves:
 Hot reload goes over Vite's websocket on the same port, which `tailscale serve` proxies:
 React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped in place,
 an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
-container log. Every response is `Cache-Control: no-store`.
+container log. Every response is `Cache-Control: no-store`, but a still's revision
+(`/stills/<name>/<n>.png`), which never changes.
 
 Not compiled: Angular, whose compiler owns the template format; Svelte before 5, since the
 image pins the Svelte 5 compiler; and route-level features of SvelteKit, Nuxt and Next
