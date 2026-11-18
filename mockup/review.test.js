@@ -120,13 +120,25 @@ test("variantKey is the viewport then the tags, sorted, so the same inputs give 
 test("addStill keeps each variant's revisions apart, and a re-shoot is its next revision", async (t) => {
   const dir = scratch(t);
   const name = "05-invite-user";
-  const first = await addStill(dir, { file: png(dir, "a"), name, source: "/invite", viewport: "mobile", tags: ["dark"] });
+  const first = await addStill(dir, {
+    file: png(dir, "a"),
+    name,
+    source: "/invite",
+    viewport: "mobile",
+    tags: ["dark"],
+  });
   assert.equal(first.entry.title, name);
   assert.deepEqual(first.entry.source, { path: "/invite" });
   assert.equal(first.variant.key, "mobile+dark");
   assert.deepEqual(first.rev.file, "stills/05-invite-user/mobile+dark/1.png");
   await addStill(dir, { file: png(dir, "b"), name, viewport: "desktop", fullPage: true });
-  const again = await addStill(dir, { file: png(dir, "c"), name, title: "Invite a user", viewport: "mobile", tags: ["dark"] });
+  const again = await addStill(dir, {
+    file: png(dir, "c"),
+    name,
+    title: "Invite a user",
+    viewport: "mobile",
+    tags: ["dark"],
+  });
   assert.equal(again.rev.n, 2);
   assert.equal(again.entry.title, "Invite a user");
   assert.deepEqual(again.entry.source, { path: "/invite" });
@@ -134,7 +146,12 @@ test("addStill keeps each variant's revisions apart, and a re-shoot is its next 
   assert.deepEqual(
     entry.variants.map((v) => [v.key, v.tags, v.viewport.fullPage, v.revs.map((r) => r.file)]),
     [
-      ["mobile+dark", ["dark"], false, ["stills/05-invite-user/mobile+dark/1.png", "stills/05-invite-user/mobile+dark/2.png"]],
+      [
+        "mobile+dark",
+        ["dark"],
+        false,
+        ["stills/05-invite-user/mobile+dark/1.png", "stills/05-invite-user/mobile+dark/2.png"],
+      ],
       ["desktop", [], true, ["stills/05-invite-user/desktop/1.png"]],
     ]
   );
@@ -198,7 +215,10 @@ test("a v1 manifest of 44 stills is read as one variant each, keyed by its size,
     ],
   });
   assert.equal(read[2].variants[0].key, "desktop");
-  assert.deepEqual(read[1].variants[0].revs.map((r) => r.file), ["stills/02-screen/1.png", "stills/02-screen/2.png"]);
+  assert.deepEqual(
+    read[1].variants[0].revs.map((r) => r.file),
+    ["stills/02-screen/1.png", "stills/02-screen/2.png"]
+  );
   assert.equal(readFileSync(file, "utf8"), text);
   assert.equal(upgraded(v1Entry("x", null)).variants[0].key, "desktop");
   assert.equal(upgraded({ title: "no name" }), null);
@@ -382,9 +402,15 @@ test("working lasts until the agent replies, goes idle or stays quiet for ten mi
   await appendEvent(dir, { type: "reply", author: HUMAN, thread: remark.id, body: "a human reply ends nothing" });
   assert.equal(working(dir, now).length, 3);
   await appendEvent(dir, { type: "reply", author: AGENT, thread: remark.id, body: "lighter now, Ana" });
-  assert.deepEqual(working(dir, now).map((w) => w.thread), [other.id, null]);
+  assert.deepEqual(
+    working(dir, now).map((w) => w.thread),
+    [other.id, null]
+  );
   await appendEvent(dir, { type: "idle", author: AGENT, thread: other.id });
-  assert.deepEqual(working(dir, now).map((w) => w.still), ["invite"]);
+  assert.deepEqual(
+    working(dir, now).map((w) => w.still),
+    ["invite"]
+  );
   await appendEvent(dir, { type: "idle", author: AGENT });
   assert.deepEqual(working(dir, now), []);
 });
@@ -393,7 +419,15 @@ test("events written before variants and via are read as the still's first varia
   const dir = await withStill(t);
   const log = path.join(dir, "review/events.jsonl");
   mkdirSync(path.dirname(log), { recursive: true });
-  const old = { seq: 1, id: "3f9a0c1e", type: "viewed", at: "2026-11-17T10:05:02.410Z", author: HUMAN, still: "invite", rev: 1 };
+  const old = {
+    seq: 1,
+    id: "3f9a0c1e",
+    type: "viewed",
+    at: "2026-11-17T10:05:02.410Z",
+    author: HUMAN,
+    still: "invite",
+    rev: 1,
+  };
   writeFileSync(log, `${JSON.stringify(old)}\n`);
   await addStill(dir, { file: png(dir, "b"), name: "invite", viewport: "mobile" });
   assert.deepEqual(readEvents(dir).problems, []);

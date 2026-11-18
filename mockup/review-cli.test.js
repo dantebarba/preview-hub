@@ -117,31 +117,41 @@ test("stills add records a revision from a file or stdin, and stills ls shows it
 
 test("stills add shoots variants by --viewport, --tag and --full-page, and stills ls lists each", async (t) => {
   const dir = scratch(t);
-  let r = await cli(dir, ["stills", "add", png(dir, "a"), "--name", "home", "--viewport", "mobile", "--tag", "light"]);
-  assert.equal(r.out, `home [mobile+light] r1 ${dir}/stills/home/mobile+light/1.png`);
-  r = await cli(dir, ["stills", "add", png(dir, "b"), "--name", "home", "--viewport", "mobile", "--tag", "dark"]);
-  assert.equal(r.out, `home [mobile+dark] r1 ${dir}/stills/home/mobile+dark/1.png`);
-  r = await cli(dir, ["stills", "add", png(dir, "c"), "--name", "home", "--viewport", "desktop", "--full-page"]);
+  let r = await cli(dir, [
+    "stills",
+    "add",
+    png(dir, "a"),
+    "--name",
+    "landing",
+    "--viewport",
+    "mobile",
+    "--tag",
+    "light",
+  ]);
+  assert.equal(r.out, `landing [mobile+light] r1 ${dir}/stills/landing/mobile+light/1.png`);
+  r = await cli(dir, ["stills", "add", png(dir, "b"), "--name", "landing", "--viewport", "mobile", "--tag", "dark"]);
+  assert.equal(r.out, `landing [mobile+dark] r1 ${dir}/stills/landing/mobile+dark/1.png`);
+  r = await cli(dir, ["stills", "add", png(dir, "c"), "--name", "landing", "--viewport", "desktop", "--full-page"]);
   assert.equal(r.code, 0);
-  r = await cli(dir, ["stills", "add", png(dir, "d"), "--name", "home", "--size", "1440x1250"]);
-  assert.equal(r.out, `home [custom-1440x1250] r1 ${dir}/stills/home/custom-1440x1250/1.png`);
-  r = await cli(dir, ["stills", "add", png(dir, "e"), "--name", "home", "--viewport", "mobile", "--size", "1x1"]);
+  r = await cli(dir, ["stills", "add", png(dir, "d"), "--name", "landing", "--size", "1440x1250"]);
+  assert.equal(r.out, `landing [custom-1440x1250] r1 ${dir}/stills/landing/custom-1440x1250/1.png`);
+  r = await cli(dir, ["stills", "add", png(dir, "e"), "--name", "landing", "--viewport", "mobile", "--size", "1x1"]);
   assert.equal(r.code, 2);
-  r = await cli(dir, ["stills", "add", png(dir, "e"), "--name", "home", "--viewport", "watch"]);
+  r = await cli(dir, ["stills", "add", png(dir, "e"), "--name", "landing", "--viewport", "watch"]);
   assert.equal(r.code, 1);
   assert.match(r.err, /viewport/);
-  await appendEvent(dir, { type: "viewed", author: ANA, still: "home", variant: "mobile+dark", rev: 1 });
-  await appendEvent(dir, { type: "viewed", author: HUMAN, still: "home", variant: "mobile+dark", rev: 1 });
-  await appendEvent(dir, { type: "thread", author: ANA, still: "home", variant: "mobile+dark", rev: 1, body: "x" });
+  await appendEvent(dir, { type: "viewed", author: ANA, still: "landing", variant: "mobile+dark", rev: 1 });
+  await appendEvent(dir, { type: "viewed", author: HUMAN, still: "landing", variant: "mobile+dark", rev: 1 });
+  await appendEvent(dir, { type: "thread", author: ANA, still: "landing", variant: "mobile+dark", rev: 1, body: "x" });
   r = await cli(dir, ["stills", "ls"]);
   assert.deepEqual(r.out.split("\n"), [
-    'home [mobile+light]  r1  not reviewed  0 open  "home"',
-    'home [mobile+dark]  r1  reviewed by Ana, dante  1 open  "home"',
-    'home [desktop]  r1  not reviewed  0 open  "home"',
-    'home [custom-1440x1250]  r1  not reviewed  0 open  "home"',
+    'landing [mobile+light]  r1  not reviewed  0 open  "landing"',
+    'landing [mobile+dark]  r1  reviewed by Ana, dante  1 open  "landing"',
+    'landing [desktop]  r1  not reviewed  0 open  "landing"',
+    'landing [custom-1440x1250]  r1  not reviewed  0 open  "landing"',
   ]);
   r = await cli(dir, ["stills", "ls", "--as", "nobody"]);
-  assert.match(r.out.split("\n")[1], /^home \[mobile\+dark\] {2}r1 {2}not reviewed/);
+  assert.match(r.out.split("\n")[1], /^landing \[mobile\+dark\] {2}r1 {2}not reviewed/);
   const [row] = JSON.parse((await cli(dir, ["stills", "ls", "--json"])).out);
   assert.equal(row.variants[2].viewport.fullPage, true);
   assert.deepEqual(Object.keys(row.variants[1].marks), ["Ana", "dante"]);
@@ -250,12 +260,18 @@ test("eventLine prints every event type on one line, with the variant and how th
     eventLine({ ...base, author: ANA, type: "thread", still: "invite", variant: "mobile+dark", rev: 3, body: "x" }),
     '#4 thread e1 invite [mobile+dark] r3 whole Ana (guest): "x"'
   );
-  assert.equal(eventLine({ ...base, type: "thread", still: "gone", rev: 1, body: "x" }), '#4 thread e1 gone r1 whole dante: "x"');
+  assert.equal(
+    eventLine({ ...base, type: "thread", still: "gone", rev: 1, body: "x" }),
+    '#4 thread e1 gone r1 whole dante: "x"'
+  );
   assert.equal(eventLine({ ...base, type: "thread", still: null, body: "hi" }), '#4 thread e1 general dante: "hi"');
   assert.equal(eventLine({ ...base, type: "reply", thread: "t1", body: "ok" }), '#4 reply t1 dante: "ok"');
   const tailnet = { ...HUMAN, via: "tailnet" };
   assert.equal(eventLine({ ...base, author: tailnet, type: "reopen", thread: "t1" }), "#4 reopen t1 dante (tailnet)");
-  assert.equal(eventLine({ ...base, type: "viewed", still: "invite", rev: 2 }, first), "#4 viewed invite [desktop] r2 dante");
+  assert.equal(
+    eventLine({ ...base, type: "viewed", still: "invite", rev: 2 }, first),
+    "#4 viewed invite [desktop] r2 dante"
+  );
 });
 
 test("review working and idle write the agent's working state on a thread or a still", async (t) => {

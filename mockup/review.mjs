@@ -155,7 +155,14 @@ export function parseViewport(spec, fullPage = false) {
   const m = typeof spec === "string" ? CUSTOM.exec(spec) : null;
   if (!m) throw new Error(`a viewport is one of ${[...Object.keys(VIEWPORTS), "web"].join(", ")} or WxH[@dpr][+touch]`);
   const [, width, height, dpr = "1", touch] = m;
-  return { preset: "custom", width: Number(width), height: Number(height), dpr: Number(dpr), mobile: Boolean(touch), fullPage: Boolean(fullPage) };
+  return {
+    preset: "custom",
+    width: Number(width),
+    height: Number(height),
+    dpr: Number(dpr),
+    mobile: Boolean(touch),
+    fullPage: Boolean(fullPage),
+  };
 }
 
 /** The key of `viewport`: its preset's name, or `custom-<W>x<H>[@<dpr>][-touch]`. */
@@ -434,7 +441,8 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
     );
     if (clash) throw new Error(`'${name}' differs from the still '${clash.name}' only in case`);
     const at = manifest.findIndex((s) => s && s.name === name);
-    const entry = at === -1 ? { name, title: title || name, source: { path: null }, variants: [] } : upgraded(manifest[at]);
+    const entry =
+      at === -1 ? { name, title: title || name, source: { path: null }, variants: [] } : upgraded(manifest[at]);
     if (at === -1) manifest.push(entry);
     else manifest[at] = entry;
     if (title !== undefined) entry.title = title;

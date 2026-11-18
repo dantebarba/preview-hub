@@ -129,7 +129,8 @@ export function eventLine(event, first = new Map()) {
   const variant = event.variant ?? first.get(event.still) ?? null;
   switch (event.type) {
     case "thread":
-      return `${head} ${event.id} ${target({ rev: null, anchor: null, ...event, variant })} ${by}: ${quote(event.body)}`;
+      const where = target({ rev: null, anchor: null, ...event, variant });
+      return `${head} ${event.id} ${where} ${by}: ${quote(event.body)}`;
     case "reply":
       return `${head} ${event.thread} ${by}: ${quote(event.body)}`;
     case "resolve":
