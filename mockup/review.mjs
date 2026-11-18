@@ -65,6 +65,16 @@ function paths(dir) {
   };
 }
 
+/** The annotated still of thread `id`, relative to the scratch dir. */
+export function annotatedFile(id) {
+  return `review/annotated/${id}.png`;
+}
+
+/** True when `bytes` starts with the PNG signature. */
+export function isPng(bytes) {
+  return bytes.subarray(0, PNG.length).equals(PNG);
+}
+
 /** True for a plain object, not an array or null. */
 function isObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -261,7 +271,7 @@ export async function addStill(dir, { file, name, title, source, size }) {
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
-    if (!fstatSync(fd).isFile() || readSync(fd, head, 0, head.length, 0) !== head.length || !head.equals(PNG)) {
+    if (!fstatSync(fd).isFile() || readSync(fd, head, 0, head.length, 0) !== head.length || !isPng(head)) {
       throw new Error(`${file}: not a PNG image`);
     }
   } finally {
@@ -300,6 +310,25 @@ export async function addStill(dir, { file, name, title, source, size }) {
     }
     return entry;
   });
+}
+
+/**
+ * Keep `png` as the annotated still of thread `id` in `dir`, `review/annotated/<id>.png`. It is
+ * written beside its name and renamed onto it, so a reader never sees half of it. Returns the
+ * file's path.
+ */
+export function storeAnnotated(dir, id, png) {
+  const file = path.join(dir, annotatedFile(id));
+  const partial = sideFile(file, "tmp");
+  mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    writeFileSync(partial, png);
+    renameSync(partial, file);
+  } catch (e) {
+    rmSync(partial, { force: true });
+    throw e;
+  }
+  return file;
 }
 
 /**

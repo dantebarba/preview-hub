@@ -160,7 +160,7 @@ test("review reply, resolve and reopen write agent events, and show prints the t
     `thread  ${remark.id}  open`,
     "on      invite r1 box 0.12,0.40 0.50x0.08",
     "image   /host/.mockup/stills/invite/1.png",
-    "marked  (not drawn yet: the viewer draws it when the thread is opened)",
+    "marked  (none: the viewer could not draw it; read image at the anchor above)",
   ]);
   assert.deepEqual(lines.slice(5, 8), [`#1 dante (human) ${remark.at}`, "  The button", "  overflows"]);
   assert.match(lines.at(-1), /^ {2}Wrapped the label$/);

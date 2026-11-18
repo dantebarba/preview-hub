@@ -26,10 +26,12 @@
  * edit to the manifest or a still reloads the open tabs, as Vite does for a page.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendEvent, readEvents, reviewed, stills, threads } from "./review.mjs";
+import { appendEvent, isPng, readEvents, reviewed, stills, storeAnnotated, threads } from "./review.mjs";
+
+export { storeAnnotated };
 
 const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
@@ -42,7 +44,6 @@ const MAX_POST_BYTES = 64 * 1024;
 const MAX_ANNOTATED_BYTES = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
 const PNG_URL = "data:image/png;base64,";
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const POLL_MS = 1000;
 const PING_TICKS = 20;
 const DEFAULT_AUTHOR = { kind: "human", name: "reviewer" };
@@ -409,28 +410,8 @@ export function annotatedPng(value) {
   if (png.length > MAX_ANNOTATED_BYTES) {
     throw refusal(413, `'annotated' must be at most ${MAX_ANNOTATED_BYTES} bytes`);
   }
-  if (!png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) throw refusal(400, "'annotated' must be a PNG");
+  if (!isPng(png)) throw refusal(400, "'annotated' must be a PNG");
   return png;
-}
-
-/**
- * Keep `png` as `review/annotated/<id>.png` of `scratch`, the still of thread `id` with its
- * mark drawn. It is written beside its name and renamed onto it, so a reader never sees half
- * of it. Returns the file's path.
- */
-export function storeAnnotated(scratch, id, png) {
-  const dir = path.join(scratch, "review", "annotated");
-  const file = path.join(dir, `${id}.png`);
-  const partial = path.join(dir, `.${id}.png.${process.pid}`);
-  mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(partial, png);
-    renameSync(partial, file);
-  } catch (e) {
-    rmSync(partial, { force: true });
-    throw e;
-  }
-  return file;
 }
 
 /**

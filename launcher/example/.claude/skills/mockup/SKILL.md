@@ -82,7 +82,7 @@ that was the question.
 With stills out, start `preview review watch` under Monitor before reporting, so no remark is
 missed. Answer its `thread`, `reply` and `reopen` lines (`#<seq> <type> <id> ...`); skip the
 rest. For each: `preview review show <id>` and Read its `marked` PNG (else `image`); fix the
-page; re-shoot that still under the same name (its path is `source` in `preview stills ls
+page; re-shoot that still under the same name (its path is `source.path` in `preview stills ls
 --json`), so the viewer flags it "changed since reviewed"; `preview review reply <id> "<what
 changed>"`. Resolving is the reviewer's. After a restart, `watch --since <last seq>`.
 

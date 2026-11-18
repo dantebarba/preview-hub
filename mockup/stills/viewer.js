@@ -46,6 +46,7 @@ const state = {
 let thumbs = [];
 let source = null;
 let loads = 0;
+let settled = 0;
 let shown = null;
 let drag = null;
 
@@ -251,7 +252,7 @@ function render() {
   }
   const before = state.compare && index > 0;
   shown = s.revs[before ? index - 1 : index];
-  if (state.draft && (state.draft.still !== s.name || state.draft.rev !== shown.n)) dropDraft();
+  if (state.draft && (state.draft.still !== s.name || state.draft.rev !== shown.n)) dropDraft(false);
   const url = imageUrl(shown);
   if (el("still").getAttribute("src") !== url) el("still").src = url;
   el("still").alt = s.title;
@@ -300,8 +301,13 @@ function select(id) {
   el("marks").querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: PHONE.matches ? "start" : "nearest" });
 }
 
-/** Forget the draft mark, what was written for it and the revision held for it. */
-function dropDraft() {
+/**
+ * Forget the draft mark, what was written for it and the revision held for it. With `follow`,
+ * a still held on a revision for the draft goes on to its latest one; without it, as when the
+ * reviewer picked another revision or still by hand, the choice on screen stays.
+ */
+function dropDraft(follow = true) {
+  if (follow && state.held) state.rev = null;
   state.draft = null;
   state.held = false;
   el("body").value = "";
@@ -354,6 +360,16 @@ function apply(event) {
  */
 async function load() {
   const turn = ++loads;
+  try {
+    await refresh(turn);
+  } finally {
+    settled = Math.max(settled, turn);
+    if (settled === loads) state.late = [];
+  }
+}
+
+/** Load number `turn` of `load`: read the stills and the threads, and draw them unless a later load began. */
+async function refresh(turn) {
   let data;
   let threads;
   try {
@@ -398,7 +414,7 @@ function follow() {
     const event = JSON.parse(message.data);
     if (event.seq <= state.applied) return;
     state.applied = event.seq;
-    state.late.push(event);
+    if (settled < loads) state.late.push(event);
     if (apply(event)) render();
   };
   source.addEventListener("stills", load);
