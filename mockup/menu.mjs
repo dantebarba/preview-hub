@@ -60,6 +60,7 @@ const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
   "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
+  "swipe.js": { file: "swipe.js", type: "text/javascript; charset=utf-8" },
   "viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
 };
 

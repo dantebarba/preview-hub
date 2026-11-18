@@ -208,7 +208,7 @@ describe("the mockup server", () => {
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.match(res.headers.get("content-type"), /^text\/html/);
     assert.match(await res.text(), /src="\/_review\/viewer\.js"/);
-    const scripts = ["viewer.js", "state.js", "annotate.js"].map((file) => [file, /javascript/]);
+    const scripts = ["viewer.js", "state.js", "annotate.js", "swipe.js"].map((file) => [file, /javascript/]);
     for (const [file, type] of [...scripts, ["viewer.css", /css/]]) {
       const asset = await fetch(`${base}/_review/${file}`);
       assert.equal(asset.status, 200, file);
