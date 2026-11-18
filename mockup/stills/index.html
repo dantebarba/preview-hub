@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stills</title>
+  <link rel="stylesheet" href="/_review/viewer.css">
+</head>
+<body>
+  <header>
+    <a id="menu" href="/" aria-label="Back to the menu" title="Back to the menu">☰</a>
+    <button id="prev" aria-label="Previous still" title="Previous still (←)">←</button>
+    <button id="next" aria-label="Next still" title="Next still (→)">→</button>
+    <b id="title"></b>
+    <span id="flag" hidden>changed since reviewed</span>
+    <span id="count"></span>
+    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> Reviewed</label>
+  </header>
+  <div id="bar">
+    <label id="revs" hidden>rev <select id="rev" aria-label="Revision"></select></label>
+    <button id="compare" hidden aria-pressed="false" title="Flip to the previous revision and back (b)">before / after</button>
+    <span id="shown"></span>
+    <label id="filter"><input type="checkbox" id="all"> show reviewed</label>
+    <a id="open" target="_blank" rel="noopener">open full size</a>
+  </div>
+  <p id="error" role="alert" hidden></p>
+  <main>
+    <div id="stage"><img id="still" alt=""></div>
+    <p id="empty" hidden>No stills yet.</p>
+  </main>
+  <nav id="strip" aria-label="Stills"></nav>
+  <script type="module" src="/_review/viewer.js"></script>
+</body>
+</html>
