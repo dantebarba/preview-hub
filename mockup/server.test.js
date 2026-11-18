@@ -329,7 +329,7 @@ describe("the mockup server", () => {
     assert.deepEqual((await owner.json()).author, { kind: "human", name: "Dante", via: "tailnet" });
     const seen = await (await fetch(`${base}/_review/stills`)).json();
     assert.deepEqual(seen.me, { name: null, via: "share" });
-    assert.equal(seen.marks.Ana.shared.desktop, 1);
+    assert.equal(seen.marks["Ana (guest)"].shared.desktop, 1);
     assert.equal(seen.stills.find((s) => s.name === "shared").mark.reviewed, false);
     const mine = await (await fetch(`${base}/_review/stills`, { headers: OWNER })).json();
     assert.deepEqual(mine.me, { name: "Dante", via: "tailnet" });

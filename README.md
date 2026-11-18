@@ -355,7 +355,7 @@ stopped and need only `docker` on the host.
 ```sh
 preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
   --viewport mobile --tag dark --title "Invite a user" --source "/invite?v=b"   # rev 1, then 2, ...
-preview stills ls --as dante          # each variant's latest rev, reviewed by dante or not, open threads
+preview stills ls --as Dante          # each variant's latest rev, reviewed by Dante or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
 preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still and the marked PNG
 preview review working 3f9a0c1e --note "re-shooting mobile+dark"   # tells the reviewer the agent is on it
@@ -395,16 +395,17 @@ per browser, and the server refuses a guest's write with no name (`400 name requ
 Guest events carry `via: "share"`: the viewer shows a `guest` chip (*Ana · guest*) and
 `watch` prints `Ana (guest)`, so a guest calling themselves "dante" is still told apart.
 Guests remark, reply and mark their own reviewed; **resolve and reopen are the owner's and the
-agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each reviewer has
-their own reviewed marks, so a guest's marks hide nothing from the owner; without `--as`,
-`stills ls` says whose marks hold.
+agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each
+reviewer has their own reviewed marks, a tailnet user's under their Tailscale display name and
+a guest's under `Ana (guest)`, so a guest's marks hide nothing from the owner; `--as` takes
+that name, and without it `stills ls` says whose marks hold.
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
 "working…" dots and the note on that conversation and its card, and pulses its mark (for a
-still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread ends it (a reviewer's does not), as
-does `preview review idle [thread]`; it expires 10 minutes after the last `working`, so an
-agent that died does not look busy.
+still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread
+ends it (a reviewer's does not), as does `preview review idle [thread]`; it expires 10 minutes
+after the last `working`, so an agent that died does not look busy.
 
 The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
 T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)

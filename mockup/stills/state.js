@@ -60,6 +60,14 @@ function slot(o, key) {
   return o[key];
 }
 
+/**
+ * The reviewer whose marks an event by `author` sets: the author's name, a guest's with
+ * " (guest)" after it, so a guest who types a tailnet user's name never touches that user's marks.
+ */
+export function reviewerOf(author) {
+  return author.via === "share" ? `${author.name} (guest)` : author.name;
+}
+
 /** The revision the reviewer named `author` marked on the variant `key` of the still named `still`, if any. */
 function marked(marks, author, still, key) {
   return own(own(own(marks, author), still), key);
@@ -139,16 +147,16 @@ export function choose(stills, pick, marks, me) {
 }
 
 /**
- * Fold one log event into `marks`, every reviewer's marked revisions as `{ author: { still:
- * { key: rev } } }`: a `viewed` sets its author's mark of a variant of a still of `stills`, an
- * `unviewed` clears it; an event without `variant` means the still's first. True when it was
- * one, so the caller knows to draw again.
+ * Fold one log event into `marks`, every reviewer's marked revisions as `{ reviewer: { still:
+ * { key: rev } } }` (see `reviewerOf`): a `viewed` sets its author's mark of a variant of a
+ * still of `stills`, an `unviewed` clears it; an event without `variant` means the still's
+ * first. True when it was one, so the caller knows to draw again.
  */
 export function applyEvent(marks, stills, event) {
   if (event.type !== "viewed" && event.type !== "unviewed") return false;
   const still = stills.find((s) => s.name === event.still);
   if (!still) return false;
-  const mine = slot(slot(marks, event.author.name), still.name);
+  const mine = slot(slot(marks, reviewerOf(event.author)), still.name);
   const key = event.variant ?? still.variants[0].key;
   if (event.type === "viewed") put(mine, key, event.rev);
   else delete mine[key];
@@ -207,7 +215,7 @@ export function applyWorking(on, event) {
   }
   if (event.type !== "reply" && event.type !== "idle") return false;
   const size = on.size;
-  if (event.thread) on.delete(`thread ${event.thread}`);
+  if (event.thread) on.delete(workingKey(event));
   else on.clear();
   return on.size !== size;
 }

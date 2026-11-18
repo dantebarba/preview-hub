@@ -44,6 +44,7 @@ import {
   readEvents,
   reviewed,
   reviewMarks,
+  revisions,
   stills,
   storeAnnotated,
   threads,
@@ -215,13 +216,15 @@ function plain(value) {
  * revisions of its first variant, and `mark`, the reviewed mark `{ rev, viewed, reviewed,
  * changed, variants }` the reviewer named `by` left on it, nobody's without `by`; stills
  * without a revision are left out, as are variants without one. `marks` are the marked
- * revisions of every reviewer, `{ author: { still: { key: rev } } }`, and `working` what the
+ * revisions of every reviewer, `{ reviewer: { still: { key: rev } } }`, and `working` what the
  * agent is working on (see `working` of the store). `cursor` is the log's last `seq`, read
  * before the rest, so following the events from it misses none.
  */
 export function reviewStills(scratch, by = null) {
   const { cursor } = readEvents(scratch);
-  const mine = reviewed(scratch, by);
+  const known = revisions(scratch);
+  const { marks } = reviewMarks(scratch, known);
+  const mine = reviewed(scratch, by, known, marks);
   const list = [];
   for (const s of stills(scratch)) {
     const variants = s.variants.filter((v) => v.revs.length);
@@ -229,7 +232,7 @@ export function reviewStills(scratch, by = null) {
     const marked = mine[s.name].variants;
     list.push({ ...s, variants, revs: variants[0].revs, mark: { ...marked[variants[0].key], variants: marked } });
   }
-  return { stills: list, marks: plain(reviewMarks(scratch).marks), working: working(scratch), cursor };
+  return { stills: list, marks: plain(marks), working: working(scratch), cursor };
 }
 
 /**
@@ -311,7 +314,7 @@ export function route(url, app) {
   if (pathname === "/" || pathname === "/index.html") return { menu: true };
   if (pathname === "/stills" || pathname === "/stills/") return { viewer: true };
   if (REV_IMAGE.test(pathname) && /%2B|%40/i.test(pathname)) {
-    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/g, "@")}${search}` };
+    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
   }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
   const slug = SLUG.exec(pathname);

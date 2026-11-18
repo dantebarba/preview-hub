@@ -17,7 +17,9 @@
     <span id="busy" hidden></span>
     <span id="count"></span>
     <button id="place" aria-label="All the stills" aria-expanded="false" hidden></button>
-    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> <span>Reviewed</span></label>
+    <label id="mark" title="Mark this still reviewed (v)">
+      <input type="checkbox" id="viewed"> <span>Reviewed</span>
+    </label>
   </header>
   <div id="bar">
     <span id="viewports" class="seg" role="group" aria-label="Viewport" hidden></span>
@@ -77,7 +79,9 @@
       <b id="talk-title"></b>
       <button id="talk-status">Resolve</button>
     </div>
-    <button id="crop" aria-label="Show the mark on the still"><span id="shot"><img id="crop-image" alt=""><i id="crop-mark"></i></span></button>
+    <button id="crop" aria-label="Show the mark on the still">
+      <span id="shot"><img id="crop-image" alt=""><i id="crop-mark"></i></span>
+    </button>
     <div id="talk-body">
       <div id="entries"></div>
       <button id="fresh" hidden>new reply ↓</button>
@@ -94,7 +98,8 @@
       <button type="button" id="who-close" aria-label="Cancel">✕</button>
       <b id="who-title">What's your name?</b>
       <p>It goes with what you write here, so remarks can be told apart.</p>
-      <input id="who-name" name="name" autocomplete="name" autocapitalize="words" required aria-label="Your name" placeholder="Your name">
+      <input id="who-name" name="name" autocomplete="name" autocapitalize="words" required
+        aria-label="Your name" placeholder="Your name">
       <button id="continue" class="go" disabled>Continue</button>
     </form>
   </div>

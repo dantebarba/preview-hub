@@ -123,6 +123,11 @@ function quote(body, max = Infinity) {
   return JSON.stringify(body.length > max ? `${body.slice(0, max - 1)}…` : body);
 }
 
+/** What a `working` or `idle` event is about: its thread, else its still and `variant`, else nothing. */
+function aboutText(event, variant = event.variant) {
+  return event.thread ?? (event.still ? stillText(event.still, variant) : "");
+}
+
 /**
  * The line `watch` prints for `event`. `first` maps a still's name to its first variant, the
  * one an event without `variant` means.
@@ -143,7 +148,7 @@ export function eventLine(event, first = new Map()) {
       return `${head} ${event.thread} ${by}`;
     case "working":
     case "idle": {
-      const about = event.thread ?? (event.still ? stillText(event.still, variant) : "");
+      const about = aboutText(event, variant);
       return `${head}${about ? ` ${about}` : ""} ${by}`;
     }
     default:
@@ -284,7 +289,7 @@ function reviewShow({ dir, io }, [id], { json }) {
 /** Append `event` as the agent and print its seq, its type and what it is about. */
 async function agentEvent({ dir, io }, event) {
   const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author, via: "cli" } });
-  const about = stored.thread ?? (stored.still ? stillText(stored.still, stored.variant) : "");
+  const about = aboutText(stored);
   io.out(`#${stored.seq} ${stored.type}${about ? ` ${about}` : ""}`);
 }
 
