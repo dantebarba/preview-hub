@@ -900,8 +900,11 @@ export function addTo(dir) {
   };
 }
 
-/** Run the batch CLI: `values` are the parsed options. Returns the exit status. */
-async function batchMain(values, { out, err }) {
+/**
+ * Run the batch CLI: `values` are the parsed options. A still's file is reported under
+ * `$MOCKUP_HOST_OUT` when set, the out dir as the host names it. Returns the exit status.
+ */
+async function batchMain(values, { out, err, env = process.env }) {
   const parallel = values.parallel === undefined ? DEFAULT_PARALLEL : Number(values.parallel);
   if (!Number.isInteger(parallel) || parallel < 1 || parallel > 32) {
     err("--parallel must be a whole number from 1 to 32");
@@ -925,7 +928,10 @@ async function batchMain(values, { out, err }) {
       only,
       strict: values.strict,
       add: values.add ? addTo(path.resolve(values.add)) : undefined,
-      report: (line) => out(JSON.stringify(line)),
+      report: (line) => {
+        const host = line.file && env.MOCKUP_HOST_OUT;
+        out(JSON.stringify(host ? { ...line, file: path.join(host, path.basename(line.file)) } : line));
+      },
     });
     if (!summary.shots) err(`no shot's name matches --only ${values.only}`);
     return summary.failed ? 1 : 0;

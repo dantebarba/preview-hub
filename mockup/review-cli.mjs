@@ -51,6 +51,7 @@ const VIA_LABEL = { tailnet: "tailnet", share: "guest", cli: "cli" };
 const USAGE = `usage: preview stills add <png> --name N [--viewport mobile|mobile-s|tablet|desktop|WxH[@dpr][+touch]]
                          [--tag T]... [--full-page] [--title T] [--source "/path?q"]
        preview stills ls [--as NAME] [--json]
+       preview stills shoot [<shots.mjs>] [--only REGEX] [--parallel N] [--strict] [--report FILE]
        preview review ls [--open] [--json]
        preview review show <thread> [--json]
        preview review reply <thread> "<text>"
