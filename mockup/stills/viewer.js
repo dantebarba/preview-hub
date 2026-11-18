@@ -41,6 +41,7 @@ const state = {
   panel: false,
   armed: false,
   draft: null,
+  held: false,
 };
 let thumbs = [];
 let source = null;
@@ -239,6 +240,10 @@ function render() {
   }
   const s = stills[at];
   const latest = s.revs.at(-1).n;
+  if (state.held && !state.draft) {
+    state.held = false;
+    state.rev = latest;
+  }
   let index = s.revs.findIndex((r) => r.n === state.rev);
   if (index === -1) {
     index = s.revs.length - 1;
@@ -287,6 +292,7 @@ function render() {
  * goes to the top, clear of the sheet.
  */
 function select(id) {
+  if (id !== state.thread) el("answer").value = "";
   state.thread = id;
   state.panel = true;
   render();
@@ -307,6 +313,7 @@ function show(i) {
   if (i < 0 || i >= state.stills.length) return;
   state.at = i;
   state.rev = null;
+  state.held = false;
   state.compare = false;
   state.thread = null;
   render();
@@ -336,9 +343,9 @@ function apply(event) {
  * Fetch the stills with their marks, then the threads, and draw them, keeping the still on
  * screen when it is still there, else the one in the hash, else the first one left to review.
  * A still shown on its latest revision follows a new one; an older revision picked by hand
- * stays, and so does the one a remark is being drawn on. Of two loads under way only the last
- * one started is drawn, and the events that arrived over the stream after the stills were read
- * from the log are folded into the answer again.
+ * stays, and the one a remark is being drawn on is held until the draft is gone. Of two loads
+ * under way only the last one started is drawn, and the events that arrived over the stream
+ * after the stills were read from the log are folded into the answer again.
  */
 async function load() {
   const turn = ++loads;
@@ -355,7 +362,9 @@ async function load() {
   report("");
   const was = state.stills[state.at];
   const current = was?.name;
-  const rev = was && !state.draft && state.rev === was.revs.at(-1).n ? null : state.rev;
+  const latest = was && state.rev === was.revs.at(-1).n;
+  state.held = Boolean(latest && state.draft) || state.held;
+  const rev = latest && !state.draft ? null : state.rev;
   state.stills = data.stills;
   state.threads = threads;
   state.late = state.late.filter((e) => e.seq > data.cursor);
@@ -438,6 +447,8 @@ async function postRemark() {
     const annotated = await annotate(imageUrl(shown), draft.anchor).catch(() => null);
     const event = { type: "thread", still: draft.still, rev: draft.rev, anchor: draft.anchor, body };
     const thread = await send(annotated ? { ...event, annotated } : event);
+    applyThread(state.threads, thread);
+    if (state.draft !== draft) return render();
     state.draft = null;
     el("body").value = "";
     select(thread.id);
@@ -585,6 +596,7 @@ window.visualViewport?.addEventListener("resize", liftSheets);
 window.visualViewport?.addEventListener("scroll", liftSheets);
 el("rev").onchange = (e) => {
   state.rev = Number(e.target.value);
+  state.held = false;
   state.compare = false;
   render();
 };

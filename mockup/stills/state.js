@@ -123,7 +123,8 @@ export function opposite(anchor, name) {
  * Fold one log event into `threads`, the list `GET /_review/threads` answers, as `threads()`
  * of the review store does: a `thread` opens one, a `reply` joins its thread, a `resolve` or a
  * `reopen` sets its status. An event the list already holds (a thread of that id, or a `seq`
- * not above the thread's last) changes nothing, so events may be folded again in log order.
+ * not above the thread's last) changes nothing, so events may be folded again in log order;
+ * threads stay in the order they were opened even when one is folded early.
  * True when the list changed.
  */
 export function applyThread(threads, event) {
@@ -142,6 +143,7 @@ export function applyThread(threads, event) {
       replies: [],
       updated: event.seq,
     });
+    threads.sort((a, b) => a.seq - b.seq);
     return true;
   }
   if (event.type !== "reply" && event.type !== "resolve" && event.type !== "reopen") return false;

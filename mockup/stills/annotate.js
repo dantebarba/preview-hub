@@ -14,6 +14,7 @@ const TRIES = 4;
 const SHRINK = 0.7;
 const INK = "#f43f5e";
 const HALO = "#ffffff";
+const PNG_URL = "data:image/png;base64,";
 
 /**
  * Draw `anchor` on the 2D context `c` of a canvas `width` by `height`: a region as a frame, a
@@ -62,6 +63,7 @@ export async function annotate(url, anchor) {
     c.drawImage(image, 0, 0, canvas.width, canvas.height);
     drawMark(c, anchor, canvas.width, canvas.height);
     const data = canvas.toDataURL("image/png");
+    if (!data.startsWith(PNG_URL)) throw new Error("the canvas could not be read as a PNG");
     if (data.length <= MAX_CHARS) return data;
     scale *= SHRINK;
   }

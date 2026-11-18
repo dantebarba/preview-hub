@@ -453,7 +453,7 @@ async function postEvent(req, res, { scratch, stream }) {
   }
   const tooLong = () => sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
   const body = await readBody(req, MAX_UPLOAD_BYTES);
-  if (!body) return tooLong();
+  if (!body) return sendJson(res, 413, { error: `the body must be at most ${MAX_UPLOAD_BYTES} bytes` });
   let event;
   try {
     event = JSON.parse(body.toString("utf8"));
