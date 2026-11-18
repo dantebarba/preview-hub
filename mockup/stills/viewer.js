@@ -7,6 +7,22 @@
  * stills, skipping the reviewed ones unless "show reviewed" is on; `v` toggles the reviewed
  * mark and `b` flips between a revision and the one before it. The hash keeps the position.
  *
+ * A still has variants, a viewport with tags. A viewport switcher and a row of tags show when
+ * the stills have more than one of either; the pick is kept across stills and in the hash,
+ * `#<name>@<key>`, and a still without that variant shows the one at the same viewport, else its
+ * first, with a note. Revisions, remarks and the reviewed mark are the shown variant's, and the
+ * count is of the marks of whoever is looking; the other reviewers' progress has a line. The
+ * desktop layout shows a still no wider than its viewport, so one shot at 3x is not three times
+ * the size.
+ *
+ * Who is looking is the server's to say: a tailnet user has a name, a guest is asked for one,
+ * by the name sheet, on the first write, which then goes on by itself, or is dropped with its
+ * draft kept when the sheet is cancelled. A guest's name is kept in this browser, "as <name>"
+ * next to Post and Send changes it, and a guest gets no Resolve or Reopen.
+ *
+ * What the agent is working on shows as dots: on the card and at the end of the conversation of
+ * that remark, whose mark pulses, or in the top bar for a still or for everything.
+ *
  * A remark is a thread on an area of the revision on screen. Dragging on the still draws a box
  * and a tap drops a pin: with a mouse at any time, with a finger or a pen once "＋ Remark" (`c`)
  * is on, since a finger's drag otherwise scrolls. The mark is a draft until posted: it can be
@@ -36,22 +52,34 @@ import {
   ago,
   applyEvent,
   applyThread,
+  applyWorking,
   chip,
+  choices,
+  choose,
   counts,
   cropOf,
   edge,
   fileUrl,
   fitted,
+  keyOf,
   lastMessage,
+  MAX_NAME,
   moved,
   opposite,
   pin,
+  progress,
   region,
   revealed,
   step,
+  tagsLabel,
+  tagsOf,
   title,
   unread,
   viewOn,
+  viewportLabel,
+  viewportOf,
+  workingAt,
+  workingKey,
   zoomed,
 } from "./state.js";
 import { swipeable } from "./swipe.js";
@@ -78,8 +106,15 @@ const PHONE = matchMedia("(max-width: 760px)");
 const SMALL = matchMedia("(max-width: 599.98px), (pointer: coarse)");
 const WHEN = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
 
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 const state = {
   stills: [],
+  marks: {},
+  me: { name: null, via: "share" },
+  working: new Map(),
+  pick: null,
+  asking: null,
   at: -1,
   rev: null,
   compare: false,
@@ -121,6 +156,8 @@ let toastTimer = null;
 let mobile = false;
 let leaving = false;
 let aim = null;
+let workTimer = null;
+let guestName = (stored(NAME_KEY) || "").trim().slice(0, MAX_NAME);
 
 /** The element with the id `id`. */
 function el(id) {
@@ -170,19 +207,65 @@ function markSeen(t) {
   store(SEEN_KEY, JSON.stringify(seen));
 }
 
+/** True when whoever is looking is a guest: someone the tailnet did not name. */
+function guest() {
+  return state.me.via !== "tailnet";
+}
+
+/** The name whoever is looking writes under: the tailnet's, or the one a guest gave, empty until then. */
+function me() {
+  return guest() ? guestName : state.me.name;
+}
+
+/** Give every still the variant the pick lands on, with its revisions and the mark of whoever is looking. */
+function derive() {
+  choose(state.stills, state.pick, state.marks, me());
+}
+
+/** What the agent is working on now. */
+function workingNow() {
+  return workingAt(state.working, Date.now());
+}
+
+/** The agent's working state on thread `id`, when it has one. */
+function busyOn(id) {
+  return workingNow().find((w) => w.thread === id);
+}
+
+/** The dots of the working state `w`: who is working, and on what when the agent said. */
+function dots(w) {
+  const made = node("span", "working");
+  const three = node("span", "dots");
+  three.append(node("i", ""), node("i", ""), node("i", ""));
+  made.append(three, node("span", "what", `${w.author.name} is working…${w.note ? ` ${w.note}` : ""}`));
+  return made;
+}
+
+/** The dots of the working state `w` as a list to spread into a parent, empty without one. */
+function dotsOf(w) {
+  return w ? [dots(w)] : [];
+}
+
 /** The URL of a revision's image. */
 function imageUrl(rev) {
   return fileUrl(rev.file);
 }
 
-/** The still named in the hash, as an index, or -1 when it names none or is not valid encoding. */
-function hashIndex() {
-  let name;
+/** The still and the variant key the hash names, `#<name>[@<key>]`, each null when it names none. */
+function hashParts() {
+  let text;
   try {
-    name = decodeURIComponent(location.hash.slice(1));
+    text = decodeURIComponent(location.hash.slice(1));
   } catch {
-    return -1;
+    return { name: null, key: null };
   }
+  const at = text.indexOf("@");
+  return at === -1 ? { name: text, key: null } : { name: text.slice(0, at), key: text.slice(at + 1) || null };
+}
+
+/** The still named in the hash, as an index, or -1 when it names none. */
+function hashIndex() {
+  const { name } = hashParts();
   return state.stills.findIndex((s) => s.name === name);
 }
 
@@ -227,10 +310,14 @@ function place(target, anchor) {
   target.style.height = anchor.h === undefined ? "" : `${anchor.h * 100}%`;
 }
 
-/** The threads of the still on screen, in the order they were opened: a thread's number is its place. */
+/**
+ * The threads of the variant on screen, in the order they were opened: a thread's number is its
+ * place. A thread that names no variant is on its still's first.
+ */
 function remarks() {
-  const name = state.stills[state.at]?.name;
-  return state.threads.filter((t) => t.still === name);
+  const s = state.stills[state.at];
+  if (!s) return [];
+  return state.threads.filter((t) => t.still === s.name && (t.variant ?? s.variants[0].key) === s.variant.key);
 }
 
 /** Draw the draft mark and its composer, hidden while there is none; the composer waits for a drag to end. */
@@ -248,13 +335,14 @@ function drawDraft() {
 }
 
 /**
- * One entry of a thread card: who wrote it, of which kind (human or agent) and when, then the
- * text as written.
+ * One entry of a thread card: who wrote it, as a guest or else of which kind (human or agent),
+ * and when, then the text as written.
  */
 function entry({ author, at, body }) {
   const made = node("div", `entry ${author.kind}`);
   const who = node("div", "who");
-  who.append(node("b", "", author.name), node("span", `kind ${author.kind}`, author.kind));
+  const kind = author.via === "share" ? "guest" : author.kind;
+  who.append(node("b", "", author.name), node("span", `kind ${kind}`, kind));
   who.append(new Date(at).toLocaleString([], WHEN));
   made.append(who, node("p", "text", body));
   return made;
@@ -304,9 +392,10 @@ function actions(t, swiped) {
 /**
  * The card of thread `t`, number `n`, in its slot: the number, the title and the status chip,
  * which for a remark made on an older revision is a button that goes to it; the latest message
- * with a dot when a reply is not seen yet; the reply count with Reply and Resolve or Reopen.
- * The selected card of the desktop layout shows the whole conversation instead of the latest
- * message. Behind the card are the two actions a swipe uncovers in the mobile layout.
+ * with a dot when a reply is not seen yet; the agent's dots while it works on the remark; the
+ * reply count with Reply and Resolve or Reopen. The selected card of the desktop layout shows
+ * the whole conversation instead of the latest message. Behind the card are the two actions a
+ * swipe uncovers in the mobile layout, of which a guest has only Reply.
  */
 function threadCard(t, n) {
   const on = t.id === state.thread;
@@ -337,7 +426,7 @@ function threadCard(t, n) {
   card.append(head);
   if (on && !mobile) {
     const all = node("div", "entries");
-    all.append(entry(t), ...t.replies.map(entry));
+    all.append(entry(t), ...t.replies.map(entry), ...dotsOf(busyOn(t.id)));
     all.onclick = (e) => e.stopPropagation();
     card.append(foot, all);
   } else {
@@ -345,9 +434,11 @@ function threadCard(t, n) {
     const last = node("div", "last");
     if (unread(t, seen)) last.append(node("span", "dot"));
     const said = node("span", "said");
-    said.append(node("b", m.author.kind, m.author.name), ` · ${ago(Date.parse(m.at), Date.now())}: “${m.body}”`);
+    const how = m.author.via === "share" ? " · guest" : "";
+    const when = ago(Date.parse(m.at), Date.now());
+    said.append(node("b", m.author.kind, m.author.name), `${how} · ${when}: “${m.body}”`);
     last.append(said);
-    card.append(last, foot);
+    card.append(last, ...dotsOf(busyOn(t.id)), foot);
   }
   card.onclick = () => {
     if (mobile) openTalk(t.id);
@@ -363,8 +454,10 @@ function threadCard(t, n) {
   if (mobile) {
     if (state.swiped?.id === t.id) slot.dataset.open = state.swiped.side;
     swipeable(slot, card, ACT_PX, (side) => {
+      const kept = side === "left" && guest() ? null : side;
+      if (!kept) delete slot.dataset.open;
       closeSwipe(slot);
-      state.swiped = side ? { id: t.id, side } : null;
+      state.swiped = kept ? { id: t.id, side: kept } : null;
     });
   }
   return slot;
@@ -407,7 +500,8 @@ function drawCrop(t) {
  * at its end (`pinned`, which also keeps it there when the keyboard or the reply box resize
  * it: a scroll the browser reports before that resize is seen, at a height other than `tall`,
  * does not count as the reader's), it shows the newest message and its replies count as seen;
- * scrolled up, a new reply shows the "new reply" pill instead of moving it.
+ * scrolled up, a new reply shows the "new reply" pill instead of moving it. The agent's dots
+ * close it while it works on the remark.
  */
 function renderTalk() {
   const list = remarks();
@@ -422,7 +516,8 @@ function renderTalk() {
   const entries = el("entries");
   const opened = talk.hidden || talk.dataset.id !== t.id;
   const low = opened || stick || pinned;
-  const had = opened ? Infinity : entries.childElementCount;
+  const said = () => entries.querySelectorAll(".entry").length;
+  const had = opened ? Infinity : said();
   stick = false;
   talk.hidden = false;
   talk.dataset.id = t.id;
@@ -431,14 +526,14 @@ function renderTalk() {
   el("talk-title").textContent = title(t.body);
   el("talk-status").textContent = statusLabel(t);
   el("talk-status").disabled = busy.has(t.id);
-  entries.replaceChildren(entry(t), ...t.replies.map(entry));
+  entries.replaceChildren(entry(t), ...t.replies.map(entry), ...dotsOf(busyOn(t.id)));
   drawCrop(t);
   pinned = low;
   if (low) {
     entries.scrollTop = entries.scrollHeight;
     markSeen(t);
   }
-  el("fresh").hidden = low || (el("fresh").hidden && entries.childElementCount <= had);
+  el("fresh").hidden = low || (el("fresh").hidden && said() <= had);
 }
 
 /**
@@ -463,8 +558,9 @@ function placeReply(held) {
 }
 
 /**
- * Draw the remarks of the still on screen: the numbered marks made on the revision shown or an
- * older one (those dimmed, with "made on rev N"), a resolved one only while it is selected;
+ * Draw the remarks of the variant on screen: the numbered marks made on the revision shown or an
+ * older one (those dimmed, with "made on rev N"), a resolved one only while it is selected, one
+ * the agent is working on pulsing;
  * the draft; the conversation open full screen; and the panel with a card per thread, the
  * resolved ones in a group that is closed until asked for or one of them is selected, and
  * that lets go of the selected one when it is folded. The reply form steps out of the cards
@@ -497,6 +593,7 @@ function renderRemarks() {
       mark.classList.toggle("on", on);
       mark.classList.toggle("dim", t.rev !== shown.n);
       mark.classList.toggle("done", t.status !== "open");
+      mark.classList.toggle("busy", Boolean(busyOn(t.id)));
       if (t.rev !== shown.n) mark.dataset.note = `made on rev ${t.rev}`;
       mark.dataset.id = t.id;
       mark.setAttribute("aria-label", `Remark ${i + 1}: ${t.body}`);
@@ -568,7 +665,69 @@ function reveal(anchor) {
   layoutStage();
 }
 
-/** Draw the current still, its revision controls, the reviewed mark, the count, the strip and the remarks. */
+/**
+ * Fill the switcher `group` with a button per value of `values`, called what `label` says, the
+ * one equal to `current` pressed; a click hands the value to `pick`. Hidden when there is
+ * nothing to switch between.
+ */
+function fillSwitcher(group, values, current, label, pick) {
+  group.hidden = values.length < 2;
+  group.replaceChildren(
+    ...values.map((value) => {
+      const button = node("button", "", label(value));
+      button.setAttribute("aria-pressed", String(value === current));
+      button.onclick = () => pick(value);
+      return button;
+    })
+  );
+}
+
+/**
+ * Draw the switchers for the still `s`: its variant's viewport and tags pressed, the chip of
+ * the mobile top bar, and the note that says which variant shows when the pick is not one of
+ * this still's.
+ */
+function renderSwitchers(s) {
+  const { viewports, tags } = choices(state.stills);
+  const { key } = s.variant;
+  const wanted = state.pick ?? key;
+  const fell = key !== wanted;
+  fillSwitcher(el("viewports"), viewports, viewportOf(key), viewportLabel, (v) => setPick(keyOf(v, tagsOf(wanted))));
+  fillSwitcher(el("tags"), tags, tagsOf(key), tagsLabel, (t) => setPick(keyOf(viewportOf(wanted), t)));
+  el("variant").hidden = viewports.length < 2 && tags.length < 2;
+  el("variant").textContent = key;
+  el("variant").classList.toggle("fell", fell);
+  el("fallback").hidden = !fell;
+  el("fallback").textContent = `showing ${key}`;
+}
+
+/** Show the variant `key` names on every still that has it, from its latest revision and at fitted zoom. */
+function setPick(key) {
+  state.pick = key;
+  state.rev = null;
+  state.compare = false;
+  state.thread = null;
+  state.replying = null;
+  state.swiped = null;
+  view = FIT;
+  aim = null;
+  closeTalk();
+  derive();
+  buildStrip();
+  render();
+}
+
+/** Draw again when the first of the agent's working states expires. */
+function watchWorking() {
+  clearTimeout(workTimer);
+  const next = Math.min(...workingNow().map((w) => Date.parse(w.until)));
+  if (Number.isFinite(next)) workTimer = setTimeout(render, Math.min(next - Date.now() + 50, MAX_TIMER_MS));
+}
+
+/**
+ * Draw the current still, its switchers and revision controls, the reviewed mark, the count,
+ * the agent's dots for the still, the strip and the remarks.
+ */
 function render() {
   const { stills, at } = state;
   const some = stills.length > 0;
@@ -580,6 +739,11 @@ function render() {
   el("shade").hidden = !state.more && !state.overview;
   el("more").setAttribute("aria-expanded", String(state.more));
   el("place").setAttribute("aria-expanded", String(state.overview));
+  root.classList.toggle("guest", guest());
+  for (const button of document.querySelectorAll(".as")) {
+    button.hidden = !guest() || !me();
+    button.textContent = `as ${me()}`;
+  }
   if (!some) {
     el("title").textContent = "Stills";
     el("count").textContent = "";
@@ -588,6 +752,7 @@ function render() {
     el("hint").hidden = true;
     el("talk").hidden = true;
     el("reply").hidden = true;
+    for (const id of ["variant", "busy", "viewports", "tags", "fallback", "others"]) el(id).hidden = true;
     state.draft = null;
     return;
   }
@@ -604,9 +769,13 @@ function render() {
   }
   const before = state.compare && index > 0;
   shown = s.revs[before ? index - 1 : index];
-  if (state.draft && (state.draft.still !== s.name || state.draft.rev !== shown.n)) dropDraft(false);
+  const { key } = s.variant;
+  const elsewhere = state.draft && (state.draft.still !== s.name || state.draft.variant !== key);
+  if (elsewhere || (state.draft && state.draft.rev !== shown.n)) dropDraft(false);
   const url = imageUrl(shown);
   if (el("still").getAttribute("src") !== url) el("still").src = url;
+  const wide = s.variant.viewport?.width;
+  el("still").style.width = !mobile && wide ? `${wide}px` : "";
   el("still").alt = s.title;
   el("title").textContent = s.title;
   document.title = `${s.title} · stills`;
@@ -614,6 +783,13 @@ function render() {
   const { reviewed, total } = counts(stills);
   el("count").textContent = `${reviewed} / ${total} reviewed`;
   el("place").textContent = `${at + 1}/${total}`;
+  const others = progress(state.marks, stills, me());
+  el("others").hidden = !others.length;
+  el("others").textContent = others.map((p) => `${p.name} reviewed ${p.reviewed}/${total}`).join(" · ");
+  const over = workingNow().find((w) => !w.thread && (!w.still || (w.still === s.name && (w.variant ?? key) === key)));
+  el("busy").hidden = !over;
+  el("busy").replaceChildren(...dotsOf(over));
+  renderSwitchers(s);
   el("viewed").checked = s.mark.reviewed;
   el("viewed").disabled = state.rev !== latest;
   const own = state.rev === latest;
@@ -635,11 +811,13 @@ function render() {
     t.classList.toggle("changed", mark.changed);
   });
   if (!mobile) thumbs[at].scrollIntoView({ block: "nearest", inline: "center" });
-  if (location.hash !== `#${s.name}`) history.replaceState(history.state, "", `#${s.name}`);
+  const hash = state.pick ? `#${s.name}@${state.pick}` : `#${s.name}`;
+  if (location.hash !== hash) history.replaceState(history.state, "", hash);
   for (const delta of [1, -1]) new Image().src = imageUrl(stills[step(stills, at, delta, state.all)].revs.at(-1));
   if (index > 0) new Image().src = imageUrl(s.revs[index - 1]);
   renderRemarks();
   layoutStage();
+  watchWorking();
 }
 
 /**
@@ -800,10 +978,12 @@ async function getJson(url) {
   return data;
 }
 
-/** Fold one log event into the marks and the threads. True when either changed. */
+/** Fold one log event into the marks, the agent's working states and the threads. True when any changed. */
 function apply(event) {
-  const marked = applyEvent(state.stills, event);
-  return applyThread(state.threads, event) || marked;
+  const marked = applyEvent(state.marks, state.stills, event);
+  if (marked) derive();
+  const worked = applyWorking(state.working, event);
+  return applyThread(state.threads, event) || marked || worked;
 }
 
 /**
@@ -843,9 +1023,13 @@ async function refresh(turn) {
   state.held = Boolean(latest && state.draft) || state.held;
   const rev = latest && !state.draft ? null : state.rev;
   state.stills = data.stills;
+  state.marks = data.marks;
+  state.me = data.me;
+  state.working = new Map(data.working.map((w) => [workingKey(w), w]));
   state.threads = threads;
   state.late = state.late.filter((e) => e.seq > data.cursor);
   for (const e of state.late) apply(e);
+  derive();
   state.applied = Math.max(state.applied, data.cursor);
   buildStrip();
   let at = state.stills.findIndex((s) => s.name === current);
@@ -881,16 +1065,56 @@ function follow() {
 }
 
 /**
- * Post `event` to the log, under the name this browser keeps when it has one. Returns the
- * stored event, which the stream then delivers; with the stream down, everything is read again.
- * Throws with the server's reason.
+ * True once whoever is looking has a name to write under: at once for a tailnet user and for a
+ * guest who gave one, else when the name sheet is continued; false when it is cancelled.
+ */
+function named() {
+  return !guest() || me() ? Promise.resolve(true) : askName();
+}
+
+/**
+ * Open the name sheet on the name this browser keeps, with the keyboard up. Resolves to true
+ * when it is continued, which keeps the name, and to false when it is cancelled.
+ */
+function askName() {
+  closeWho(false);
+  el("who-name").value = guestName;
+  el("continue").disabled = !guestName;
+  el("who").hidden = false;
+  el("who-name").focus();
+  return new Promise((resolve) => {
+    state.asking = resolve;
+  });
+}
+
+/** Close the name sheet: with `ok`, keeping the name typed in it, which it then needs; else as cancelled. */
+function closeWho(ok) {
+  const done = state.asking;
+  const name = el("who-name").value.trim().slice(0, MAX_NAME);
+  if (!done || (ok && !name)) return;
+  state.asking = null;
+  el("who").hidden = true;
+  el("who-name").blur();
+  if (ok) {
+    guestName = name;
+    store(NAME_KEY, name);
+    derive();
+    render();
+  }
+  done(ok);
+}
+
+/**
+ * Post `event` to the log, a guest's under the name they gave. Returns the stored event, which
+ * the stream then delivers; with the stream down, everything is read again. Throws with the
+ * server's reason.
  */
 async function send(event) {
-  const name = (stored(NAME_KEY) || "").trim();
+  const name = guest() ? me() : "";
   const res = await fetch("/_review/events", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name ? { ...event, author: { kind: "human", name } } : event),
+    body: JSON.stringify(name ? { ...event, author: { name } } : event),
   });
   const answer = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
@@ -899,12 +1123,17 @@ async function send(event) {
   return answer;
 }
 
-/** Write the reviewed mark of the current still's latest revision: set it, or clear it. */
+/**
+ * Write the reviewed mark of the latest revision of the variant on screen: set it, or clear it,
+ * once whoever is looking has a name.
+ */
 async function setReviewed(on) {
   const s = state.stills[state.at];
   if (!s) return;
+  const event = { type: on ? "viewed" : "unviewed", still: s.name, variant: s.variant.key, rev: s.revs.at(-1).n };
+  if (!(await named())) return render();
   try {
-    await send({ type: on ? "viewed" : "unviewed", still: s.name, rev: s.revs.at(-1).n });
+    await send(event);
   } catch (e) {
     report(`Could not save the reviewed mark: ${e.message}`);
     render();
@@ -912,18 +1141,20 @@ async function setReviewed(on) {
 }
 
 /**
- * Post the draft as a thread: its still, revision, mark and comment in one event, with the
- * annotated still when it could be drawn, and a notice when it could not. The new thread is
- * then the selected one. The mark stays as it is while it is being posted.
+ * Post the draft as a thread, once whoever is looking has a name: its still, variant, revision,
+ * mark and comment in one event, with the annotated still when it could be drawn, and a notice
+ * when it could not. The new thread is then the selected one. The mark stays as it is while it
+ * is being posted.
  */
 async function postRemark() {
   const draft = state.draft;
   const body = el("body").value.trim();
-  if (!draft || !body || el("post").disabled) return;
+  if (!draft || !body || el("post").disabled || !(await named()) || state.draft !== draft) return;
   el("post").disabled = true;
   try {
     const annotated = await annotate(imageUrl(shown), draft.anchor).catch(() => null);
-    const event = { type: "thread", still: draft.still, rev: draft.rev, anchor: draft.anchor, body };
+    const { still, variant, rev, anchor } = draft;
+    const event = { type: "thread", still, variant, rev, anchor, body };
     const thread = await send(annotated ? { ...event, annotated } : event);
     applyThread(state.threads, thread);
     if (state.draft === draft) dropDraft();
@@ -937,13 +1168,14 @@ async function postRemark() {
 }
 
 /**
- * Post what is written in the reply form to the thread it is for. The reply shows at once; the
- * desktop layout then closes the form, the mobile one keeps it and shows the reply.
+ * Post what is written in the reply form to the thread it is for, once whoever is looking has a
+ * name. The reply shows at once; the desktop layout then closes the form, the mobile one keeps
+ * it and shows the reply.
  */
 async function postReply() {
   const body = el("answer").value.trim();
   const thread = answerFor;
-  if (el("reply").hidden || !body || el("send").disabled) return;
+  if (el("reply").hidden || !body || el("send").disabled || !(await named())) return;
   el("send").disabled = true;
   try {
     const reply = await send({ type: "reply", thread, body });
@@ -965,11 +1197,11 @@ async function postReply() {
 /**
  * Resolve thread `id`, or reopen it when it is resolved; the change shows at once, and a reply
  * being written under its card is let go. With `undoable`, a resolve can be undone for five
- * seconds.
+ * seconds. Not for a guest.
  */
 async function setStatus(id, undoable = false) {
   const thread = state.threads.find((t) => t.id === id);
-  if (!thread || busy.has(id)) return;
+  if (!thread || busy.has(id) || guest()) return;
   const type = thread.status === "open" ? "resolve" : "reopen";
   busy.add(id);
   state.swiped = null;
@@ -994,11 +1226,14 @@ function closeSheets() {
 
 /**
  * Turn "＋ Remark" on or off: while on, a finger's drag on the still draws instead of scrolling
- * or panning. In the mobile layout the sheets get out of the way of the still.
+ * or panning. Turning it on waits for whoever is looking to have a name. In the mobile layout
+ * the sheets get out of the way of the still.
  */
-function toggleArmed() {
+async function toggleArmed() {
   if (!state.stills.length) return;
-  state.armed = !state.armed;
+  const on = !state.armed;
+  if (on && !(await named())) return;
+  state.armed = on;
   closeSheets();
   if (state.armed && mobile) state.panel = false;
   render();
@@ -1103,7 +1338,8 @@ function endDrag() {
 
 /** Make `anchor` the draft's mark, on the revision on screen. */
 function setDraft(anchor) {
-  state.draft = { still: state.stills[state.at].name, rev: shown.n, anchor };
+  const s = state.stills[state.at];
+  state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor };
   drawDraft();
 }
 
@@ -1250,6 +1486,19 @@ el("shade").onclick = () => {
   render();
 };
 el("layout").onclick = toggleLayout;
+el("variant").onclick = () => toggleSheet("more");
+el("who-form").onsubmit = (e) => {
+  e.preventDefault();
+  closeWho(true);
+};
+el("who-name").oninput = () => {
+  el("continue").disabled = !el("who-name").value.trim();
+};
+el("who-close").onclick = () => closeWho(false);
+el("who").onclick = (e) => {
+  if (e.target === el("who")) closeWho(false);
+};
+for (const button of document.querySelectorAll(".as")) button.onclick = askName;
 el("talk-back").onclick = closeTalk;
 el("talk-status").onclick = () => setStatus(state.talk);
 el("crop").onclick = jump;
@@ -1317,6 +1566,8 @@ el("all").onchange = (e) => {
 };
 
 addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.asking) return closeWho(false);
+  if (state.asking) return;
   if (e.key === "Escape" && (state.draft || state.armed)) return cancelDraft();
   if (e.key === "Escape" && state.talk) return closeTalk();
   if (e.key === "Escape" && (state.more || state.overview)) return el("shade").click();
@@ -1374,10 +1625,22 @@ addEventListener("popstate", () => {
   render();
 });
 
+onSwipe(
+  el("who-form"),
+  () => true,
+  (dx, dy) => {
+    if (dy > SWIPE_PX && dy > 2 * Math.abs(dx)) closeWho(false);
+  }
+);
+
 addEventListener("hashchange", () => {
   const i = hashIndex();
+  const { key } = hashParts();
+  if (key && key !== state.pick) setPick(key);
   if (i !== -1 && i !== state.at) show(i);
 });
+
+state.pick = hashParts().key;
 
 applyLayout();
 await load();
