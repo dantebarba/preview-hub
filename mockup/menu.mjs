@@ -40,6 +40,7 @@ import {
   EVENTS_FILE,
   isPng,
   MANIFEST_FILE,
+  MAX_AUTHOR,
   readEvents,
   reviewed,
   reviewMarks,
@@ -61,8 +62,8 @@ const MAX_POST_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
 const POLL_MS = 1000;
 const PING_TICKS = 20;
-const MAX_AUTHOR = 100;
 const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
+const BETWEEN_WORDS = /(\?=)\s+(?==\?utf-8\?[bq]\?)/gi;
 const OWNER_ONLY = ["resolve", "reopen"];
 const VIEWER_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "stills");
 const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
@@ -153,14 +154,15 @@ export function checkManifest(scratch) {
 
 /**
  * `value`, a header that may hold RFC 2047 encoded words, which is how `tailscale serve` writes
- * a name that is not ASCII, as the text it stands for.
+ * a name that is not ASCII, as the text it stands for. A long name comes as several words, and
+ * the space between two of them is not part of it.
  */
 function decodeHeader(value) {
-  return value.replace(ENCODED_WORD, (all, kind, text) => {
+  return value.replace(BETWEEN_WORDS, "$1").replace(ENCODED_WORD, (all, kind, text) => {
     if (kind.toLowerCase() === "b") return Buffer.from(text, "base64").toString("utf8");
-    const bytes = text.replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, (hex, code) => `%${code}`);
+    const bytes = text.replace(/%/g, "%25").replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, "%$1");
     try {
-      return decodeURIComponent(bytes.replace(/%(?![0-9A-F]{2})/gi, "%25"));
+      return decodeURIComponent(bytes);
     } catch {
       return all;
     }
@@ -168,25 +170,22 @@ function decodeHeader(value) {
 }
 
 /**
- * The share domains among `hosts`, the names the server accepts: the entries with a leading
- * dot, as `preview start` writes the edge's domain into `PREVIEW_ALLOWED_HOSTS`.
- */
-export function shareDomains(hosts = []) {
-  return hosts.filter((h) => typeof h === "string" && h.startsWith(".")).map((h) => h.toLowerCase());
-}
-
-/**
  * Who sent the request with `headers`: `{ name, via: "tailnet" }` for a tailnet user, named by
  * the `Tailscale-User-Name` (else `Tailscale-User-Login`) header that `tailscale serve` adds,
- * or null for a guest. A request to a host under one of the share domains `domains` came
- * through the edge, not through `tailscale serve`, so it is a guest's whatever headers it
- * carries.
+ * or null for a guest. `hosts` are the names the server accepts, as `preview start` writes
+ * them into `PREVIEW_ALLOWED_HOSTS`: the tailnet name, and the edge's domain with a leading
+ * dot. A request to a host under that domain, or to one that is not the tailnet name when
+ * there is one, did not come through `tailscale serve`, so it is a guest's whatever headers
+ * it carries.
  */
-export function reviewer(headers, domains = []) {
+export function reviewer(headers, hosts = []) {
   const login = String(headers["tailscale-user-login"] ?? "").trim();
   if (!login) return null;
   const host = String(headers.host ?? "").toLowerCase().replace(/:\d+$/, "");
-  if (domains.some((d) => host === d.slice(1) || host.endsWith(d))) return null;
+  const names = hosts.filter((h) => typeof h === "string" && h).map((h) => h.toLowerCase());
+  const tailnet = names.filter((h) => !h.startsWith("."));
+  const shared = names.some((h) => h.startsWith(".") && (host === h.slice(1) || host.endsWith(h)));
+  if (shared || (tailnet.length && !tailnet.includes(host))) return null;
   const name = decodeHeader(String(headers["tailscale-user-name"] ?? "")).trim() || login;
   return { name: name.slice(0, MAX_AUTHOR), via: "tailnet" };
 }
@@ -611,11 +610,10 @@ async function handleReview(req, res, { scratch, stream, who }) {
 /**
  * The Vite plugin: menu at `/`, the stills viewer at `/stills` with its `/_review/` routes,
  * clean page URLs, the `/app/` prefix, no-store and reloads. `hosts` are the names the server
- * accepts, whose share domains tell a guest from a tailnet user (see `reviewer`).
+ * accepts, which tell a guest from a tailnet user (see `reviewer`).
  */
 export function menuPlugin({ app, hosts = [] }) {
   const scratch = scratchDir(app);
-  const domains = shareDomains(hosts);
   return {
     name: "mockup-menu",
     enforce: "pre",
@@ -629,7 +627,7 @@ export function menuPlugin({ app, hosts = [] }) {
       server.middlewares.use(async (req, res, next) => {
         if (!REV_IMAGE.test(req.url.split("?")[0])) noStore(res);
         try {
-          const who = reviewer(req.headers, domains);
+          const who = reviewer(req.headers, hosts);
           if (await handleReview(req, res, { scratch, stream, who })) return undefined;
           const target = route(req.url, app);
           if (!target) return next();

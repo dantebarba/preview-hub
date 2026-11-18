@@ -65,7 +65,10 @@ const KEY = /^[a-z0-9][\w.@-]{0,63}(\+[a-z0-9][\w.-]{0,31}){0,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BODY = 10000;
-const MAX_AUTHOR = 100;
+
+/** The most characters an author's name may hold. */
+export const MAX_AUTHOR = 100;
+
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
 

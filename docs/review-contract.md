@@ -289,7 +289,7 @@ event's `author` (`kind: "human"`), whatever `author` the posted body claims:
 | Who       | How the runtime tells | `author` |
 | --------- | --------------------- | -------- |
 | A tailnet user | The request carries `Tailscale-User-Login`, which `tailscale serve` adds (and strips from what a client sends) | `name` from `Tailscale-User-Name`, else the login; `via: "tailnet"` |
-| A guest   | Anything else: a share link, or a request to a host under the share domain (a leading-dot entry of `PREVIEW_ALLOWED_HOSTS`), which did not come through `tailscale serve` whatever headers it carries | `name` from the body's `author.name`, trimmed, 1 to 40 characters; `via: "share"` |
+| A guest   | Anything else: a share link, or a request to a host that is not the tailnet name of `PREVIEW_ALLOWED_HOSTS` (one under the share domain, its leading-dot entry, or an address), which did not come through `tailscale serve` whatever headers it carries | `name` from the body's `author.name`, trimmed, 1 to 40 characters; `via: "share"` |
 
 - **Reading never asks.** A guest sees everything a tailnet user sees.
 - **A guest's write needs a name.** A `POST /_review/events` from a guest without one is

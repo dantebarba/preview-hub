@@ -19,7 +19,6 @@ import {
   reviewStills,
   rewriteRefs,
   route,
-  shareDomains,
 } from "./menu.mjs";
 import { addStill, appendEvent, threads, working } from "./review.mjs";
 import {
@@ -324,22 +323,24 @@ test("applyWorking folds the agent's working states as the store does, ended by 
   assert.equal(on.size, 0);
 });
 
-test("reviewer names a tailnet user by the headers tailscale serve adds, and nobody on a share host", () => {
-  const domains = shareDomains(["box.tail1234.ts.net", ".Share.example"]);
-  assert.deepEqual(domains, [".share.example"]);
+test("reviewer names a tailnet user by the headers tailscale serve adds, and nobody on another host", () => {
+  const hosts = ["Box.tail1234.ts.net", ".Share.example"];
   const login = "dante@example.com";
   const named = { host: "box.tail1234.ts.net:40000", "tailscale-user-login": login, "tailscale-user-name": "Dante B" };
-  assert.deepEqual(reviewer(named, domains), { name: "Dante B", via: "tailnet" });
-  assert.deepEqual(reviewer({ ...named, "tailscale-user-name": "" }, domains), { name: login, via: "tailnet" });
-  const encoded = { ...named, "tailscale-user-name": "=?utf-8?q?Ana_Mar=C3=ADa?=" };
-  assert.equal(reviewer(encoded, domains).name, "Ana María");
-  const base64 = { ...named, "tailscale-user-name": `=?UTF-8?b?${Buffer.from("José").toString("base64")}?=` };
-  assert.equal(reviewer(base64, domains).name, "José");
-  assert.equal(reviewer({ host: "box.tail1234.ts.net" }, domains), null);
-  assert.equal(reviewer({ host: "box.tail1234.ts.net", "tailscale-user-name": "Dante" }, domains), null);
-  assert.equal(reviewer({ ...named, host: "my-app.share.example" }, domains), null);
-  assert.equal(reviewer({ ...named, host: "SHARE.example:443" }, domains), null);
-  assert.equal(reviewer({ ...named, "tailscale-user-name": "x".repeat(300) }, domains).name.length, 100);
+  assert.deepEqual(reviewer(named, hosts), { name: "Dante B", via: "tailnet" });
+  assert.deepEqual(reviewer({ ...named, "tailscale-user-name": "" }, hosts), { name: login, via: "tailnet" });
+  const called = (name) => reviewer({ ...named, "tailscale-user-name": name }, hosts).name;
+  assert.equal(called("=?utf-8?q?Ana_Mar=C3=ADa?="), "Ana María");
+  assert.equal(called("=?utf-8?q?Ana_Mar=C3=AD?= =?utf-8?q?a_100%41?="), "Ana María 100%41");
+  assert.equal(called(`=?UTF-8?b?${Buffer.from("José").toString("base64")}?=`), "José");
+  assert.equal(called("x".repeat(300)).length, 100);
+  assert.equal(reviewer({ host: "box.tail1234.ts.net" }, hosts), null);
+  assert.equal(reviewer({ host: "box.tail1234.ts.net", "tailscale-user-name": "Dante" }, hosts), null);
+  assert.equal(reviewer({ ...named, host: "my-app.share.example" }, hosts), null);
+  assert.equal(reviewer({ ...named, host: "SHARE.example:443" }, hosts), null);
+  assert.equal(reviewer({ ...named, host: "100.64.0.7:40000" }, hosts), null);
+  assert.equal(reviewer({ ...named, host: "my-app.share.example" }, [".share.example"]), null);
+  assert.deepEqual(reviewer({ ...named, host: "127.0.0.1:5173" }, []), { name: "Dante B", via: "tailnet" });
 });
 
 test("authorOf writes a tailnet user's name, and a guest's own, of 1 to 40 characters", () => {
