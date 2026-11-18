@@ -36,7 +36,9 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { applyThread, markOf } from "./stills/state.js";
+import { applyThread, applyWorking, markOf, workingAt } from "./stills/state.js";
+
+export { WORKING_MS } from "./stills/state.js";
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
@@ -66,9 +68,6 @@ const MAX_BODY = 10000;
 const MAX_AUTHOR = 100;
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
-
-/** How long the agent's `working` state lasts after its last `working` event. */
-export const WORKING_MS = 10 * 60 * 1000;
 
 /**
  * The viewport presets a variant is shot at, by name: CSS size, device pixel ratio, and
@@ -611,11 +610,10 @@ export function threads(dir) {
   const { events } = readEvents(dir);
   const out = [];
   for (const e of events) applyThread(out, e);
-  const named = new Map(events.filter((e) => e.type === "thread").map((e) => [e.id, e.variant]));
   const stillsByName = revisions(dir);
   return out.map((t) => ({
     ...t,
-    variant: t.still === null ? null : (named.get(t.id) ?? stillsByName.get(t.still)?.first ?? null),
+    variant: t.still === null ? null : (t.variant ?? stillsByName.get(t.still)?.first ?? null),
   }));
 }
 
@@ -677,27 +675,6 @@ export function reviewed(dir, by) {
  */
 export function working(dir, now = Date.now()) {
   const on = new Map();
-  const expiry = (at) => Date.parse(at) + WORKING_MS;
-  for (const e of readEvents(dir).events) {
-    if (e.type === "working" && e.author.kind === "agent") {
-      const key = e.thread ? `thread ${e.thread}` : `still ${e.still ?? ""} ${e.variant ?? ""}`;
-      const last = on.get(key);
-      const since = last && expiry(last.at) > Date.parse(e.at) ? last.since : e.at;
-      on.delete(key);
-      on.set(key, {
-        thread: e.thread ?? null,
-        still: e.still ?? null,
-        variant: e.variant ?? null,
-        note: e.note ?? null,
-        author: e.author,
-        since,
-        at: e.at,
-        until: new Date(expiry(e.at)).toISOString(),
-      });
-    } else if ((e.type === "reply" || e.type === "idle") && e.author.kind === "agent") {
-      if (e.thread) on.delete(`thread ${e.thread}`);
-      else on.clear();
-    }
-  }
-  return [...on.values()].filter((w) => expiry(w.at) > now);
+  for (const e of readEvents(dir).events) applyWorking(on, e);
+  return workingAt(on, now);
 }
