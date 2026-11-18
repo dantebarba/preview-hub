@@ -3,18 +3,21 @@
  * in `review.mjs`. `preview stills|review` runs it inside the runtime image, so the viewer and
  * the CLI share one module.
  *
- *   node review-cli.mjs [--dir D] stills add <png|-> --name N [--title T] [--source P] [--size WxH]
- *   node review-cli.mjs [--dir D] stills ls [--json]
+ *   node review-cli.mjs [--dir D] stills add <png|-> --name N [--viewport V] [--tag T]... [--full-page]
+ *                                            [--title T] [--source P]
+ *   node review-cli.mjs [--dir D] stills ls [--as NAME] [--json]
  *   node review-cli.mjs [--dir D] review ls [--open] [--json]
  *   node review-cli.mjs [--dir D] review show <thread> [--json]
  *   node review-cli.mjs [--dir D] review reply <thread> <text...>
  *   node review-cli.mjs [--dir D] review resolve|reopen <thread>
+ *   node review-cli.mjs [--dir D] review working <thread|still> [--variant K] [--note T]
+ *   node review-cli.mjs [--dir D] review idle [thread]
  *   node review-cli.mjs [--dir D] review watch [--since SEQ] [--json]
  *
  * `--dir` is the mockup scratch dir (`.mockup/`), default `$MOCKUP_DIR` or the working dir.
  * Paths are printed under `$MOCKUP_HOST_DIR` when set, so a CLI run in a container names files
- * as the host sees them. Agent events are written as `{kind: "agent", name: $REVIEW_AUTHOR}`
- * (default "agent"). Exit status: 0 done, 1 failed, 2 bad usage.
+ * as the host sees them. Agent events are written as `{kind: "agent", name:
+ * $REVIEW_AUTHOR, via: "cli"}` (name default "agent"). Exit status: 0 done, 1 failed, 2 bad usage.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -23,17 +26,32 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, annotatedFile, appendEvent, EVENTS_FILE, readEvents, reviewed, stills, threads } from "./review.mjs";
+import {
+  addStill,
+  annotatedFile,
+  appendEvent,
+  EVENTS_FILE,
+  readEvents,
+  reviewMarks,
+  revisions,
+  stills,
+  threads,
+} from "./review.mjs";
 import { markOf } from "./stills/state.js";
 
 const POLL_MS = 200;
 
-const USAGE = `usage: preview stills add <png> --name N [--title T] [--source "/path?q"] [--size WxH]
-       preview stills ls [--json]
+const VIA_LABEL = { tailnet: "tailnet", share: "guest", cli: "cli" };
+
+const USAGE = `usage: preview stills add <png> --name N [--viewport mobile|mobile-s|tablet|desktop|WxH[@dpr][+touch]]
+                         [--tag T]... [--full-page] [--title T] [--source "/path?q"]
+       preview stills ls [--as NAME] [--json]
        preview review ls [--open] [--json]
        preview review show <thread> [--json]
        preview review reply <thread> "<text>"
        preview review resolve|reopen <thread>
+       preview review working <thread|still> [--variant K] [--note "<text>"]
+       preview review idle [thread]
        preview review watch [--since SEQ] [--json]`;
 
 const COMMANDS = {
@@ -42,17 +60,26 @@ const COMMANDS = {
       name: { type: "string" },
       title: { type: "string" },
       source: { type: "string" },
+      viewport: { type: "string" },
       size: { type: "string" },
+      tag: { type: "string", multiple: true },
+      "full-page": { type: "boolean" },
     },
     args: [1, 1],
     run: stillsAdd,
   },
-  "stills ls": { options: { json: { type: "boolean" } }, args: [0, 0], run: stillsLs },
+  "stills ls": { options: { as: { type: "string" }, json: { type: "boolean" } }, args: [0, 0], run: stillsLs },
   "review ls": { options: { open: { type: "boolean" }, json: { type: "boolean" } }, args: [0, 0], run: reviewLs },
   "review show": { options: { json: { type: "boolean" } }, args: [1, 1], run: reviewShow },
   "review reply": { options: {}, args: [2, Infinity], raw: true, run: reviewReply },
   "review resolve": { options: {}, args: [1, 1], run: (ctx, args) => setStatus(ctx, "resolve", args[0]) },
   "review reopen": { options: {}, args: [1, 1], run: (ctx, args) => setStatus(ctx, "reopen", args[0]) },
+  "review working": {
+    options: { variant: { type: "string" }, note: { type: "string" } },
+    args: [1, 1],
+    run: reviewWorking,
+  },
+  "review idle": { options: {}, args: [0, 1], run: reviewIdle },
   "review watch": { options: { since: { type: "string" }, json: { type: "boolean" } }, args: [0, 0], run: reviewWatch },
 };
 
@@ -72,9 +99,23 @@ function anchorText(anchor) {
   return `box ${xy} ${anchor.w.toFixed(2)}x${anchor.h.toFixed(2)}`;
 }
 
-/** Where a thread points: `<still> r<rev> <anchor>`, or `general` for a thread on no still. */
+/** `author` as printed: the name, then `(guest)`, `(tailnet)` or `(cli)` when it says how it came. */
+export function who(author) {
+  return author.via ? `${author.name} (${VIA_LABEL[author.via]})` : author.name;
+}
+
+/** `still`, then its variant in brackets when it is known: `05-invite [mobile+dark]`. */
+function stillText(still, variant) {
+  return variant ? `${still} [${variant}]` : still;
+}
+
+/**
+ * Where a thread points: `<still> [<variant>] r<rev> <anchor>`, or `general` for a thread on no
+ * still. The variant is left out when it is not known.
+ */
 function target(thread) {
-  return thread.still === null ? "general" : `${thread.still} r${thread.rev} ${anchorText(thread.anchor)}`;
+  if (thread.still === null) return "general";
+  return `${stillText(thread.still, thread.variant)} r${thread.rev} ${anchorText(thread.anchor)}`;
 }
 
 /** `body` on one line, quoted, so newlines in it never split a line of output. */
@@ -82,20 +123,36 @@ function quote(body, max = Infinity) {
   return JSON.stringify(body.length > max ? `${body.slice(0, max - 1)}…` : body);
 }
 
-/** The line `watch` prints for `event`. */
-export function eventLine(event) {
-  const who = event.author.name;
+/** What a `working` or `idle` event is about: its thread, else its still and `variant`, else nothing. */
+function aboutText(event, variant = event.variant) {
+  return event.thread ?? (event.still ? stillText(event.still, variant) : "");
+}
+
+/**
+ * The line `watch` prints for `event`. `first` maps a still's name to its first variant, the
+ * one an event without `variant` means.
+ */
+export function eventLine(event, first = new Map()) {
+  const by = who(event.author);
   const head = `#${event.seq} ${event.type}`;
+  const variant = event.variant ?? first.get(event.still) ?? null;
   switch (event.type) {
-    case "thread":
-      return `${head} ${event.id} ${target({ rev: null, anchor: null, ...event })} ${who}: ${quote(event.body)}`;
+    case "thread": {
+      const where = target({ rev: null, anchor: null, ...event, variant });
+      return `${head} ${event.id} ${where} ${by}: ${quote(event.body)}`;
+    }
     case "reply":
-      return `${head} ${event.thread} ${who}: ${quote(event.body)}`;
+      return `${head} ${event.thread} ${by}: ${quote(event.body)}`;
     case "resolve":
     case "reopen":
-      return `${head} ${event.thread} ${who}`;
+      return `${head} ${event.thread} ${by}`;
+    case "working":
+    case "idle": {
+      const about = aboutText(event, variant);
+      return `${head}${about ? ` ${about}` : ""} ${by}`;
+    }
     default:
-      return `${head} ${event.still} r${event.rev} ${who}`;
+      return `${head} ${stillText(event.still, variant)} r${event.rev} ${by}`;
   }
 }
 
@@ -106,9 +163,13 @@ function findThread(dir, id) {
   return thread;
 }
 
-/** Add a revision of a still from a PNG file, or from stdin when the file is `-`. */
-async function stillsAdd({ dir, io }, [file], { name, title, source, size }) {
+/**
+ * Add a revision of a variant of a still from a PNG file, or from stdin when the file is `-`.
+ * `--size WxH`, from before viewports, is a custom viewport at 1x.
+ */
+async function stillsAdd({ dir, io }, [file], { name, title, source, viewport, size, tag, "full-page": fullPage }) {
   if (!name) throw new CliError("--name is required", 2);
+  if (viewport !== undefined && size !== undefined) throw new CliError("give --viewport or --size, not both", 2);
   let tmp = null;
   if (file === "-") {
     tmp = mkdtempSync(path.join(tmpdir(), "still-"));
@@ -118,35 +179,73 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, size }) {
     throw new CliError(`${file}: no such file`);
   }
   try {
-    const entry = await addStill(dir, { file, name, title, source, size });
-    const rev = entry.revs.at(-1);
-    io.out(`${entry.name} r${rev.n} ${io.host(rev.file)}`);
+    const { entry, variant, rev } = await addStill(dir, {
+      file,
+      name,
+      title,
+      source,
+      viewport: viewport ?? size,
+      tags: tag,
+      fullPage,
+    });
+    io.out(`${entry.name} [${variant.key}] r${rev.n} ${io.host(rev.file)}`);
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-/** Each still's current revision, its reviewed state and its open threads. */
-function stillsLs({ dir, io }, _args, { json }) {
-  const marks = reviewed(dir);
+/**
+ * The reviewed state of a variant in words: as `as` left it when given, else whose marks
+ * hold on its latest revision (`marks` maps a reviewer to their mark of it).
+ */
+function stateText(marks, as) {
+  if (as !== undefined) {
+    const m = marks.get(as);
+    if (m.reviewed) return "reviewed";
+    return m.changed ? `changed since reviewed (r${m.viewed})` : "not reviewed";
+  }
+  const holds = [...marks].filter(([, m]) => m.reviewed).map(([name]) => name);
+  const changed = [...marks].filter(([, m]) => m.changed).map(([name]) => name);
+  if (holds.length) return `reviewed by ${holds.join(", ")}`;
+  return changed.length ? `changed since reviewed by ${changed.join(", ")}` : "not reviewed";
+}
+
+/**
+ * Each variant of each still: its current revision, its reviewed state and its open threads.
+ * The state is the one `--as` left, else whose marks hold; the JSON carries every reviewer's.
+ */
+function stillsLs({ dir, io }, _args, { as, json }) {
+  const { reviewers, marks } = reviewMarks(dir);
+  const names = as === undefined ? reviewers : [as];
   const open = threads(dir).filter((t) => t.status === "open");
-  const rows = stills(dir).map((s) => {
-    const mark = marks[s.name] ?? markOf(0, null);
-    const rev = s.revs.find((r) => r.n === mark.rev);
-    return {
-      name: s.name,
-      title: s.title,
-      source: s.source,
-      ...mark,
-      file: rev ? io.host(rev.file) : null,
-      open: open.filter((t) => t.still === s.name).length,
-    };
-  });
+  const rows = stills(dir).map((s) => ({
+    name: s.name,
+    title: s.title,
+    source: s.source,
+    variants: s.variants.map((v) => {
+      const rev = v.revs.at(-1) ?? null;
+      const byReviewer = new Map(
+        names.map((n) => [n, markOf(rev?.n ?? 0, marks.get(n)?.get(s.name)?.get(v.key) ?? null)])
+      );
+      return {
+        key: v.key,
+        viewport: v.viewport,
+        tags: v.tags,
+        rev: rev?.n ?? 0,
+        file: rev ? io.host(rev.file) : null,
+        ...(as === undefined ? {} : byReviewer.get(as)),
+        marks: Object.fromEntries(byReviewer),
+        state: stateText(byReviewer, as),
+        open: open.filter((t) => t.still === s.name && t.variant === v.key).length,
+      };
+    }),
+  }));
   if (json) return io.out(JSON.stringify(rows, null, 2));
   if (!rows.length) return io.out("no stills yet; add one with 'preview stills add'");
   for (const r of rows) {
-    const state = r.reviewed ? "reviewed" : r.changed ? `changed since reviewed (r${r.viewed})` : "not reviewed";
-    io.out(`${r.name}  r${r.rev}  ${state}  ${r.open} open  ${quote(r.title)}`);
+    for (const v of r.variants) {
+      io.out(`${r.name} [${v.key}]  r${v.rev}  ${v.state}  ${v.open} open  ${quote(r.title)}`);
+    }
   }
 }
 
@@ -157,7 +256,7 @@ function reviewLs({ dir, io }, _args, { open, json }) {
   if (!rows.length) return io.out(open ? "no open threads" : "no threads yet");
   for (const t of rows) {
     const replies = `${t.replies.length} ${t.replies.length === 1 ? "reply" : "replies"}`;
-    io.out(`${t.id}  ${t.status}  ${target(t)}  ${replies}  ${t.author.name}: ${quote(t.body, 80)}`);
+    io.out(`${t.id}  ${t.status}  ${target(t)}  ${replies}  ${who(t.author)}: ${quote(t.body, 80)}`);
   }
 }
 
@@ -166,6 +265,7 @@ function reviewShow({ dir, io }, [id], { json }) {
   const thread = findThread(dir, id);
   const rev = stills(dir)
     .find((s) => s.name === thread.still)
+    ?.variants.find((v) => v.key === thread.variant)
     ?.revs.find((r) => r.n === thread.rev);
   const annotated = annotatedFile(thread.id);
   const files = {
@@ -180,26 +280,56 @@ function reviewShow({ dir, io }, [id], { json }) {
   if (files.annotated || thread.anchor) io.out(`marked  ${files.annotated ?? notDrawn}`);
   for (const e of [thread, ...thread.replies]) {
     io.out("");
-    io.out(`#${e.seq} ${e.author.name} (${e.author.kind}) ${e.at}`);
+    const via = e.author.via ? `, ${VIA_LABEL[e.author.via]}` : "";
+    io.out(`#${e.seq} ${e.author.name} (${e.author.kind}${via}) ${e.at}`);
     for (const line of e.body.split("\n")) io.out(`  ${line}`);
   }
 }
 
-/** Append an agent event, after checking the thread exists so the error names the command. */
+/** Append `event` as the agent and print its seq, its type and what it is about. */
 async function agentEvent({ dir, io }, event) {
-  findThread(dir, event.thread);
-  const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author } });
-  io.out(`#${stored.seq} ${stored.type} ${stored.thread}`);
+  const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author, via: "cli" } });
+  const about = aboutText(stored);
+  io.out(`#${stored.seq} ${stored.type}${about ? ` ${about}` : ""}`);
 }
 
 /** Reply to a thread as the agent. */
 function reviewReply(ctx, [id, ...words]) {
+  findThread(ctx.dir, id);
   return agentEvent(ctx, { type: "reply", thread: id, body: words.join(" ") });
 }
 
 /** Resolve or reopen a thread as the agent. */
 function setStatus(ctx, type, id) {
+  findThread(ctx.dir, id);
   return agentEvent(ctx, { type, thread: id });
+}
+
+/**
+ * Report the agent working on a thread, or on a still (a variant of it with `--variant`),
+ * named by `on`. Sending it again keeps the state on; a reply or `idle` ends it.
+ */
+function reviewWorking(ctx, [on], { variant, note }) {
+  const { dir } = ctx;
+  const event = { type: "working" };
+  if (threads(dir).some((t) => t.id === on)) {
+    if (variant !== undefined) throw new CliError("--variant goes with a still, not a thread", 2);
+    event.thread = on;
+  } else if (revisions(dir).has(on)) {
+    event.still = on;
+    if (variant !== undefined) event.variant = variant;
+  } else {
+    throw new CliError(`no thread or still '${on}'; see 'preview review ls' and 'preview stills ls'`);
+  }
+  if (note !== undefined) event.note = note;
+  return agentEvent(ctx, event);
+}
+
+/** End the agent's working state on a thread, or every one without a thread. */
+function reviewIdle(ctx, [id]) {
+  if (id === undefined) return agentEvent(ctx, { type: "idle" });
+  findThread(ctx.dir, id);
+  return agentEvent(ctx, { type: "idle", thread: id });
 }
 
 /** True when the scratch dir is gone, also when it was deleted under a bind mount. */
@@ -243,9 +373,9 @@ async function reviewWatch({ dir, io }, _args, { since, json }) {
         reported.add(p.line);
         io.err(`events.jsonl line ${p.line} skipped: ${p.error}`);
       }
-      for (const e of events) {
-        if (e.author.kind === "human") io.out(json ? JSON.stringify(e) : eventLine(e));
-      }
+      const human = events.filter((e) => e.author.kind === "human");
+      const first = human.length && !json ? new Map([...revisions(dir)].map(([n, v]) => [n, v.first])) : null;
+      for (const e of human) io.out(json ? JSON.stringify(e) : eventLine(e, first));
       cursor = next;
     }
     await sleep(io.pollMs ?? POLL_MS, undefined, { signal: io.signal }).catch(() => {});

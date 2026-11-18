@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Stills</title>
   <link rel="stylesheet" href="/_review/viewer.css">
 </head>
@@ -13,17 +13,27 @@
     <button id="next" aria-label="Next still" title="Next still (→)">→</button>
     <b id="title"></b>
     <span id="flag" hidden>changed since reviewed</span>
+    <button id="variant" title="The variant on screen" hidden></button>
+    <span id="busy" hidden></span>
     <span id="count"></span>
-    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> Reviewed</label>
+    <button id="place" aria-label="All the stills" aria-expanded="false" hidden></button>
+    <label id="mark" title="Mark this still reviewed (v)">
+      <input type="checkbox" id="viewed"> <span>Reviewed</span>
+    </label>
   </header>
   <div id="bar">
+    <span id="viewports" class="seg" role="group" aria-label="Viewport" hidden></span>
+    <span id="tags" class="seg" role="group" aria-label="Tags" hidden></span>
+    <span id="fallback" hidden></span>
     <label id="revs" hidden>rev <select id="rev" aria-label="Revision"></select></label>
     <button id="compare" hidden aria-pressed="false" title="Flip to the previous revision and back (b)">before / after</button>
     <span id="shown"></span>
     <button id="remark" aria-pressed="false" title="Mark an area of the still and comment on it (c)">＋ Remark</button>
     <button id="remarks" aria-pressed="false" title="The remarks on this still">Remarks</button>
+    <span id="others" hidden></span>
     <label id="filter"><input type="checkbox" id="all"> show reviewed</label>
     <a id="open" target="_blank" rel="noopener">open full size</a>
+    <button id="layout" title="Switch between the phone and the desktop layout, remembered on this device"></button>
   </div>
   <p id="hint" hidden>Drag a box on the still, or tap it for a pin.</p>
   <p id="error" role="alert" hidden></p>
@@ -37,6 +47,7 @@
           <textarea id="body" rows="3" maxlength="10000" required aria-label="Remark" placeholder="What is wrong here?"></textarea>
           <div class="row">
             <span id="where"></span>
+            <button type="button" class="as" title="Change your name" hidden></button>
             <button type="button" id="cancel">Cancel</button>
             <button id="post" class="go">Post</button>
           </div>
@@ -50,16 +61,49 @@
         <button id="close" aria-label="Close the remarks">×</button>
       </div>
       <div id="threads"></div>
-      <form id="reply" hidden>
-        <textarea id="answer" rows="2" maxlength="10000" required aria-label="Reply" placeholder="Reply…"></textarea>
-        <div class="row">
-          <button type="button" id="status">Resolve</button>
-          <button id="send" class="go">Reply</button>
-        </div>
-      </form>
     </aside>
   </div>
   <nav id="strip" aria-label="Stills"></nav>
+  <div id="dock">
+    <button id="back" aria-label="Previous still">‹</button>
+    <button id="arm" aria-pressed="false">＋ Remark</button>
+    <button id="list" aria-pressed="false">Remarks<span id="badge" hidden></span></button>
+    <button id="more" aria-label="More" aria-expanded="false">⋯</button>
+    <button id="forth" aria-label="Next still">›</button>
+  </div>
+  <div id="shade" hidden></div>
+  <section id="talk" aria-label="Conversation" hidden>
+    <div id="talk-head">
+      <button id="talk-back" aria-label="Back to the remarks">‹</button>
+      <span id="talk-n" class="n"></span>
+      <b id="talk-title"></b>
+      <button id="talk-status">Resolve</button>
+    </div>
+    <button id="crop" aria-label="Show the mark on the still">
+      <span id="shot"><img id="crop-image" alt=""><i id="crop-mark"></i></span>
+    </button>
+    <div id="talk-body">
+      <div id="entries"></div>
+      <button id="fresh" hidden>new reply ↓</button>
+    </div>
+  </section>
+  <form id="reply" hidden>
+    <textarea id="answer" rows="1" maxlength="10000" required aria-label="Reply" placeholder="Reply…"></textarea>
+    <button type="button" class="as" title="Change your name" hidden></button>
+    <button id="send" class="go">Send</button>
+  </form>
+  <div id="who" hidden>
+    <form id="who-form" role="dialog" aria-modal="true" aria-labelledby="who-title">
+      <i id="who-grab"></i>
+      <button type="button" id="who-close" aria-label="Cancel">✕</button>
+      <b id="who-title">What's your name?</b>
+      <p>It goes with what you write here, so remarks can be told apart.</p>
+      <input id="who-name" name="name" autocomplete="name" autocapitalize="words" required
+        aria-label="Your name" placeholder="Your name">
+      <button id="continue" class="go" disabled>Continue</button>
+    </form>
+  </div>
+  <div id="toast" role="status" hidden><span id="toast-text"></span><button id="undo">Undo</button></div>
   <script type="module" src="/_review/viewer.js"></script>
 </body>
 </html>

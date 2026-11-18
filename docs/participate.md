@@ -209,19 +209,39 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   on, the header counts them, and a new revision clears the mark and flags the still
   "changed since reviewed". A drag on the still draws a box and a tap drops a pin (on a
   phone once **＋ Remark**, `c`, is on); the remark written next to it opens a thread, shown
-  as a numbered mark and a card in the remarks panel, where it is answered, resolved and
-  reopened.
+  as a numbered mark and a card in the remarks panel. A card shows the remark's first line,
+  its status, the latest message and a dot for replies not seen on this device, and carries
+  **Reply** and **Resolve**/**Reopen**; a click unfolds the conversation and resolved cards
+  sink into a collapsed group. Below 600 px of width or with a coarse pointer the viewer uses
+  its mobile layout, which "phone layout"/"desktop layout" forces either way per device: the
+  still between two one-row bars, zoomed and panned with a pinch, a double tap or two
+  fingers (marks land on the zoomed still), the other controls behind **⋯**, the strip a
+  grid behind the count, a card opening its conversation full screen, and a swipe on a card
+  uncovering Resolve/Reopen (left, with a five-second Undo) or Reply (right).
+  Variants get a viewport switcher and tag chips, the agent's `working` shows as dots, and
+  every write names its reviewer, as the README's
+  [Reviewing stills](../README.md#reviewing-stills) describes. The runtime reads a tailnet
+  reviewer from the `Tailscale-User-Name` and `Tailscale-User-Login` headers `tailscale serve`
+  adds; a guest on a share link, with no such headers, names themselves in a "What's your
+  name?" sheet on their first write (a bottom sheet on a phone, a small dialog on a desktop),
+  after which the write goes through; Cancel keeps the draft, and "as Ana" beside Post
+  changes the name.
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
-  `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
-  `{rev, viewed, reviewed, changed}`; `GET /_review/threads` is `{threads}`;
+  `{stills: [{name, title, source, variants, revs, mark}], marks, working, me, cursor}`,
+  `revs` being the first variant's and `mark` `{rev, viewed, reviewed, changed, variants}`,
+  the reviewer's own, `marks` every reviewer's, `working` what the agent is on and `me` who
+  is asking, `{name, via}`;
+  `GET /_review/threads` is `{threads}`;
   `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
   `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
   every new one within about a second, plus an event named `stills` when the stills change;
   `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
   one (415 unless `application/json`, 403 from another origin, 400 for an event the store
-  refuses, 413 for an event over 64 KiB), `author` defaulting to
-  `{"kind":"human","name":"reviewer"}`. A `thread` on a still may carry `annotated`, the
+  refuses, 413 for an event over 64 KiB). The server sets `author` from the reviewer: the
+  Tailscale user, else the guest's name, refusing a guest write with no name (`400 name
+  required`), a guest's `resolve` or `reopen` (403) and any `working` or `idle` (403), which
+  only the agent's CLI writes. A `thread` on a still may carry `annotated`, the
   still with its mark drawn as a `data:image/png;base64,` URL of at most 8 MiB, kept as
   `review/annotated/<id>.png` and not stored in the event.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
@@ -238,7 +258,7 @@ Hot reload goes over Vite's websocket on the same port, which `tailscale serve` 
 React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped in place,
 an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
 container log. Every response is `Cache-Control: no-store`, but a still's revision
-(`/stills/<name>/<n>.png`), which never changes.
+(`/stills/<name>/<key>/<n>.png`), which never changes.
 
 Not compiled: Angular, whose compiler owns the template format; Svelte before 5, since the
 image pins the Svelte 5 compiler; and route-level features of SvelteKit, Nuxt and Next
@@ -248,13 +268,16 @@ plain pages against the app's compiled CSS.
 
 `on_build` only validates the manifest and that every page file exists, with the runtime
 image and the compose file alone, so the one-off container never shows on the hub.
-`mockup.sh shot <path> <name> [WxH] [title]` captures a still of the live page with
-`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, then adds it
-with `preview stills add`, passing the title, the page path as the source and the size, so
-shooting a name again makes its next revision in `/stills`. The skill then runs
-`preview review watch` under a monitor and answers each remark: it reads the thread and its
-marked PNG (`preview review show`), fixes the page, re-shoots the still and replies
-(`preview review reply`); resolving is left to the reviewer. The viewer is `/stills`; a
+`mockup.sh shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]`
+captures the live page as a device with the runtime's `capture.mjs`, in the mockup's own
+container, into `shots/` (`mobile` by default, one shot per `--viewport`), then adds each
+with `preview stills add` as a variant of `<name>`, so shooting a name and variant again
+makes its next revision in `/stills`. The skill shoots the fewest viewports and tags that
+cover the change, `dark` and `light` only when both themes are touched. It then runs
+`preview review watch` under a monitor and answers each remark: it reports
+`preview review working`, reads the thread and its marked PNG (`preview review show`), fixes
+the page, re-shoots the variant the remark was made on and replies by the reviewer's name
+(`preview review reply`); resolving is left to the owner. The viewer is `/stills`; a
 mockup writes no stills page. `mockup.sh stop` runs `preview stop` and deletes the scratch
 directory, stills and remarks included; the pinned runtime image stays for the next mockup.
 

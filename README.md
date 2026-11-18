@@ -354,34 +354,89 @@ stopped and need only `docker` on the host.
 
 ```sh
 preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
-  --title "Invite a user" --source "/invite?v=b" --size 390x844   # rev 1, then 2, ...
-preview stills ls                     # each still's latest rev, reviewed or not, open threads
+  --viewport mobile --tag dark --title "Invite a user" --source "/invite?v=b"   # rev 1, then 2, ...
+preview stills ls --as Dante          # each variant's latest rev, reviewed by Dante or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
-preview review show 3f9a0c1e          # body, anchor, rev, replies, the still and the marked PNG
-preview review reply 3f9a0c1e "Wrapped the label; see rev 2"
+preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still and the marked PNG
+preview review working 3f9a0c1e --note "re-shooting mobile+dark"   # tells the reviewer the agent is on it
+preview review reply 3f9a0c1e "Wrapped the label; see rev 2"      # also ends working
+preview review idle                   # or idle <thread>; working also expires after 10 minutes
 preview review resolve 3f9a0c1e       # or reopen
 preview review watch --since 12       # one line per new human event, until stopped
 ```
+
+A still is one screen with one or more **variants**, each a viewport and free tags with
+revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset or a
+custom `WxH[@dpr][+touch]` (pixel ratio 1 unless given; `+touch` is a touch device with a
+mobile user agent):
+
+| Preset            | CSS size | Pixel ratio | Device |
+| ----------------- | -------- | ----------- | ------ |
+| `mobile`          | 390×844  | 3 | touch, mobile user agent |
+| `mobile-s`        | 375×812  | 3 | touch, mobile user agent (iPhone mini) |
+| `tablet`          | 820×1180 | 2 | touch, tablet user agent |
+| `desktop` (`web`) | 1440×900 | 1 | mouse |
+
+Tags are free labels (`dark`, `light`, `rtl`, `empty`, `logged-out`); `dark` and `light` set
+`prefers-color-scheme` when the still is shot, so they go in separate shots, never together.
+The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag dark` is
+`mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
+`--full-page` records that the whole document was captured. The viewer shows a viewport
+switcher and a row of tag chips only when the stills have more than one of either; the choice
+sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`); a still
+without the chosen variant shows the same viewport, else its first variant, with a note such
+as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the reviewed
+count is the viewer's own.
+
+**Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
+passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views
+freely; their first write (a remark, a reply, a reviewed mark) asks "What's your name?" once
+per browser, and the server refuses a guest's write with no name (`400 name required`).
+Guest events carry `via: "share"`: the viewer shows a `guest` chip (*Ana · guest*) and
+`watch` prints `Ana (guest)`, so a guest calling themselves "dante" is still told apart.
+Guests remark, reply and mark their own reviewed; **resolve and reopen are the owner's and the
+agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each
+reviewer has their own reviewed marks, a tailnet user's under their Tailscale display name and
+a guest's under `Ana (guest)`, so a guest's marks hide nothing from the owner; `--as` takes
+that name, and without it `stills ls` says whose marks hold.
+
+**Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
+for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
+"working…" dots and the note on that conversation and its card, and pulses its mark (for a
+still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread
+ends it (a reviewer's does not), as does `preview review idle [thread]`; it expires 10 minutes
+after the last `working`, so an agent that died does not look busy.
+
+The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
+T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)
+runs Chromium in the mockup's own container and sets the device through the DevTools
+protocol (size, pixel ratio, touch, a mobile user agent, the colour scheme), as Chrome's device
+toolbar does, so `--viewport mobile` is a 1170×2532 PNG of a touch phone. Each `--viewport` is
+one shot and one variant. It waits for `load`, the fonts and 500 ms without a fetch or XHR in
+flight, never for an open WebSocket or EventSource, and shoots anyway after
+`MOCKUP_SHOT_WAIT_MS` (default 5000).
 
 `watch` is the backchannel: run it under a monitor and every remark, reply,
 resolve, reopen and reviewed mark a human makes arrives as one line within a
 fraction of a second. It is a stable stream, the seam other tools plug into:
 
 ```
-#13 thread 3f9a0c1e 05-invite-user r1 box 0.12,0.40 0.50x0.08 dante: "The button overflows"
-#14 reply 3f9a0c1e dante: "Still wraps at 320px"
-#15 resolve 3f9a0c1e dante
-#16 viewed 05-invite-user r2 dante
+#13 thread 3f9a0c1e 05-invite-user [mobile+dark] r1 box 0.12,0.40 0.50x0.08 Ana (guest): "The button overflows"
+#14 reply 3f9a0c1e Ana (guest): "Still wraps at 320px"
+#15 resolve 3f9a0c1e dante (tailnet)
+#16 viewed 05-invite-user [mobile+dark] r2 dante (tailnet)
 ```
 
 Each line starts with the event's `seq`; pass the last one to `--since` to resume
 without missing or repeating anything (without it, `watch` starts at the end of the
-log). Anchors are normalized to the still: `pin x,y`, `box x,y wxh`, or `whole`.
+log). The variant is in brackets after the still; the author's name is followed by how they
+came, `(tailnet)`, `(guest)` on a share link or `(cli)`, when the event says. Anchors are
+normalized to the still: `pin x,y`, `box x,y wxh`, or `whole`.
 Bodies are JSON strings, so a newline never splits a line. `--json` prints each
 event as its JSON line from the log instead. Agent events are left out, so the
 agent never wakes on its own replies. `watch` exits non-zero when `.mockup/` is
-removed, and it outlives `preview stop`. Replies are written as
-`{kind: "agent", name: $REVIEW_AUTHOR}` (default `agent`). The store and its events
+removed, and it outlives `preview stop`. Replies, `working` and `idle` are written as
+`{kind: "agent", name: $REVIEW_AUTHOR, via: "cli"}` (default name `agent`). The store and its events
 are specified in [`docs/review-contract.md`](docs/review-contract.md).
 
 ## Configuration

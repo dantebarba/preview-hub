@@ -1,13 +1,23 @@
 /**
  * The state of the stills viewer, free of the DOM so the runtime's tests can import it.
  *
- * A still is an entry of `GET /_review/stills`: `{ name, title, source, revs, mark }`, with
- * `mark` its reviewed mark `{ rev, viewed, reviewed, changed }` as `reviewed()` of the review
- * store folds it. The functions here keep those marks in step with the event log, decide
+ * A still is an entry of `GET /_review/stills`, `{ name, title, source, variants }`, each variant
+ * `{ key, viewport, tags, revs }`. `choose` gives every still the variant the reviewer's pick
+ * lands on, as `variant`, with its `revs` and `mark`, the reviewed mark `{ rev, viewed, reviewed,
+ * changed }` the reviewer left on it; the marks of every reviewer are `{ author: { still: { key:
+ * rev } } }`, kept in step with the event log by `applyEvent`. The functions here also decide
  * where ←/→, Home/End and a swipe land, shape the anchor of a remark being drawn (a pin or a
- * region, in coordinates normalized to the still) and fold the log's threads. The runtime and
- * the viewer share from here the URL of a file of the scratch dir and the limit of an annotated
- * still's upload.
+ * region, in coordinates normalized to the still) and fold the log's threads and the agent's
+ * working states. The runtime and the viewer share from here the URL of a file of the scratch
+ * dir, the limit of an annotated still's upload and of a guest's name, and how long a working
+ * state lasts.
+ *
+ * For the mobile layout they also hold the zoom and pan of the still. A view is `{ z, x, y }`:
+ * the zoom, 1 being the still fitted to the width of its room, and where the still's top left
+ * corner is in the room, in pixels. A box is the room and the still in it: `{ vw, vh, ratio }`,
+ * the room's width and height in pixels and the still's height over its width. And for the
+ * conversation cards: a card's title, latest message, status chip, unread replies and the crop
+ * of the still around its mark.
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -26,16 +36,193 @@ export function markOf(rev, viewed) {
   return { rev, viewed, reviewed: viewed !== null && viewed === rev, changed: viewed !== null && viewed < rev };
 }
 
+/** The most characters a guest's name may hold. */
+export const MAX_NAME = 40;
+
+/** How long the agent's working state lasts after its last `working` event. */
+export const WORKING_MS = 10 * 60 * 1000;
+
+const PRESETS = { mobile: "Mobile", "mobile-s": "Mobile S", tablet: "Tablet", desktop: "Desktop" };
+
+/** The value `o` holds under `key` itself, never one it inherits. */
+function own(o, key) {
+  return o && Object.hasOwn(o, key) ? o[key] : undefined;
+}
+
+/** Make `value` what `o` holds under `key` itself, whatever the key is called. */
+function put(o, key, value) {
+  Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** The object `o` holds under `key`, made when it holds none. */
+function slot(o, key) {
+  if (!Object.hasOwn(o, key)) put(o, key, {});
+  return o[key];
+}
+
 /**
- * Fold one log event into `stills`: a `viewed` sets the marked revision of its still, an
- * `unviewed` clears it. True when a mark changed, so the caller knows to draw again.
+ * The reviewer whose marks an event by `author` sets: the author's name, a guest's with
+ * " (guest)" after it, so a guest who types a tailnet user's name never touches that user's marks.
  */
-export function applyEvent(stills, event) {
+export function reviewerOf(author) {
+  return author.via === "share" ? `${author.name} (guest)` : author.name;
+}
+
+/** The revision the reviewer named `author` marked on the variant `key` of the still named `still`, if any. */
+function marked(marks, author, still, key) {
+  return own(own(own(marks, author), still), key);
+}
+
+/** The viewport part of the variant key `key`: `mobile` of `mobile+dark`. */
+export function viewportOf(key) {
+  return key.split("+")[0];
+}
+
+/** The tags part of the variant key `key`: `dark+rtl` of `mobile+dark+rtl`, empty without tags. */
+export function tagsOf(key) {
+  return key.split("+").slice(1).join("+");
+}
+
+/** The variant key of the viewport part `viewport` with the tags part `tags`. */
+export function keyOf(viewport, tags) {
+  return tags ? `${viewport}+${tags}` : viewport;
+}
+
+/** What a switcher calls the viewport part `viewport`: a preset's name, or a custom one's size. */
+export function viewportLabel(viewport) {
+  return own(PRESETS, viewport) ?? viewport.replace(/^custom-/, "").replace("x", "×").replace("-touch", " touch");
+}
+
+/** What a switcher calls the tags part `tags`: the tags, or "default" for none. */
+export function tagsLabel(tags) {
+  return tags || "default";
+}
+
+/**
+ * What the stills can be switched between: `{ viewports, tags }`, the viewport parts and the
+ * tags parts of their variants' keys, each once; the presets first, in their order, then the
+ * custom viewports, and the tags as first met.
+ */
+export function choices(stills) {
+  const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
+  const order = Object.keys(PRESETS);
+  const rank = (v) => (order.includes(v) ? order.indexOf(v) : order.length);
+  const viewports = [...new Set(keys.map(viewportOf))];
+  viewports.sort((a, b) => rank(a) - rank(b));
+  return { viewports, tags: [...new Set(keys.map(tagsOf))] };
+}
+
+/**
+ * The pick a switcher makes of `key`, a variant key put together from a viewport and tags:
+ * `key` when a still of `stills` has that variant, else the first variant `fits` takes, so
+ * the pick is always one that exists; null when there is none.
+ */
+export function pickOf(stills, key, fits) {
+  const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
+  return keys.includes(key) ? key : (keys.find(fits) ?? null);
+}
+
+/**
+ * The variant of `still` the pick `pick`, a variant key, lands on: that variant, else the
+ * first one at the same viewport, else its first; its first as well when nothing is picked.
+ */
+export function variantFor(still, pick) {
+  const { variants } = still;
+  if (!pick) return variants[0];
+  const same = variants.find((v) => viewportOf(v.key) === viewportOf(pick));
+  return variants.find((v) => v.key === pick) ?? same ?? variants[0];
+}
+
+/**
+ * Give every still of `stills` the variant `pick` lands on (see `variantFor`): `variant`, its
+ * `revs`, and `mark`, the reviewed mark the reviewer named `me` left on it in `marks`; nobody's
+ * when `me` is empty.
+ */
+export function choose(stills, pick, marks, me) {
+  for (const s of stills) {
+    s.variant = variantFor(s, pick);
+    s.revs = s.variant.revs;
+    s.mark = markOf(s.revs.at(-1).n, marked(marks, me, s.name, s.variant.key) ?? null);
+  }
+}
+
+/**
+ * Fold one log event into `marks`, every reviewer's marked revisions as `{ reviewer: { still:
+ * { key: rev } } }` (see `reviewerOf`): a `viewed` sets its author's mark of a variant of a
+ * still of `stills`, an `unviewed` clears it; an event without `variant` means the still's
+ * first. True when it was one, so the caller knows to draw again.
+ */
+export function applyEvent(marks, stills, event) {
   if (event.type !== "viewed" && event.type !== "unviewed") return false;
   const still = stills.find((s) => s.name === event.still);
   if (!still) return false;
-  still.mark = markOf(still.mark.rev, event.type === "viewed" ? event.rev : null);
+  const mine = slot(slot(marks, reviewerOf(event.author)), still.name);
+  const key = event.variant ?? still.variants[0].key;
+  if (event.type === "viewed") put(mine, key, event.rev);
+  else delete mine[key];
   return true;
+}
+
+/**
+ * How far the other reviewers are with the variants `choose` gave `stills`: `{ name, reviewed }`
+ * for each author of `marks` but `me` whose mark holds on the latest revision of at least one.
+ */
+export function progress(marks, stills, me) {
+  return Object.keys(marks)
+    .filter((name) => name !== me)
+    .map((name) => ({
+      name,
+      reviewed: stills.filter((s) => marked(marks, name, s.name, s.variant.key) === s.revs.at(-1).n).length,
+    }))
+    .filter((p) => p.reviewed);
+}
+
+/** What a working state is kept under: its thread, else its still and variant, else nothing. */
+export function workingKey(w) {
+  return w.thread ? `thread ${w.thread}` : `still ${w.still ?? ""} ${w.variant ?? ""}`;
+}
+
+/** When a working state whose last `working` came at the ISO time `at` expires, in milliseconds. */
+function expiry(at) {
+  return Date.parse(at) + WORKING_MS;
+}
+
+/**
+ * Fold one log event into `on`, the agent's working states by `workingKey`, oldest first: an
+ * agent's `working` starts one or keeps it on, as `{ thread, still, variant, note, author,
+ * since, at, until }` with null for what it did not name; its `reply` or `idle` on a thread
+ * ends that thread's, an `idle` without a thread ends them all. What a human wrote counts for
+ * nothing. True when `on` changed.
+ */
+export function applyWorking(on, event) {
+  if (event.author?.kind !== "agent") return false;
+  if (event.type === "working") {
+    const key = workingKey(event);
+    const last = on.get(key);
+    const since = last && expiry(last.at) > Date.parse(event.at) ? last.since : event.at;
+    on.delete(key);
+    on.set(key, {
+      thread: event.thread ?? null,
+      still: event.still ?? null,
+      variant: event.variant ?? null,
+      note: event.note ?? null,
+      author: event.author,
+      since,
+      at: event.at,
+      until: new Date(expiry(event.at)).toISOString(),
+    });
+    return true;
+  }
+  if (event.type !== "reply" && event.type !== "idle") return false;
+  const size = on.size;
+  if (event.thread) on.delete(workingKey(event));
+  else on.clear();
+  return on.size !== size;
+}
+
+/** The working states of `on` that have not expired at `now` (ms), oldest first. */
+export function workingAt(on, now) {
+  return [...on.values()].filter((w) => Date.parse(w.until) > now);
 }
 
 /** True when the still at `i` is one to step onto: any still with `all`, else one not reviewed. */
@@ -134,10 +321,11 @@ export function opposite(anchor, name) {
 
 /**
  * Fold one log event into `threads`, the list `GET /_review/threads` answers, as `threads()`
- * of the review store does: a `thread` opens one, a `reply` joins its thread, a `resolve` or a
- * `reopen` sets its status. An event the list already holds (a thread of that id, or a `seq`
- * not above the thread's last) changes nothing, so events may be folded again in log order;
- * threads stay in the order they were opened even when one is folded early.
+ * of the review store does: a `thread` opens one, on the variant it names (null for its still's
+ * first), a `reply` joins its thread, a `resolve` or a `reopen` sets its status. An event the
+ * list already holds (a thread of that id, or a `seq` not above the thread's last) changes
+ * nothing, so events may be folded again in log order; threads stay in the order they were
+ * opened even when one is folded early.
  * True when the list changed.
  */
 export function applyThread(threads, event) {
@@ -146,6 +334,7 @@ export function applyThread(threads, event) {
     threads.push({
       id: event.id,
       still: event.still,
+      variant: event.variant ?? null,
       rev: event.rev ?? null,
       anchor: event.anchor ?? null,
       body: event.body,
@@ -169,4 +358,138 @@ export function applyThread(threads, event) {
     thread.status = event.type === "resolve" ? "resolved" : "open";
   }
   return true;
+}
+
+/** The most a still zooms in, as a multiple of its fitted size. */
+export const MAX_ZOOM = 8;
+
+const FOCUS_ZOOM = 4;
+const PIN_ZOOM = 2;
+const FOCUS_WIDTH = 0.6;
+const FOCUS_HEIGHT = 0.7;
+
+/** `z` kept between the fitted size and `max` times it. */
+function zoom(z, max = MAX_ZOOM) {
+  return Math.min(max, Math.max(1, z));
+}
+
+/**
+ * Where something `size` long starts in a room `room` long when it is wanted at `at`: in the
+ * middle when it is shorter than the room, else as near `at` as leaves no gap at either end.
+ */
+function within(at, size, room) {
+  return size <= room ? (room - size) / 2 : Math.min(0, Math.max(room - size, at));
+}
+
+/**
+ * `view` kept in `box`: the zoom within 1..MAX_ZOOM, and the still never pulled away from an
+ * edge of the room it reaches past; along a side where it is smaller than the room it sits in
+ * the middle.
+ */
+export function fitted(view, box) {
+  const z = zoom(view.z);
+  return { z, x: within(view.x, box.vw * z, box.vw), y: within(view.y, box.vw * box.ratio * z, box.vh) };
+}
+
+/**
+ * `view` zoomed by `factor` and dragged so that the spot of the still that was under the point
+ * `from` of the room is under `to`: a pinch between two finger midpoints, a pan with a factor
+ * of 1, a zoom in place with `from` equal to `to`. Kept in `box`.
+ */
+export function zoomed(view, from, to, factor, box) {
+  const z = zoom(view.z * factor);
+  const k = z / view.z;
+  return fitted({ z, x: to.x - (from.x - view.x) * k, y: to.y - (from.y - view.y) * k }, box);
+}
+
+/** The view at zoom `z` with the middle of `anchor` in the middle of the room, kept in `box`. */
+function centered(anchor, box, z) {
+  const width = box.vw * z;
+  const cx = (anchor.x + (anchor.w ?? 0) / 2) * width;
+  const cy = (anchor.y + (anchor.h ?? 0) / 2) * width * box.ratio;
+  return fitted({ z, x: box.vw / 2 - cx, y: box.vh / 2 - cy }, box);
+}
+
+/**
+ * The view that shows `anchor` up close: a region zoomed until it takes most of the room, a pin
+ * at twice the fitted size, in the middle of the room as far as the still's edges allow.
+ */
+export function viewOn(anchor, box) {
+  if (anchor.w === undefined) return centered(anchor, box, PIN_ZOOM);
+  const tall = anchor.h * box.vw * box.ratio;
+  const z = Math.min(FOCUS_WIDTH / anchor.w, tall ? (FOCUS_HEIGHT * box.vh) / tall : FOCUS_ZOOM);
+  return centered(anchor, box, zoom(z, FOCUS_ZOOM));
+}
+
+/** `view` when all of `anchor` is in the room, else the view at the same zoom with it in the middle. */
+export function revealed(view, anchor, box) {
+  const width = box.vw * view.z;
+  const height = width * box.ratio;
+  const left = view.x + anchor.x * width;
+  const top = view.y + anchor.y * height;
+  const right = left + (anchor.w ?? 0) * width;
+  const bottom = top + (anchor.h ?? 0) * height;
+  return left >= 0 && top >= 0 && right <= box.vw && bottom <= box.vh ? view : centered(anchor, box, view.z);
+}
+
+const CROP_MARGIN = 1.5;
+const CROP_LEAST = 0.35;
+
+/**
+ * Where to put an image of size `image` (`{ w, h }`) in a frame of size `frame` so the frame
+ * shows the area of `anchor` with some of what is around it: `{ width, height, left, top }` of
+ * the scaled image, in the frame's pixels. A pin, or a small region, shows at least a third of
+ * the image's width; the image never leaves a gap in the frame it could fill.
+ */
+export function cropOf(anchor, image, frame) {
+  const w = (anchor.w ?? 0) * image.w;
+  const h = (anchor.h ?? 0) * image.h;
+  const least = CROP_LEAST * image.w;
+  const across = frame.w / Math.max(w * CROP_MARGIN, least);
+  const scale = Math.min(across, frame.h / Math.max(h * CROP_MARGIN, (least * frame.h) / frame.w));
+  const width = image.w * scale;
+  const height = image.h * scale;
+  return {
+    width,
+    height,
+    left: within(frame.w / 2 - (anchor.x * image.w + w / 2) * scale, width, frame.w),
+    top: within(frame.h / 2 - (anchor.y * image.h + h / 2) * scale, height, frame.h),
+  };
+}
+
+/** The title of a remark: the first line of `body` that says something. */
+export function title(body) {
+  return body.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+/** The latest message of `thread`: its last reply, or the remark itself while it has none. */
+export function lastMessage(thread) {
+  return thread.replies.at(-1) ?? thread;
+}
+
+/** How long ago `then` was at `now`, both in milliseconds, in a few characters: "now", "2m", "3h", "4d". */
+export function ago(then, now) {
+  const minutes = Math.floor((now - then) / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
+}
+
+/**
+ * The status chip of `thread` on a still whose latest revision is `rev`: "resolved", "moved"
+ * for an open one made on a revision the still has moved on from, else "open".
+ */
+export function chip(thread, rev) {
+  if (thread.status !== "open") return "resolved";
+  return thread.rev !== null && thread.rev !== rev ? "moved" : "open";
+}
+
+/**
+ * How many replies of `thread` came after the last one seen on this device, `seen` mapping a
+ * thread's id to that reply's `seq`; with `kind`, only those written by an author of that kind.
+ */
+export function unread(thread, seen, kind) {
+  const last = Object.hasOwn(seen, thread.id) ? seen[thread.id] : 0;
+  return thread.replies.filter((r) => r.seq > last && (!kind || r.author.kind === kind)).length;
 }

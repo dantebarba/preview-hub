@@ -13,7 +13,9 @@
  * project's own file at `<app>/<path>`. `/stills` is reserved for the stills viewer, served from
  * this image (`stills/` next to this file), and `/_review/` for what it reads and writes:
  *
- *   GET  /_review/stills               { stills: [{ name, title, source, revs, mark }], cursor }
+ *   GET  /_review/stills               { stills: [{ name, title, source, variants, revs, mark }],
+ *                                      marks, working, me, cursor }: every reviewer's marks, what
+ *                                      the agent is working on and who is asking
  *   GET  /_review/threads              { threads }
  *   GET  /_review/events?since=<seq>   server-sent events: the log's events above `since`, then
  *                                      each new one as it lands, and `stills` when the stills change
@@ -21,6 +23,10 @@
  *                                      a `thread` may carry `annotated`, its still with the mark
  *                                      drawn as a `data:image/png;base64,` URL of at most 8 MiB,
  *                                      kept as `review/annotated/<id>.png`
+ *
+ * Who writes is the server's to say, never the page's (see `reviewer`): a tailnet user is named
+ * by the headers `tailscale serve` adds, anyone else is a guest, who gives a name with each
+ * write and may not resolve or reopen a remark.
  *
  * Every response is `Cache-Control: no-store` but a still's revision, which never changes. An
  * edit to the manifest or a still reloads the open tabs, as Vite does for a page.
@@ -34,32 +40,39 @@ import {
   EVENTS_FILE,
   isPng,
   MANIFEST_FILE,
+  MAX_AUTHOR,
   readEvents,
   reviewed,
+  reviewMarks,
+  revisions,
   stills,
   storeAnnotated,
   threads,
+  working,
 } from "./review.mjs";
-import { fileUrl, MAX_ANNOTATED_BYTES, PNG_URL } from "./stills/state.js";
+import { fileUrl, MAX_ANNOTATED_BYTES, MAX_NAME, PNG_URL } from "./stills/state.js";
 
 const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
 const APP_REF = /\b(src|href)=(["'])\/app\//g;
 const SHOT = /\.(png|jpe?g|webp)$/i;
-const REV_IMAGE = /^\/stills\/[^/]+\/\d+\.png$/;
+const REV_IMAGE = /^\/stills\/[^/]+\/(?:[^/]+\/)?\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
 const POLL_MS = 1000;
 const PING_TICKS = 20;
-const DEFAULT_AUTHOR = { kind: "human", name: "reviewer" };
+const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
+const BETWEEN_WORDS = /(\?=)\s+(?==\?utf-8\?[bq]\?)/gi;
+const OWNER_ONLY = ["resolve", "reopen"];
 const VIEWER_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "stills");
 const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
 const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
   "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
+  "swipe.js": { file: "swipe.js", type: "text/javascript; charset=utf-8" },
   "viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
 };
 
@@ -141,29 +154,94 @@ export function checkManifest(scratch) {
 }
 
 /**
- * What the viewer reads at `/_review/stills`: `{ stills, cursor }`. Each still is its manifest
- * entry, `{ name, title, source, revs }`, plus `mark`, its reviewed mark `{ rev, viewed,
- * reviewed, changed }`; entries without a name or a revision are left out. `cursor` is the
- * log's last `seq`, read before the marks, so following the events from it misses none.
+ * `value`, a header that may hold RFC 2047 encoded words, which is how `tailscale serve` writes
+ * a name that is not ASCII, as the text it stands for. A long name comes as several words, and
+ * the space between two of them is not part of it.
  */
-export function reviewStills(scratch) {
-  const { cursor } = readEvents(scratch);
-  const marks = reviewed(scratch);
-  const list = [];
-  for (const s of stills(scratch)) {
-    if (!s || typeof s.name !== "string" || !Array.isArray(s.revs) || !marks[s.name]) continue;
-    const revs = s.revs.filter((r) => r && Number.isInteger(r.n) && typeof r.file === "string");
-    if (!revs.length) continue;
-    const title = typeof s.title === "string" && s.title ? s.title : s.name;
-    list.push({ name: s.name, title, source: s.source ?? null, revs, mark: marks[s.name] });
-  }
-  return { stills: list, cursor };
+function decodeHeader(value) {
+  return value.replace(BETWEEN_WORDS, "$1").replace(ENCODED_WORD, (all, kind, text) => {
+    if (kind.toLowerCase() === "b") return Buffer.from(text, "base64").toString("utf8");
+    const bytes = text.replace(/%/g, "%25").replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, "%$1");
+    try {
+      return decodeURIComponent(bytes);
+    } catch {
+      return all;
+    }
+  });
 }
 
-/** `reviewStills` for the menu: `{ stills, error }`, an unreadable store reported in `error`. */
-function readReview(scratch) {
+/**
+ * Who sent the request with `headers`: `{ name, via: "tailnet" }` for a tailnet user, named by
+ * the `Tailscale-User-Name` (else `Tailscale-User-Login`) header that `tailscale serve` adds,
+ * or null for a guest. `hosts` are the names the server accepts, as `preview start` writes
+ * them into `PREVIEW_ALLOWED_HOSTS`: the tailnet name, and the edge's domain with a leading
+ * dot. A request to a host under that domain, or to one that is not the tailnet name when
+ * there is one, did not come through `tailscale serve`, so it is a guest's whatever headers
+ * it carries.
+ */
+export function reviewer(headers, hosts = []) {
+  const login = String(headers["tailscale-user-login"] ?? "").trim();
+  if (!login) return null;
+  const host = String(headers.host ?? "").toLowerCase().replace(/:\d+$/, "");
+  const names = hosts.filter((h) => typeof h === "string" && h).map((h) => h.toLowerCase());
+  const tailnet = names.filter((h) => !h.startsWith("."));
+  const shared = names.some((h) => h.startsWith(".") && (host === h.slice(1) || host.endsWith(h)));
+  if (shared || (tailnet.length && !tailnet.includes(host))) return null;
+  const name = decodeHeader(String(headers["tailscale-user-name"] ?? "")).trim() || login;
+  return { name: name.slice(0, MAX_AUTHOR), via: "tailnet" };
+}
+
+/**
+ * The author of an event posted by `who` (see `reviewer`): the tailnet user, else the guest
+ * named by `given`, the `author` of the posted body, as `{ kind: "human", name, via }`. Throws
+ * a refusal (400) for a guest without a name, or with one over `MAX_NAME` characters.
+ */
+export function authorOf(who, given) {
+  if (who) return { kind: "human", ...who };
+  const name = typeof given?.name === "string" ? given.name.trim() : "";
+  if (!name) throw refusal(400, "name required");
+  if (name.length > MAX_NAME) throw refusal(400, `a name is at most ${MAX_NAME} characters`);
+  return { kind: "human", name, via: "share" };
+}
+
+/** `value` with every Map in it as a plain object. */
+function plain(value) {
+  if (!(value instanceof Map)) return value;
+  return Object.fromEntries([...value].map(([k, v]) => [k, plain(v)]));
+}
+
+/**
+ * What the viewer reads at `/_review/stills`: `{ stills, marks, working, cursor }`. Each still
+ * is its manifest entry in v2 shape, `{ name, title, source, variants }`, plus `revs`, the
+ * revisions of its first variant, and `mark`, the reviewed mark `{ rev, viewed, reviewed,
+ * changed, variants }` the reviewer named `by` left on it, nobody's without `by`; stills
+ * without a revision are left out, as are variants without one. `marks` are the marked
+ * revisions of every reviewer, `{ reviewer: { still: { key: rev } } }`, and `working` what the
+ * agent is working on (see `working` of the store). `cursor` is the log's last `seq`, read
+ * before the rest, so following the events from it misses none.
+ */
+export function reviewStills(scratch, by = null) {
+  const { cursor } = readEvents(scratch);
+  const known = revisions(scratch);
+  const { marks } = reviewMarks(scratch, known);
+  const mine = reviewed(scratch, by, known, marks);
+  const list = [];
+  for (const s of stills(scratch)) {
+    const variants = s.variants.filter((v) => v.revs.length);
+    if (!variants.length || !mine[s.name]) continue;
+    const marked = mine[s.name].variants;
+    list.push({ ...s, variants, revs: variants[0].revs, mark: { ...marked[variants[0].key], variants: marked } });
+  }
+  return { stills: list, marks: plain(marks), working: working(scratch), cursor };
+}
+
+/**
+ * `reviewStills` for the menu, as the reviewer named `by`: `{ stills, error }`, an unreadable
+ * store reported in `error`.
+ */
+function readReview(scratch, by) {
   try {
-    return { stills: reviewStills(scratch).stills, error: null };
+    return { stills: reviewStills(scratch, by).stills, error: null };
   } catch (e) {
     return { stills: [], error: e.message };
   }
@@ -225,7 +303,9 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
  * Where a request goes before Vite sees it: `{ menu: true }` for the menu, `{ viewer: true }`
  * for the stills viewer at the reserved `/stills`, else the rewritten URL, or null to leave it
  * alone. `/app/<path>` becomes `/@fs<app>/<path>`, and `/<slug>` becomes `/pages/<slug>.html`
- * when that page exists.
+ * when that page exists. A revision's image named with `%2B` or `%40`, as `fileUrl` writes the
+ * `+` and `@` of a variant key, is named with the characters themselves, which is how Vite
+ * finds the file.
  */
 export function route(url, app) {
   const q = url.indexOf("?");
@@ -233,6 +313,9 @@ export function route(url, app) {
   const search = q === -1 ? "" : url.slice(q);
   if (pathname === "/" || pathname === "/index.html") return { menu: true };
   if (pathname === "/stills" || pathname === "/stills/") return { viewer: true };
+  if (REV_IMAGE.test(pathname) && /%2B|%40/i.test(pathname)) {
+    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
+  }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
   const slug = SLUG.exec(pathname);
   if (!slug || path.extname(slug[1])) return null;
@@ -421,15 +504,18 @@ export function annotatedPng(value) {
  * stored one. Only a JSON content type is taken (415), so a page of another origin cannot post
  * without a preflight; Vite approves the preflight of a localhost origin, so a post whose
  * `Origin` is not this host is refused as well (403). A body that is not a JSON object, or an
- * event the store refuses, is a 400 with the reason. An event without an `author` is the
- * reviewer's.
+ * event the store refuses, is a 400 with the reason. The event's author is `who` sent it (see
+ * `reviewer` and `authorOf`), whatever `author` the body claims: a guest's write without a name
+ * is a 400, `name required`, and a guest's `resolve` or `reopen` a 403, those being the owner's
+ * and the agent's. `working` and `idle` are the agent's, written by the CLI, so they are
+ * refused here (403).
  *
  * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
  * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
  * thread's id once it is. A PNG that could not be written leaves the remark stored without it.
  * The rest of the body is at most 64 KiB (413), as it is without the PNG.
  */
-async function postEvent(req, res, { scratch, stream }) {
+async function postEvent(req, res, { scratch, stream, who }) {
   if (crossOrigin(req)) return sendJson(res, 403, { error: "posting from another origin is not allowed" });
   if (!(req.headers["content-type"] || "").toLowerCase().startsWith(JSON_TYPE)) {
     return sendJson(res, 415, { error: `the body must be ${JSON_TYPE}` });
@@ -445,11 +531,23 @@ async function postEvent(req, res, { scratch, stream }) {
   if (event === null || typeof event !== "object" || Array.isArray(event)) {
     return sendJson(res, 400, { error: "an event must be an object" });
   }
-  const { annotated, ...fields } = event;
+  const { annotated, author: given, ...fields } = event;
   if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
     return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
   }
+  if (fields.type === "working" || fields.type === "idle") {
+    return sendJson(res, 403, { error: `a ${fields.type} event is the agent's; it writes it with 'preview review'` });
+  }
+  if (!who && OWNER_ONLY.includes(fields.type)) {
+    return sendJson(res, 403, { error: `a guest cannot ${fields.type} a remark` });
+  }
+  let author;
   let png = null;
+  try {
+    author = authorOf(who, given);
+  } catch (e) {
+    return sendJson(res, e.status, { error: e.message });
+  }
   if (annotated !== undefined) {
     if (fields.type !== "thread" || typeof fields.still !== "string") {
       return sendJson(res, 400, { error: "'annotated' goes with a thread on a still" });
@@ -462,7 +560,7 @@ async function postEvent(req, res, { scratch, stream }) {
   }
   let stored;
   try {
-    stored = await appendEvent(scratch, { author: DEFAULT_AUTHOR, ...fields });
+    stored = await appendEvent(scratch, { ...fields, author });
   } catch (e) {
     const broken = Boolean(e.code) || /still locked/.test(e.message);
     if (broken) console.error(`[mockup] review event not stored: ${e.message}`);
@@ -479,8 +577,11 @@ async function postEvent(req, res, { scratch, stream }) {
   return sendJson(res, 201, stored);
 }
 
-/** Answer a request under `/_review/`; false when the URL is not one, so the caller goes on. */
-async function handleReview(req, res, { scratch, stream }) {
+/**
+ * Answer a request under `/_review/`, sent by `who` (see `reviewer`); false when the URL is not
+ * one, so the caller goes on.
+ */
+async function handleReview(req, res, { scratch, stream, who }) {
   if (!req.url.startsWith("/_review/")) return false;
   const { pathname, searchParams } = new URL(req.url, "http://mockup");
   const name = pathname.slice("/_review/".length);
@@ -490,7 +591,8 @@ async function handleReview(req, res, { scratch, stream }) {
     methodNotAllowed(res, "GET");
   } else if (name === "stills" || name === "threads") {
     try {
-      sendJson(res, 200, name === "stills" ? reviewStills(scratch) : { threads: threads(scratch) });
+      const me = who ?? { name: null, via: "share" };
+      sendJson(res, 200, name === "stills" ? { ...reviewStills(scratch, me.name), me } : { threads: threads(scratch) });
     } catch (e) {
       sendJson(res, 500, { error: e.message });
     }
@@ -499,7 +601,7 @@ async function handleReview(req, res, { scratch, stream }) {
     if (SINCE.test(since)) stream.open(res, Number(since));
     else sendJson(res, 400, { error: "'since' must be the seq to resume after" });
   } else if (name === "events" && req.method === "POST") {
-    await postEvent(req, res, { scratch, stream });
+    await postEvent(req, res, { scratch, stream, who });
   } else if (name === "events") {
     methodNotAllowed(res, "GET, POST");
   } else {
@@ -510,9 +612,10 @@ async function handleReview(req, res, { scratch, stream }) {
 
 /**
  * The Vite plugin: menu at `/`, the stills viewer at `/stills` with its `/_review/` routes,
- * clean page URLs, the `/app/` prefix, no-store and reloads.
+ * clean page URLs, the `/app/` prefix, no-store and reloads. `hosts` are the names the server
+ * accepts, which tell a guest from a tailnet user (see `reviewer`).
  */
-export function menuPlugin({ app }) {
+export function menuPlugin({ app, hosts = [] }) {
   const scratch = scratchDir(app);
   return {
     name: "mockup-menu",
@@ -527,7 +630,8 @@ export function menuPlugin({ app }) {
       server.middlewares.use(async (req, res, next) => {
         if (!REV_IMAGE.test(req.url.split("?")[0])) noStore(res);
         try {
-          if (await handleReview(req, res, { scratch, stream })) return undefined;
+          const who = reviewer(req.headers, hosts);
+          if (await handleReview(req, res, { scratch, stream, who })) return undefined;
           const target = route(req.url, app);
           if (!target) return next();
           if (target.viewer) return sendViewerFile(req, res, VIEWER_PAGE);
@@ -535,7 +639,7 @@ export function menuPlugin({ app }) {
             req.url = target.url;
             return next();
           }
-          const html = renderMenu(readManifest(scratch), listShots(scratch), readReview(scratch));
+          const html = renderMenu(readManifest(scratch), listShots(scratch), readReview(scratch, who?.name ?? null));
           const body = await server.transformIndexHtml("/", html, req.originalUrl);
           res.setHeader("Content-Type", "text/html; charset=utf-8");
           return res.end(body);

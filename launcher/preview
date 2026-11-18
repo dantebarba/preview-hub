@@ -19,9 +19,10 @@
 #   preview share      # publish this checkout's running preview on the internet, behind a key
 #   preview unshare    # retract it
 #   preview shares     # every share, with its URL and time left
-#   preview stills ... # add a still revision to this checkout's mockup, list its stills
-#   preview review ... # list, show, answer and watch the mockup's review remarks; works with
-#                      # the preview stopped (docs/review-contract.md has the store)
+#   preview stills ... # add a still revision to a variant of this checkout's mockup, list them
+#   preview review ... # list, show, answer and watch the mockup's review remarks, report the
+#                      # agent working or idle; works with the preview stopped
+#                      # (docs/review-contract.md has the store)
 #
 # ── One preview per identity, deterministically ──────────────────────────────
 # The identity is the checked-out git branch (short SHA when detached), overridable with
@@ -1245,7 +1246,7 @@ review_cli() {
     for ((i = 0; i < ${#rest[@]}; i++)); do
       case "${rest[i]}" in
         --) i=$((i + 1)); break ;;
-        --name|--title|--source|--size) i=$((i + 1)) ;;
+        --name|--title|--source|--size|--viewport|--tag) i=$((i + 1)) ;;
         -|-*) [ "${rest[i]}" = "-" ] && i=${#rest[@]} ;;
         *) break ;;
       esac
@@ -1447,7 +1448,7 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview share [--hours N] [--yes] | unshare | shares
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
-       preview stills {add|ls} ... | review {ls|show|reply|resolve|reopen|watch} ...
+       preview stills {add|ls} ... | review {ls|show|reply|resolve|reopen|working|idle|watch} ...
        preview self-update
        preview --version
 
@@ -1461,9 +1462,10 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   unshare      retract this checkout's share
   shares       every share with its URL and time left, from any directory
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
-  stills ...   add a still revision to this mockup, or list its stills; see 'preview stills --help'
-  review ...   list, show and answer this mockup's review remarks, or watch for new ones as they
-               land, one line each; see 'preview review --help'
+  stills ...   add a still revision to a variant (viewport + tags) of this mockup, or list its
+               stills and their variants; see 'preview stills --help'
+  review ...   list, show and answer this mockup's review remarks, report the agent working or
+               idle, or watch for new remarks as they land, one line each; see 'preview review --help'
   self-update  replace this CLI with the newest release from GitHub
   --version    print the version this launcher was stamped with
 
@@ -1471,7 +1473,7 @@ env:
   PREVIEW_ID       override the identity (default: current git branch / short SHA)
   PREVIEW_DIR      path to the .preview directory (default: found by walking up from \$PWD)
   TIMEOUT_SECONDS  auto-stop delay in seconds (default: 21600 = 6h)
-  REVIEW_AUTHOR    name 'review reply|resolve|reopen' write as (default: agent)
+  REVIEW_AUTHOR    name 'review reply|resolve|reopen|working|idle' write as (default: agent)
 EOF
 }
 
