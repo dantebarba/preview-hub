@@ -408,9 +408,11 @@ export function stills(dir) {
  * `WxH[@dpr][+touch]`, default `desktop`) with `tags`. The PNG `file` is copied to
  * `stills/<name>/<key>/<n>.png`, n one past the variant's last revision (1 for a new one), and
  * recorded in the manifest, written to a temp file and renamed over it; the still's entry is
- * written in v2 shape, the others as they were. `title` and `source` (the page path shot)
- * update the entry when given, `fullPage` the variant's viewport. Returns `{ entry, variant,
- * rev }`, the still's entry, the variant and the revision added.
+ * written in v2 shape, the others as they were. A PNG whose bytes equal the variant's latest
+ * revision adds no revision, so the reviewed marks on it hold. `title` and `source` (the page
+ * path shot) update the entry when given, `fullPage` the variant's viewport. Returns `{ entry,
+ * variant, rev, unchanged }`, the still's entry, the variant, the revision added (or the latest
+ * one, when `unchanged`) and whether the image was the same as that one.
  */
 export async function addStill(dir, { file, name, title, source, viewport = "desktop", tags = [], fullPage = false }) {
   const problem = nameProblem(name);
@@ -453,12 +455,17 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
       entry.variants.push(variant);
     }
     variant.viewport = vp;
-    const n = variant.revs.reduce((max, r) => (r.n > max ? r.n : max), 0) + 1;
-    const rel = `stills/${name}/${key}/${n}.png`;
-    mkdirSync(path.join(dir, "stills", name, key), { recursive: true });
-    copyFileSync(file, path.join(dir, rel));
-    const rev = { n, file: rel, at: new Date().toISOString() };
-    variant.revs.push(rev);
+    const latest = variant.revs.reduce((last, r) => (!last || r.n > last.n ? r : last), null);
+    const unchanged = latest !== null && sameBytes(file, path.join(dir, latest.file));
+    let rev = latest;
+    if (!unchanged) {
+      const n = (latest?.n ?? 0) + 1;
+      const rel = `stills/${name}/${key}/${n}.png`;
+      mkdirSync(path.join(dir, "stills", name, key), { recursive: true });
+      copyFileSync(file, path.join(dir, rel));
+      rev = { n, file: rel, at: new Date().toISOString() };
+      variant.revs.push(rev);
+    }
     const tmp = sideFile(manifestFile, "tmp");
     try {
       writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -467,8 +474,19 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
       rmSync(tmp, { force: true });
       throw e;
     }
-    return { entry, variant, rev };
+    return { entry, variant, rev, unchanged };
   });
+}
+
+/** True when the files `a` and `b` hold the same bytes; false when either is missing. */
+function sameBytes(a, b) {
+  try {
+    if (statSync(a).size !== statSync(b).size) return false;
+    return readFileSync(a).equals(readFileSync(b));
+  } catch (e) {
+    if (e.code === "ENOENT") return false;
+    throw e;
+  }
 }
 
 /**

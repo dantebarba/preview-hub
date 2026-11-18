@@ -1264,6 +1264,57 @@ container_writable() {
   [ "$rw" = "true" ]
 }
 
+## The id of this mockup's running container, or nothing when it is down.
+mockup_cid() {
+  docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.service=$PREVIEW_LABEL_SERVICE" 2>/dev/null | head -n1 || true
+}
+
+## `stills shoot [<shots.mjs>] [--only REGEX] [--parallel N] [--strict] [--report FILE]`: run the
+## shots recipe (default .mockup/shots.mjs) as a batch of the runtime's capture.mjs in the
+## running mockup container, against its own pages, adding each still with addStill so an
+## unchanged image adds no revision. The recipe must sit inside the frontend root, which the
+## container mounts at /app. Prints one JSON line per shot and variant, then a summary; --report
+## also writes them to FILE. Exits 1 when a shot failed.
+stills_shoot() {
+  local usage="usage: preview stills shoot [<shots.mjs>] [--only REGEX] [--parallel N] [--strict] [--report FILE]"
+  local file="" report="" opts=() front rel cid
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --only|--parallel) [ "$#" -ge 2 ] || die "$usage"; opts+=("$1" "$2"); shift ;;
+      --only=*|--parallel=*|--strict) opts+=("$1") ;;
+      --report) [ "$#" -ge 2 ] || die "$usage"; report="$2"; shift ;;
+      --report=*) report="${1#*=}" ;;
+      -h|--help) printf '%s\n' "$usage"; return 0 ;;
+      -*) die "$usage" ;;
+      *) [ -z "$file" ] || die "$usage"; file="$1" ;;
+    esac
+    shift
+  done
+  file="${file:-$PREVIEW_ROOT/shots.mjs}"
+  [ -f "$file" ] || die "$file: no such file; write the shots recipe first (see the /mockup skill)"
+  file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
+  front="$(cd "$PREVIEW_ROOT/.." && pwd -P)"
+  case "$file" in
+    "$front"/*) rel="${file#"$front"/}" ;;
+    *) die "$file: the recipe must be inside $front, which the mockup container mounts" ;;
+  esac
+  cid="$(mockup_cid)"
+  [ -n "$cid" ] || die "the mockup is not running; mockup.sh start first"
+  docker exec "$cid" grep -q -- '--batch' /srv/capture.mjs 2>/dev/null \
+    || die "this mockup runtime cannot shoot a batch; run 'preview self-update', then mockup.sh stop and start"
+  if ! container_writable "$cid" /app/.mockup/stills || ! container_writable "$cid" /app/.mockup/review; then
+    die "the mockup container mounts its stills read-only; mockup.sh stop and start it to shoot"
+  fi
+  mkdir -p "$PREVIEW_ROOT/shots"
+  set -- docker exec --user "$(id -u):$(id -g)" -e HOME=/tmp -e "MOCKUP_HOST_OUT=$PREVIEW_ROOT/shots" \
+    -e "MOCKUP_SHOT_WAIT_MS=${MOCKUP_SHOT_WAIT_MS:-5000}" "$cid" node /srv/capture.mjs --batch "/app/$rel" \
+    --base http://127.0.0.1:80 --out /app/.mockup/shots --add /app/.mockup ${opts[@]+"${opts[@]}"}
+  if [ -z "$report" ]; then exec "$@"; fi
+  "$@" | tee "$report"
+  return "${PIPESTATUS[0]}"
+}
+
 ## Run the review CLI with the given arguments, replacing this shell. It is exec'd in the running
 ## mockup container when that mounts stills/ and review/ writable, else run in a throwaway
 ## container of the runtime image on the scratch dir as the calling user, so it works with the
@@ -1301,8 +1352,7 @@ review_cli() {
       set -- stills add "${rest[@]}"
     fi
   fi
-  cid="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" \
-    --filter "label=com.docker.compose.service=$PREVIEW_LABEL_SERVICE" 2>/dev/null | head -n1 || true)"
+  cid="$(mockup_cid)"
   if [ -n "$cid" ] && [ "$watch" = 0 ] \
     && container_writable "$cid" /app/.mockup/stills && container_writable "$cid" /app/.mockup/review; then
     set -- docker exec -i --user "$(id -u):$(id -g)" "${env[@]}" "$cid" node /srv/review-cli.mjs --dir /app/.mockup "$@"
@@ -1352,6 +1402,10 @@ cmd_review_cli() {
     PREVIEW_ID="mockup-$(git -C "$PREVIEW_ROOT/.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
   fi
   setup
+  if [ "$1" = "stills" ] && [ "${2:-}" = "shoot" ]; then
+    stills_shoot "${@:3}"
+    return
+  fi
   review_cli "$@"
 }
 
@@ -1721,7 +1775,7 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
        preview share [--hours N] [--yes] | unshare | shares
        preview init [--force]
        preview hub {up|down|update|status|expose|logs}
-       preview stills {add|ls|export} ... | review {ls|show|reply|resolve|reopen|working|idle|watch} ...
+       preview stills {add|ls|shoot|export} ... | review {ls|show|reply|resolve|reopen|working|idle|watch} ...
        preview stills {serve|stop|status|share|unshare} [<dir>]
        preview self-update
        preview --version
@@ -1736,8 +1790,9 @@ usage: [PREVIEW_ID=<name>] preview {start|stop|status|killall}
   unshare      retract this checkout's share
   shares       every share with its URL and time left, from any directory
   hub ...      run the discovery hub itself (its own container); see 'preview hub --help'
-  stills ...   add a still revision to a variant (viewport + tags) of this mockup, list its
-               stills and their variants, or export them to a folder; see 'preview stills --help'
+  stills ...   add a still revision to a variant (viewport + tags) of this mockup, shoot a batch
+               of them from its shots recipe, list its stills and their variants, or export them
+               to a folder; see 'preview stills --help'
   stills serve serve any folder of images (default .) for review as a preview of its own, and
                stills stop|status|share|unshare [<dir>]; see 'preview stills serve --help'
   review ...   list, show and answer this mockup's review remarks, report the agent working or

@@ -272,8 +272,13 @@ image and the compose file alone, so the one-off container never shows on the hu
 captures the live page as a device with the runtime's `capture.mjs`, in the mockup's own
 container, into `shots/` (`mobile` by default, one shot per `--viewport`), then adds each
 with `preview stills add` as a variant of `<name>`, so shooting a name and variant again
-makes its next revision in `/stills`. The skill shoots the fewest viewports and tags that
-cover the change, `dark` and `light` only when both themes are touched. It then runs
+makes its next revision in `/stills` (an image equal to the latest adds none, `unchanged`).
+More than a couple of stills, or any that needs a click, a typed value or an open dialog, go in
+the shots recipe `.mockup/shots.mjs`, shot with `preview stills shoot`: one Chromium in the same
+container, a browser context per shot, steps driving the page by real input, one JSON line per
+shot and variant, exit 1 when one failed. Full page grows the viewport to fit an app shell's
+inner scroller, and shoots the viewport while a dialog is open. The skill shoots the fewest
+viewports and tags that cover the change, `dark` and `light` only when both themes are touched. It then runs
 `preview review watch` under a monitor and answers each remark: it reports
 `preview review working`, reads the thread and its marked PNG (`preview review show`), fixes
 the page, re-shoots the variant the remark was made on and replies by the reviewer's name

@@ -51,6 +51,7 @@ const VIA_LABEL = { tailnet: "tailnet", share: "guest", cli: "cli" };
 const USAGE = `usage: preview stills add <png> --name N [--viewport mobile|mobile-s|tablet|desktop|WxH[@dpr][+touch]]
                          [--tag T]... [--full-page] [--title T] [--source "/path?q"]
        preview stills ls [--as NAME] [--json]
+       preview stills shoot [<shots.mjs>] [--only REGEX] [--parallel N] [--strict] [--report FILE]
        preview review ls [--open] [--json]
        preview review show <thread> [--json]
        preview review reply <thread> "<text>"
@@ -192,7 +193,7 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, viewport, s
     throw new CliError(`${file}: no such file`);
   }
   try {
-    const { entry, variant, rev } = await addStill(dir, {
+    const { entry, variant, rev, unchanged } = await addStill(dir, {
       file,
       name,
       title,
@@ -201,7 +202,7 @@ async function stillsAdd({ dir, io }, [file], { name, title, source, viewport, s
       tags: tag,
       fullPage,
     });
-    io.out(`${entry.name} [${variant.key}] r${rev.n} ${io.host(rev.file)}`);
+    io.out(`${entry.name} [${variant.key}] r${rev.n} ${io.host(rev.file)}${unchanged ? " unchanged" : ""}`);
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   }

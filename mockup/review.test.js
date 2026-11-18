@@ -161,6 +161,23 @@ test("addStill keeps each variant's revisions apart, and a re-shoot is its next 
   assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "stills/manifest.json"), "utf8")), [entry]);
 });
 
+test("addStill adds no revision for an image equal to the variant's latest, so its reviewed mark holds", async (t) => {
+  const dir = scratch(t);
+  await addStill(dir, { file: png(dir, "a"), name: "invite", viewport: "mobile" });
+  await appendEvent(dir, { type: "viewed", author: HUMAN, still: "invite", variant: "mobile", rev: 1 });
+  const same = await addStill(dir, { file: png(dir, "a"), name: "invite", title: "Invite", viewport: "mobile" });
+  assert.equal(same.unchanged, true);
+  assert.equal(same.rev.n, 1);
+  assert.equal(same.entry.title, "Invite");
+  assert.deepEqual(reviewed(dir, "dante").invite.variants.mobile, { rev: 1, viewed: 1, reviewed: true, changed: false });
+  const other = await addStill(dir, { file: png(dir, "a"), name: "invite", viewport: "desktop" });
+  assert.deepEqual([other.unchanged, other.rev.n], [false, 1]);
+  const next = await addStill(dir, { file: png(dir, "b"), name: "invite", viewport: "mobile" });
+  assert.deepEqual([next.unchanged, next.rev.n], [false, 2]);
+  const back = await addStill(dir, { file: png(dir, "a"), name: "invite", viewport: "mobile" });
+  assert.deepEqual([back.unchanged, back.rev.n], [false, 3]);
+});
+
 test("addStill rejects bad names, viewports, tags and files that are not PNGs", async (t) => {
   const dir = scratch(t);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "../x" }), /still name/);

@@ -194,10 +194,13 @@ describe("the mockup server", () => {
     return (await res.json()).stills.find((s) => s.name === name);
   };
 
-  /** Add a revision of the still `name` to the project's review store. */
+  let shots = 0;
+
+  /** Add a revision of the still `name` to the project's review store, a PNG unlike the last. */
   const shoot = (name, title) => {
     const file = path.join(app, "shot.png");
-    writeFileSync(file, PNG);
+    shots += 1;
+    writeFileSync(file, Buffer.concat([PNG, Buffer.from(String(shots))]));
     return addStill(path.join(app, ".mockup"), { file, name, title });
   };
 
@@ -232,7 +235,7 @@ describe("the mockup server", () => {
     const image = await fetch(`${base}/stills/landing/desktop/2.png`);
     assert.equal(image.status, 200);
     assert.notEqual(image.headers.get("cache-control"), "no-store");
-    assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), readFileSync(path.join(app, "shot.png")));
     const menu = await (await fetch(`${base}/`)).text();
     assert.match(menu, /<a href="\/stills">Review the stills/);
     assert.match(menu, /<a href="\/stills#landing"><img src="\/stills\/landing\/desktop\/2\.png"/);
