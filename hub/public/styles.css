@@ -508,6 +508,13 @@ body[data-loading] .topbar::before {
   cursor: pointer;
 }
 
+a.slot__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .slot__action[data-tone="danger"] {
   background: var(--danger);
 }
@@ -532,7 +539,8 @@ body[data-loading] .topbar::before {
   outline-offset: -4px;
 }
 
-.slot__action:disabled {
+.slot__action:disabled,
+.slot__action[aria-disabled="true"] {
   cursor: progress;
   opacity: 0.8;
 }
