@@ -43,6 +43,7 @@ PREVIEW_SERVE_TARGET="127.0.0.1:${PREVIEW_PORT_1}"
 | -------------------------------- | -------- | --------------------------- | ------- |
 | `PREVIEW_PROJECT`                | **yes**  | —                           | Project name; becomes the hub grouping key and `preview.project`. |
 | `PREVIEW_DESC`                   | no       | empty                       | Short description; becomes `preview.desc`. Write it as `${PREVIEW_DESC:-...}` so a caller can override it per run (see below). |
+| `PREVIEW_REVIEW`                 | no       | empty                       | Path of the preview's review page, relative to its URL (e.g. `/stills`); becomes `preview.review`, and the hub card offers **Review**. |
 | `PREVIEW_COMPOSE_FILE`           | no       | `docker-compose.yml`        | The compose file the launcher layers the labels override on top of. |
 | `PREVIEW_COMPOSE_PROJECT_PREFIX` | no       | a slug of the project name  | Prefix for the isolated compose project name. |
 | `PREVIEW_LABEL_SERVICE`          | **yes**  | —                           | Which compose service carries the `preview.*` labels. It **must** be a service that `on_up` actually brings up. |

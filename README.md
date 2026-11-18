@@ -23,6 +23,7 @@ preview stack:
 | `preview.branch`   | yes      | Branch name                                          |
 | `preview.worktree` | no       | Worktree name; defaults to `Root Worktree`           |
 | `preview.desc`     | no       | Short description shown as muted subtext             |
+| `preview.review`   | no       | Path of a review page, e.g. `/stills`; adds **Review** |
 
 ## Quickstart
 
@@ -65,7 +66,8 @@ safe defaults, so `.env` is optional.
 
 Right-click a card (or focus it and press <kbd>Delete</kbd>) on desktop, or swipe it
 left on a phone, to reveal its actions: **Stop**, plus the share actions when the hub
-can [share](#sharing-from-the-hub). Tap **Stop** to stop that preview. When the preview is
+can [share](#sharing-from-the-hub), and **Review** when the preview carries `preview.review`,
+a link to its review page (a mockup's `/stills`). Tap **Stop** to stop that preview. When the preview is
 shared, the hub first retracts the share on the edge and removes its forwarder, so no
 share outlives it. Then it stops every running container of the preview's compose
 project — it only acts on stacks whose container carries `preview.url` — and the card
