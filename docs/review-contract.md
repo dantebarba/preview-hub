@@ -190,7 +190,7 @@ since reviewed.
 | --------------------------- | ---------- | ------- |
 | `stills/manifest.json`, `stills/<name>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill | the viewer, `preview stills ls`, the agent |
 | `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `resolve`, `reopen`, `viewed`, `unviewed`), `preview review reply\|resolve\|reopen` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
-| `review/annotated/<id>.png` | the viewer, when thread `<id>` is opened: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
+| `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
 Readers need no lock. Writers go through the reference implementation or follow its
 protocol exactly, because the runtime (in a container) and the CLI (on the host) write the

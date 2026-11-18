@@ -251,7 +251,7 @@ function render() {
   }
   const before = state.compare && index > 0;
   shown = s.revs[before ? index - 1 : index];
-  if (state.draft && (state.draft.still !== s.name || state.draft.rev !== shown.n)) state.draft = null;
+  if (state.draft && (state.draft.still !== s.name || state.draft.rev !== shown.n)) dropDraft();
   const url = imageUrl(shown);
   if (el("still").getAttribute("src") !== url) el("still").src = url;
   el("still").alt = s.title;
@@ -300,11 +300,17 @@ function select(id) {
   el("marks").querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: PHONE.matches ? "start" : "nearest" });
 }
 
-/** Drop the draft mark and what was written for it. */
-function cancelDraft() {
+/** Forget the draft mark, what was written for it and the revision held for it. */
+function dropDraft() {
   state.draft = null;
-  state.armed = false;
+  state.held = false;
   el("body").value = "";
+}
+
+/** Drop the draft mark and leave "＋ Remark". */
+function cancelDraft() {
+  dropDraft();
+  state.armed = false;
   render();
 }
 
@@ -313,7 +319,6 @@ function show(i) {
   if (i < 0 || i >= state.stills.length) return;
   state.at = i;
   state.rev = null;
-  state.held = false;
   state.compare = false;
   state.thread = null;
   render();
@@ -436,7 +441,8 @@ async function setReviewed(on) {
 
 /**
  * Post the draft as a thread: its still, revision, mark and comment in one event, with the
- * annotated still when it could be drawn. The new thread is then the selected one.
+ * annotated still when it could be drawn, and a notice when it could not. The new thread is
+ * then the selected one. The mark stays as it is while it is being posted.
  */
 async function postRemark() {
   const draft = state.draft;
@@ -448,10 +454,9 @@ async function postRemark() {
     const event = { type: "thread", still: draft.still, rev: draft.rev, anchor: draft.anchor, body };
     const thread = await send(annotated ? { ...event, annotated } : event);
     applyThread(state.threads, thread);
-    if (state.draft !== draft) return render();
-    state.draft = null;
-    el("body").value = "";
+    if (state.draft === draft) dropDraft();
     select(thread.id);
+    if (!annotated) report("The remark is posted, without its annotated still: it could not be drawn.");
   } catch (e) {
     report(`Could not post the remark: ${e.message}`);
   } finally {
@@ -462,11 +467,12 @@ async function postRemark() {
 /** Post what is written in the reply form to the selected thread. */
 async function postReply() {
   const body = el("answer").value.trim();
-  if (!state.thread || !body || el("send").disabled) return;
+  const thread = state.thread;
+  if (!thread || !body || el("send").disabled) return;
   el("send").disabled = true;
   try {
-    await send({ type: "reply", thread: state.thread, body });
-    el("answer").value = "";
+    await send({ type: "reply", thread, body });
+    if (state.thread === thread) el("answer").value = "";
   } catch (e) {
     report(`Could not post the reply: ${e.message}`);
   } finally {
@@ -477,11 +483,15 @@ async function postReply() {
 /** Resolve the selected thread, or reopen it when it is resolved. */
 async function toggleStatus() {
   const thread = state.threads.find((t) => t.id === state.thread);
-  if (!thread) return;
+  if (!thread || el("status").disabled) return;
+  const type = thread.status === "open" ? "resolve" : "reopen";
+  el("status").disabled = true;
   try {
-    await send({ type: thread.status === "open" ? "resolve" : "reopen", thread: thread.id });
+    await send({ type, thread: thread.id });
   } catch (e) {
-    report(`Could not ${thread.status === "open" ? "resolve" : "reopen"} the remark: ${e.message}`);
+    report(`Could not ${type} the remark: ${e.message}`);
+  } finally {
+    el("status").disabled = false;
   }
 }
 
@@ -511,7 +521,7 @@ function pointOf(e) {
  * is on. `drag.tap` holds where a new mark was pressed until the pointer leaves that spot.
  */
 function startDrag(e) {
-  if (e.button !== 0 || e.target.closest("#composer, .mark")) return;
+  if (e.button !== 0 || el("post").disabled || e.target.closest("#composer, .mark")) return;
   const at = pointOf(e);
   const corner = e.target.dataset.corner;
   if (corner) drag = { fixed: opposite(state.draft.anchor, corner) };
@@ -531,7 +541,10 @@ function moveDrag(e) {
   setDraft(drag.from ? moved(drag.from, at.x - drag.at.x, at.y - drag.at.y) : region(drag.fixed, at));
 }
 
-/** End a drag: a press that never left its spot is a pin there. The composer opens, ready to type. */
+/**
+ * End a drag: a press that never left its spot is a pin there. The composer opens, ready to
+ * type; on a phone a mark its sheet would cover goes to the top.
+ */
 function endDrag() {
   if (!drag) return;
   const tap = drag.tap && drag.fixed;
@@ -539,7 +552,10 @@ function endDrag() {
   if (tap) setDraft(pin(tap));
   state.armed = false;
   render();
-  if (state.draft) el("body").focus({ preventScroll: PHONE.matches });
+  if (!state.draft) return;
+  el("body").focus({ preventScroll: PHONE.matches });
+  const covered = el("draft").getBoundingClientRect().bottom > el("composer").getBoundingClientRect().top;
+  if (PHONE.matches && covered) el("draft").scrollIntoView({ block: "start" });
 }
 
 /** Make `anchor` the draft's mark, on the revision on screen. */
@@ -596,7 +612,6 @@ window.visualViewport?.addEventListener("resize", liftSheets);
 window.visualViewport?.addEventListener("scroll", liftSheets);
 el("rev").onchange = (e) => {
   state.rev = Number(e.target.value);
-  state.held = false;
   state.compare = false;
   render();
 };

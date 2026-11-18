@@ -451,7 +451,6 @@ async function postEvent(req, res, { scratch, stream }) {
   if (!(req.headers["content-type"] || "").toLowerCase().startsWith(JSON_TYPE)) {
     return sendJson(res, 415, { error: `the body must be ${JSON_TYPE}` });
   }
-  const tooLong = () => sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
   const body = await readBody(req, MAX_UPLOAD_BYTES);
   if (!body) return sendJson(res, 413, { error: `the body must be at most ${MAX_UPLOAD_BYTES} bytes` });
   let event;
@@ -464,7 +463,9 @@ async function postEvent(req, res, { scratch, stream }) {
     return sendJson(res, 400, { error: "an event must be an object" });
   }
   const { annotated, ...fields } = event;
-  if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) return tooLong();
+  if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
+    return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
+  }
   let png = null;
   if (annotated !== undefined) {
     if (fields.type !== "thread" || typeof fields.still !== "string") {

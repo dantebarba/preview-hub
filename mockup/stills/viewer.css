@@ -49,7 +49,7 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 .mark.on { opacity: 1; box-shadow: 0 0 0 3px #fff, 0 0 0 5px #e11d48; z-index: 1; }
 .mark.pin.on { box-shadow: none; }
 .mark.pin.on span { box-shadow: 0 0 0 3px #e11d48; }
-#draft { position: absolute; z-index: 2; cursor: move; box-sizing: border-box; }
+#draft { position: absolute; z-index: 2; scroll-margin: 24px; cursor: move; box-sizing: border-box; }
 #draft.box { border: 2px dashed #fff; background: rgba(244, 63, 94, .22); box-shadow: 0 0 0 2px #e11d48; }
 #draft.pin { width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; border: 3px solid #fff; background: #e11d48; box-shadow: 0 0 0 2px #e11d48, 0 1px 6px #000a; }
 #draft i { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid #e11d48; border-radius: 50%; box-sizing: border-box; }
