@@ -20,6 +20,7 @@ import {
   copyFileSync,
   existsSync,
   fstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -47,6 +48,7 @@ const STORED = ["seq", "id", "at"];
 const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
 const ID = /^[\w-]{1,64}$/;
 const SIZE = /^[1-9]\d{0,4}x[1-9]\d{0,4}$/;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BODY = 10000;
 const MAX_AUTHOR = 100;
@@ -113,7 +115,9 @@ function eventProblem(event, stored) {
   if (stored) {
     if (!Number.isInteger(event.seq) || event.seq < 1) return "'seq' must be an integer from 1";
     if (typeof event.id !== "string" || !ID.test(event.id)) return "'id' must be a short word";
-    if (typeof event.at !== "string" || Number.isNaN(Date.parse(event.at))) return "'at' must be an ISO 8601 time";
+    if (typeof event.at !== "string" || !ISO.test(event.at) || Number.isNaN(Date.parse(event.at))) {
+      return "'at' must be an ISO 8601 time";
+    }
   }
   const { author } = event;
   if (!isObject(author) || Object.keys(author).sort().join(",") !== "kind,name") {
@@ -144,36 +148,68 @@ function eventProblem(event, stored) {
   return null;
 }
 
+/** True when the file `file` was last modified more than LOCK_STALE_MS ago. */
+function isStale(file) {
+  return Date.now() - statSync(file).mtimeMs > LOCK_STALE_MS;
+}
+
 /**
- * Run `fn` while holding the lock file `file`, created exclusively and removed afterwards. A
- * lock older than LOCK_STALE_MS is left by a writer that died and is taken over.
+ * Clear the lock file `file` when it is stale; true when it is gone, so taking it can be
+ * retried. The lock is renamed aside before it is deleted, so of two writers that both saw it
+ * stale only one moves it; one that moved a lock taken afresh in between links it back.
+ */
+function clearStale(file) {
+  const aside = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.stale`;
+  try {
+    if (!isStale(file)) return false;
+    renameSync(file, aside);
+  } catch (e) {
+    if (e.code === "ENOENT") return true;
+    throw e;
+  }
+  if (isStale(aside)) {
+    rmSync(aside, { force: true });
+    return true;
+  }
+  try {
+    linkSync(aside, file);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+  rmSync(aside, { force: true });
+  return false;
+}
+
+/**
+ * Run `fn` while holding the lock file `file`, created exclusively and removed afterwards, but
+ * only while it is still the one this call created. A lock older than LOCK_STALE_MS is left by
+ * a writer that died and is taken over.
  */
 async function withLock(file, fn) {
   mkdirSync(path.dirname(file), { recursive: true });
   const deadline = Date.now() + LOCK_WAIT_MS;
+  let ino;
   for (;;) {
     try {
-      closeSync(openSync(file, "wx"));
+      const fd = openSync(file, "wx");
+      ino = fstatSync(fd).ino;
+      closeSync(fd);
       break;
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
     }
-    try {
-      if (Date.now() - statSync(file).mtimeMs > LOCK_STALE_MS) {
-        rmSync(file, { force: true });
-        continue;
-      }
-    } catch (e) {
-      if (e.code === "ENOENT") continue;
-      throw e;
-    }
+    if (clearStale(file)) continue;
     if (Date.now() > deadline) throw new Error(`${file}: still locked after ${LOCK_WAIT_MS / 1000}s`);
     await sleep(2 + Math.random() * 8);
   }
   try {
     return fn();
   } finally {
-    rmSync(file, { force: true });
+    try {
+      if (statSync(file).ino === ino) rmSync(file, { force: true });
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
   }
 }
 
@@ -219,6 +255,9 @@ export async function addStill(dir, { file, name, title, source, size }) {
   return withLock(stillsLock, () => {
     const manifest = stills(dir);
     let entry = manifest.find((s) => s && s.name === name);
+    const folded = name.toLowerCase();
+    const clash = manifest.find((s) => typeof s?.name === "string" && s.name !== name && s.name.toLowerCase() === folded);
+    if (clash) throw new Error(`'${name}' differs from the still '${clash.name}' only in case`);
     if (!entry) {
       entry = { name, title: title || name, source: { path: null, size: null }, revs: [] };
       manifest.push(entry);
@@ -234,8 +273,13 @@ export async function addStill(dir, { file, name, title, source, size }) {
     copyFileSync(file, path.join(dir, rel));
     entry.revs.push({ n, file: rel, at: new Date().toISOString() });
     const tmp = `${manifestFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
-    renameSync(tmp, manifestFile);
+    try {
+      writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
+      renameSync(tmp, manifestFile);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
+    }
     return entry;
   });
 }
@@ -256,6 +300,7 @@ export function readEvents(dir, since = 0) {
   const lines = readFileSync(file, "utf8").split("\n");
   lines.pop();
   let last = 0;
+  const ids = new Set();
   lines.forEach((text, i) => {
     if (!text.trim()) return;
     let event;
@@ -274,6 +319,11 @@ export function readEvents(dir, since = 0) {
       problems.push({ line: i + 1, error: `'seq' ${event.seq} does not follow ${last}` });
       return;
     }
+    if (ids.has(event.id)) {
+      problems.push({ line: i + 1, error: `'id' ${event.id} is not unique` });
+      return;
+    }
+    ids.add(event.id);
     last = event.seq;
     if (event.seq <= since) return;
     events.push(event);

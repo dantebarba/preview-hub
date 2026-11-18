@@ -29,7 +29,8 @@ All paths in the files below are relative to `.mockup/`.
 
 A **still** is a named screenshot of a mockup page, such as `05-invite-user`. A name is 1 to
 100 characters of letters, digits, `.`, `_` and `-`, starting with a letter or digit, so it
-is safe as a directory name and in a URL.
+is safe as a directory name and in a URL. Two names that differ only in case are refused,
+since a case-insensitive filesystem would give them one directory.
 
 Shooting a still again under the same name makes a new **revision**: rev 1, 2, 3, ... Every
 revision keeps its own file, `stills/<name>/<n>.png`, which is never rewritten, so a remark
@@ -134,6 +135,7 @@ A reader must tolerate the log as it finds it:
 - **A malformed line** (not JSON, or breaking the schema above) is skipped and reported,
   never fatal. Its `seq` counts for nothing.
 - **A `seq` not above the last good one** (a duplicate, or a line out of order) is malformed.
+- **An `id` an earlier good line already has** is malformed.
 - **An event naming a thread the log does not open** is ignored by the folds below.
 - **Blank lines** are skipped silently.
 
@@ -178,14 +180,16 @@ same files at once:
 
 1. **Take the lock.** Create `review/.lock` (or `stills/.lock` for the manifest) with
    create-exclusive (`O_CREAT|O_EXCL`); if it exists, retry in a few milliseconds. A lock
-   older than 10 seconds belongs to a writer that died: remove it and retry.
+   older than 10 seconds belongs to a writer that died: rename it aside to a name of your
+   own, delete it if what moved is still older than 10 seconds (else hard-link it back), and
+   retry.
 2. **Validate** the event against the schema, and that its thread exists in the log and its
    still and rev in the manifest.
 3. **Assign** `seq` (one above the log's last good `seq`, 1 for an empty log), a fresh `id`
    and `at`.
 4. **Append** the line, `\n`-terminated, with a single `write` on a descriptor opened with
    `O_APPEND`, preceded by a `\n` when the file does not end with one.
-5. **Release** the lock by removing it.
+5. **Release** the lock by removing it, only if it is still the file you created (same inode).
 
 Adding a still under `stills/.lock`: copy the PNG to `stills/<name>/<n>.png` with `n` one past
 the still's last revision, then rewrite the manifest through a temporary file and a rename.

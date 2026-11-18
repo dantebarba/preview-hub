@@ -7,7 +7,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,9 +74,14 @@ test("addStill rejects bad names, sizes and files that are not PNGs", async (t) 
   const dir = scratch(t);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "../x" }), /still name/);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "x", size: "big" }), /390x844/);
+  await addStill(dir, { file: png(dir, "a"), name: "home" });
+  await assert.rejects(addStill(dir, { file: png(dir, "b"), name: "Home" }), /only in case/);
   writeFileSync(path.join(dir, "shot.png"), "not a png");
   await assert.rejects(addStill(dir, { file: path.join(dir, "shot.png"), name: "x" }), /not a PNG/);
-  assert.deepEqual(stills(dir), []);
+  assert.deepEqual(
+    stills(dir).map((s) => s.name),
+    ["home"]
+  );
 });
 
 test("appendEvent assigns seq, id and at, and readEvents resumes from a cursor", async (t) => {
@@ -163,21 +178,36 @@ test("malformed lines are skipped and reported, and a torn line does not swallow
   appendFileSync(log, "{oops\n\n");
   appendFileSync(log, `${JSON.stringify({ ...first, id: "dup" })}\n`);
   appendFileSync(log, `${JSON.stringify({ ...first, seq: 5, type: "shout" })}\n`);
-  appendFileSync(log, `{"seq":6,"half`);
+  appendFileSync(log, `${JSON.stringify({ ...first, seq: 6 })}\n`);
+  appendFileSync(log, `{"seq":7,"half`);
   assert.deepEqual(readEvents(dir).events, [first]);
   assert.deepEqual(
     readEvents(dir).problems.map((p) => p.line),
-    [2, 4, 5]
+    [2, 4, 5, 6]
   );
   assert.match(readEvents(dir).problems[0].error, /bad JSON/);
   assert.match(readEvents(dir).problems[1].error, /does not follow 1/);
   assert.match(readEvents(dir).problems[2].error, /'type'/);
+  assert.match(readEvents(dir).problems[3].error, /'id' \w+ is not unique/);
   const next = await appendEvent(dir, { type: "unviewed", author: HUMAN, still: "invite", rev: 1 });
   assert.equal(next.seq, 2);
   const { events, problems } = readEvents(dir);
   assert.deepEqual(events, [first, next]);
   assert.match(problems.at(-1).error, /bad JSON/);
-  assert.equal(problems.at(-1).line, 6);
+  assert.equal(problems.at(-1).line, 7);
+});
+
+test("a lock left by a writer that died is taken over", async (t) => {
+  const dir = await withStill(t);
+  const lock = path.join(dir, "review/.lock");
+  mkdirSync(path.dirname(lock), { recursive: true });
+  writeFileSync(lock, "");
+  const old = new Date(Date.now() - 60000);
+  utimesSync(lock, old, old);
+  const event = await appendEvent(dir, { type: "viewed", author: HUMAN, still: "invite", rev: 1 });
+  assert.equal(event.seq, 1);
+  assert.equal(existsSync(lock), false);
+  assert.deepEqual(readdirSync(path.dirname(lock)), ["events.jsonl"]);
 });
 
 test("appends from two processes at once get distinct, growing seqs and whole lines", async (t) => {
