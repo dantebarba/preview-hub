@@ -193,6 +193,26 @@ image is rev 1, and a change replaces it.
 
 A folder that cannot be written reads fine with `writable: false`; writing its review fails.
 
+**Serving a folder.** `preview stills serve [<dir>]` runs the runtime in folder mode
+([`mockup/folder.mjs`](../mockup/folder.mjs)) on the folder mounted at `/stills`, read-only
+when the host user cannot write it. Serving a writable folder keeps its revisions at start
+(the first write), so the first rewrite of an image is already rev 2 with before/after.
+`GET /_review/stills` answers as for a mockup plus the source's `groups`, `notes`, `about` and
+`writable`; a `POST /_review/events` to a read-only folder is a 403, `read-only folder: remarks
+off`. Only the files of the stills' revisions are served, never the folder's other files.
+`--dir <dir>` on `preview stills ls` and the `preview review` commands reads and writes the same
+store, served or not.
+
+**Exporting a mockup.** `preview stills export <dir> [--readme]` copies a mockup's stills into a
+folder that reads back as the same stills with the same remarks: each variant's current
+revision as `<name>@<key>.png` (`<name>.png` for a still whose one variant is `desktop`), every
+revision in `.review/revs/` and `.review/revs.json` so the revision numbers carry over, and the
+log and annotated stills in `.review/`. An event on a still without `variant` gets the still's
+first variant written in, since the folder may order the variants differently. `stills.json`
+keeps the titles and order; `--readme` writes a `README.md` table of titles and images when the
+folder has no README. Neither is ever overwritten, and a folder that holds a review already or
+an image the export would write is refused.
+
 ## Events
 
 `review/events.jsonl` is an append-only log, one JSON object per line, each terminated by
