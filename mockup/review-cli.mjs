@@ -13,8 +13,12 @@
  *   node review-cli.mjs [--dir D] review working <thread|still> [--variant K] [--note T]
  *   node review-cli.mjs [--dir D] review idle [thread]
  *   node review-cli.mjs [--dir D] review watch [--since SEQ] [--json]
+ *   node review-cli.mjs [--dir D] stills export <folder> [--readme]
+ *   node review-cli.mjs --folder F stills ls | review ...
  *
  * `--dir` is the mockup scratch dir (`.mockup/`), default `$MOCKUP_DIR` or the working dir.
+ * `--folder` is any directory of images instead, read as a stills source (`source.mjs`), its
+ * review in `<folder>/.review/`; `stills add` and `stills export` are a mockup's only.
  * Paths are printed under `$MOCKUP_HOST_DIR` when set, so a CLI run in a container names files
  * as the host sees them. Agent events are written as `{kind: "agent", name:
  * $REVIEW_AUTHOR, via: "cli"}` (name default "agent"). Exit status: 0 done, 1 failed, 2 bad usage.
@@ -37,6 +41,8 @@ import {
   stills,
   threads,
 } from "./review.mjs";
+import { exportStills } from "./export.mjs";
+import { folder, readSource } from "./source.mjs";
 import { markOf } from "./stills/state.js";
 
 const POLL_MS = 200;
@@ -52,7 +58,13 @@ const USAGE = `usage: preview stills add <png> --name N [--viewport mobile|mobil
        preview review resolve|reopen <thread>
        preview review working <thread|still> [--variant K] [--note "<text>"]
        preview review idle [thread]
-       preview review watch [--since SEQ] [--json]`;
+       preview review watch [--since SEQ] [--json]
+       preview stills export <dir> [--readme]
+       preview stills serve|stop|status [<dir>]
+       preview stills share [<dir>] [--hours N] [--yes] | unshare [<dir>]
+
+'stills ls' and every 'review' command take --dir <dir> to work on any folder of images
+instead of the mockup; its review lives in <dir>/.review/.`;
 
 const COMMANDS = {
   "stills add": {
@@ -66,9 +78,11 @@ const COMMANDS = {
       "full-page": { type: "boolean" },
     },
     args: [1, 1],
+    mockup: true,
     run: stillsAdd,
   },
   "stills ls": { options: { as: { type: "string" }, json: { type: "boolean" } }, args: [0, 0], run: stillsLs },
+  "stills export": { options: { readme: { type: "boolean" } }, args: [1, 1], mockup: true, run: stillsExport },
   "review ls": { options: { open: { type: "boolean" }, json: { type: "boolean" } }, args: [0, 0], run: reviewLs },
   "review show": { options: { json: { type: "boolean" } }, args: [1, 1], run: reviewShow },
   "review reply": { options: {}, args: [2, Infinity], raw: true, run: reviewReply },
@@ -241,12 +255,35 @@ function stillsLs({ dir, io }, _args, { as, json }) {
     }),
   }));
   if (json) return io.out(JSON.stringify(rows, null, 2));
+  if (!rows.length && typeof dir !== "string") return io.out(`no images in ${io.host(".")}`);
   if (!rows.length) return io.out("no stills yet; add one with 'preview stills add'");
   for (const r of rows) {
     for (const v of r.variants) {
       io.out(`${r.name} [${v.key}]  r${v.rev}  ${v.state}  ${v.open} open  ${quote(r.title)}`);
     }
   }
+}
+
+/**
+ * Copy the mockup's stills and review into the folder `dest` (see `export.mjs`), which
+ * `--folder` and `preview stills serve` then read as the same stills with the same remarks.
+ * The folder is printed under `$MOCKUP_EXPORT_HOST_DIR` when set.
+ */
+function stillsExport({ dir, io }, [dest], { readme }) {
+  const shown = io.env.MOCKUP_EXPORT_HOST_DIR || path.resolve(dest);
+  let done;
+  try {
+    done = exportStills(dir, dest, { readme });
+  } catch (e) {
+    throw new CliError(`${shown}: ${e.message}`);
+  }
+  if (!done.stills) throw new CliError("no stills to export; add one with 'preview stills add'");
+  for (const name of done.wrote) io.out(`wrote ${path.join(shown, name)}`);
+  for (const name of done.skipped) io.out(`kept ${path.join(shown, name)} (exists)`);
+  const events = `${done.events} ${done.events === 1 ? "event" : "events"}`;
+  io.out(
+    `exported ${done.stills} stills (${done.images} images, ${done.revisions} revisions) and ${events} to ${shown}`
+  );
 }
 
 /** The threads of the review, all or only the open ones. */
@@ -261,16 +298,16 @@ function reviewLs({ dir, io }, _args, { open, json }) {
 }
 
 /** One thread in full: where it points, its body and replies, and the files to look at. */
-function reviewShow({ dir, io }, [id], { json }) {
+function reviewShow({ dir, root, io }, [id], { json }) {
   const thread = findThread(dir, id);
   const rev = stills(dir)
     .find((s) => s.name === thread.still)
     ?.variants.find((v) => v.key === thread.variant)
     ?.revs.find((r) => r.n === thread.rev);
-  const annotated = annotatedFile(thread.id);
+  const annotated = typeof dir === "string" ? annotatedFile(thread.id) : `.review/annotated/${thread.id}.png`;
   const files = {
     image: rev ? io.host(rev.file) : null,
-    annotated: existsSync(path.join(dir, annotated)) ? io.host(annotated) : null,
+    annotated: existsSync(path.join(root, annotated)) ? io.host(annotated) : null,
   };
   if (json) return io.out(JSON.stringify({ ...thread, ...files }, null, 2));
   io.out(`thread  ${thread.id}  ${thread.status}`);
@@ -287,7 +324,10 @@ function reviewShow({ dir, io }, [id], { json }) {
 }
 
 /** Append `event` as the agent and print its seq, its type and what it is about. */
-async function agentEvent({ dir, io }, event) {
+async function agentEvent({ dir, root, io }, event) {
+  if (typeof dir !== "string" && !readSource(root).writable) {
+    throw new CliError(`${io.host(".")}: read-only folder, remarks off`);
+  }
   const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author, via: "cli" } });
   const about = aboutText(stored);
   io.out(`#${stored.seq} ${stored.type}${about ? ` ${about}` : ""}`);
@@ -341,10 +381,15 @@ function dirGone(dir) {
   }
 }
 
+/** The event log of `dir`, a scratch dir or a folder source. */
+function eventsFile(dir) {
+  return typeof dir === "string" ? path.join(dir, EVENTS_FILE) : dir.paths.events;
+}
+
 /** The size and mtime of the log, to skip a re-read when it has not changed. */
 function logStamp(dir) {
   try {
-    const s = statSync(path.join(dir, EVENTS_FILE));
+    const s = statSync(eventsFile(dir));
     return `${s.size}:${s.mtimeMs}`;
   } catch {
     return "";
@@ -356,14 +401,14 @@ function logStamp(dir) {
  * from the end of the log. Malformed lines are reported once on stderr. Fails when the scratch
  * dir disappears.
  */
-async function reviewWatch({ dir, io }, _args, { since, json }) {
+async function reviewWatch({ dir, root, io }, _args, { since, json }) {
   if (since !== undefined && !/^\d+$/.test(since)) throw new CliError("--since must be a seq, 0 or more", 2);
-  if (dirGone(dir)) throw new CliError(`${dir}: no such directory`);
+  if (dirGone(root)) throw new CliError(`${io.host(".")}: no such directory`);
   let cursor = since === undefined ? readEvents(dir).cursor : Number(since);
   const reported = new Set();
   let stamp = null;
   while (!io.signal?.aborted) {
-    if (dirGone(dir)) throw new CliError(`${io.host(".")}: removed; stopped watching`);
+    if (dirGone(root)) throw new CliError(`${io.host(".")}: removed; stopped watching`);
     const now = logStamp(dir);
     if (now !== stamp) {
       stamp = now;
@@ -391,8 +436,11 @@ export async function main(argv, io) {
   const env = io.env ?? {};
   let args = argv;
   let dirArg;
+  let folderArg;
   if (args[0] === "--dir") [, dirArg, ...args] = args;
   else if (args[0]?.startsWith("--dir=")) [dirArg, ...args] = [args[0].slice(6), ...args.slice(1)];
+  else if (args[0] === "--folder") [, folderArg, ...args] = args;
+  else if (args[0]?.startsWith("--folder=")) [folderArg, ...args] = [args[0].slice(9), ...args.slice(1)];
   if (args[0] === "-h" || args[0] === "--help") {
     io.out(USAGE);
     return 0;
@@ -403,16 +451,21 @@ export async function main(argv, io) {
     io.err(USAGE);
     return 2;
   }
-  const dir = path.resolve(dirArg ?? env.MOCKUP_DIR ?? process.cwd());
+  const root = path.resolve(folderArg ?? dirArg ?? env.MOCKUP_DIR ?? process.cwd());
   const ctx = {
-    dir,
+    dir: folderArg === undefined ? root : folder(root),
+    root,
     io: {
       ...io,
-      host: (rel) => path.join(env.MOCKUP_HOST_DIR || dir, rel),
+      env,
+      host: (rel) => path.join(env.MOCKUP_HOST_DIR || root, rel),
       author: env.REVIEW_AUTHOR?.trim() || "agent",
     },
   };
   try {
+    if (command.mockup && folderArg !== undefined) {
+      throw new CliError(`'${key}' works on a mockup; a folder's stills are its images`, 2);
+    }
     let parsed;
     if (command.raw) {
       const rest = args.slice(2);
