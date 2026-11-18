@@ -80,11 +80,13 @@ card's **Review**), that it is on the hub under "<project> mockup" and stops in 
 that was the question.
 
 With stills out, start `preview review watch` under Monitor before reporting, so no remark is
-missed: each remark marked on a still arrives as a line `#<seq> thread <id> <still> r<n>
-<box|pin|whole> <who>: "<text>"`, replies and reopens alike (skip `viewed`/`unviewed`). For each: `preview review show <id>` and Read its `marked` PNG (else
-`image`); fix the page; re-shoot that still under the same name, so the viewer flags it
-"changed since reviewed"; `preview review reply <id> "<what changed>"`. Resolving is the
-reviewer's. After a restart, resume with `watch --since <last seq>`.
+missed. A new remark arrives as `#<seq> thread <id> <still> r<n> <pin x,y|box x,y wxh|whole>
+<who>: "<text>"` (`general` in place of the still part when it is on no still); a reply as
+`#<seq> reply <id> <who>: "<text>"`; a reopen as `#<seq> reopen <id> <who>`. Answer those;
+skip `resolve`, `viewed` and `unviewed`. For each: `preview review show <id>` and Read its
+`marked` PNG (else `image`); fix the page; re-shoot that still under the same name, so the
+viewer flags it "changed since reviewed"; `preview review reply <id> "<what changed>"`.
+Resolving is the reviewer's. After a restart, resume with `watch --since <last seq>`.
 
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
 `.mockup/`, remarks included (`KEEP=1` keeps it); `git status` then shows nothing from the

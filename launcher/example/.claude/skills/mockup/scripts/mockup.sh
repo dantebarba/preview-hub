@@ -70,7 +70,8 @@ case "${1:-status}" in
     [[ "$page" == /* ]] || { echo "path must start with / (e.g. /checkout?v=b)" >&2; exit 2; }
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] \
       || { echo "name must start with a letter or digit, then letters, digits, '.', '_' or '-' (100 at most)" >&2; exit 2; }
-    [[ "$size" =~ ^[0-9]+x[0-9]+$ ]] || { echo "size must look like 390x844" >&2; exit 2; }
+    [[ "$size" =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$ ]] || { echo "size must look like 390x844" >&2; exit 2; }
+    [ -z "$title" ] || [[ "$title" =~ [^[:space:]] ]] || { echo "title must not be blank" >&2; exit 2; }
     [ -f "$(state_dir)/base" ] || { echo "not running; mockup.sh start first" >&2; exit 1; }
     port=$(( $(cat "$(state_dir)/base") + 1 ))
     mkdir -p "$scratch/shots"
@@ -82,7 +83,7 @@ case "${1:-status}" in
       || { echo "chrome failed to capture http://127.0.0.1:$port$page" >&2; exit 1; }
     [ -s "$scratch/shots/$name.png" ] || { echo "no image written for $page" >&2; exit 1; }
     add=(stills add "$scratch/shots/$name.png" --name "$name" --source "$page" --size "$size")
-    [ -z "$title" ] || add+=(--title "$title")
+    [ -z "$title" ] || add+=("--title=$title")
     PREVIEW_DIR="$scratch/.preview" preview "${add[@]}"
     ;;
   *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [WxH] [title]" >&2; exit 2 ;;
