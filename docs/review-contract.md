@@ -121,6 +121,20 @@ An anchor is the marked area, in coordinates normalized to the still: `0..1` fro
 
 An anchor belongs to the revision named in its thread; it is not moved onto later revisions.
 
+### Annotated stills
+
+`review/annotated/<id>.png` is the still of thread `<id>` as the reviewer saw it: the
+revision's image with the anchor drawn on it, a red frame for a region and a red ring for a
+pin, so an agent reads one image instead of drawing the mark itself. The viewer draws it when
+the remark is posted and the runtime writes it right after the `thread` event, whole (written
+beside its name, then renamed). It is a convenience, not part of the log:
+
+- It may be missing: the thread has no anchor, the browser could not draw it, or the event was
+  read in the instant before the file landed. The event's `still`, `rev` and `anchor` always
+  say the same thing.
+- It may be smaller than the revision's PNG: a still too large to upload (over 8 MiB as a PNG)
+  is scaled down. The anchor's normalized coordinates hold at any size.
+
 ## Cursor
 
 `seq` grows with every appended event, starting at 1, and is never reused. A reader keeps
@@ -176,7 +190,7 @@ since reviewed.
 | --------------------------- | ---------- | ------- |
 | `stills/manifest.json`, `stills/<name>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill | the viewer, `preview stills ls`, the agent |
 | `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `resolve`, `reopen`, `viewed`, `unviewed`), `preview review reply\|resolve\|reopen` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
-| `review/annotated/<id>.png` | the viewer, when thread `<id>` is opened: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
+| `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
 Readers need no lock. Writers go through the reference implementation or follow its
 protocol exactly, because the runtime (in a container) and the CLI (on the host) write the
