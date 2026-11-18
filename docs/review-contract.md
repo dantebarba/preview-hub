@@ -409,7 +409,7 @@ reviewer's marked revisions as `{reviewer: {still: {variant key: rev}}}`, `worki
 
 | File                        | Written by | Read by |
 | --------------------------- | ---------- | ------- |
-| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill's `mockup.sh shot` | the viewer, `preview stills ls`, the agent |
+| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, `preview stills shoot`, the `/mockup` skill's `mockup.sh shot` | the viewer, `preview stills ls`, the agent |
 | `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `viewed`, `unviewed`, and for a tailnet user `resolve`, `reopen`; see [Reviewers](#reviewers)), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
 | `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 

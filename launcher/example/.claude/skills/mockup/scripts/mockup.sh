@@ -17,7 +17,11 @@
 #                                         --viewport is one shot. T is a free tag added to every
 #                                         shot's variant; dark and light set the colour scheme
 #                                         and go in separate calls. --full-page shoots the
-#                                         whole document. The old positional form
+#                                         whole page, an app shell's inner scroller included,
+#                                         or the viewport while a dialog is open. An image
+#                                         equal to the variant's latest adds no revision
+#                                         ("unchanged"). Many stills, or any that need a click
+#                                         first: `preview stills shoot`. The old positional form
 #                                         `shot <path> <name> [WxH] [title]` still works.
 set -euo pipefail
 
@@ -121,13 +125,15 @@ case "${1:-status}" in
       i=$((i + 1))
       file="$name.$i.png"
       rm -f "$scratch/shots/$file"
-      docker exec --user "$(id -u):$(id -g)" -e HOME=/tmp -e "MOCKUP_SHOT_WAIT_MS=${MOCKUP_SHOT_WAIT_MS:-5000}" "$cid" \
-        node /srv/capture.mjs "http://127.0.0.1:80$page" "/app/.mockup/shots/$file" \
-        --viewport "$v" ${tags[@]+"${tags[@]}"} ${full[@]+"${full[@]}"} >/dev/null \
+      shot="$(docker exec --user "$(id -u):$(id -g)" -e HOME=/tmp -e "MOCKUP_SHOT_WAIT_MS=${MOCKUP_SHOT_WAIT_MS:-5000}" \
+        "$cid" node /srv/capture.mjs "http://127.0.0.1:80$page" "/app/.mockup/shots/$file" \
+        --viewport "$v" ${tags[@]+"${tags[@]}"} ${full[@]+"${full[@]}"})" \
         || { echo "capture of $page at $v failed" >&2; exit 1; }
       [ -s "$scratch/shots/$file" ] || { echo "no image written for $page at $v" >&2; exit 1; }
+      whole=(${full[@]+"${full[@]}"})
+      case "$shot" in *" viewport") whole=(); echo "$name at $v: a dialog is open, shot the viewport" >&2 ;; esac
       add=(stills add "$scratch/shots/$file" --name "$name" --source "$page" --viewport "$v")
-      add+=(${tags[@]+"${tags[@]}"} ${full[@]+"${full[@]}"})
+      add+=(${tags[@]+"${tags[@]}"} ${whole[@]+"${whole[@]}"})
       [ -z "$title" ] || add+=("--title=$title")
       ( cd "$scratch" && preview "${add[@]}" )
     done

@@ -6,9 +6,9 @@
 # root and carries on as the owner of /app/.mockup, so the review store it writes there
 # (stills/ and review/, mounted read-write) stays the host user's.
 #
-# Chromium and the Noto fonts (with emoji) are here too, for capture.mjs: `mockup.sh shot`
-# runs it in the mockup's own container to shoot its pages as devices through the DevTools
-# protocol, so one pinned image serves, reviews and shoots.
+# Chromium and the Noto fonts (with emoji) are here too, for capture.mjs: `mockup.sh shot` and
+# `preview stills shoot` run it in the mockup's own container to shoot its pages as devices
+# through the DevTools protocol, so one pinned image serves, reviews and shoots.
 #
 # With STILLS_DIR set, server.mjs serves that directory of images for review instead, with no
 # project mounted: `preview stills serve` runs it as the calling user on the folder at /stills.

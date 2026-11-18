@@ -10,9 +10,10 @@
  * relied on the still's first variant gets that variant written in, since the folder may order
  * the variants differently.
  *
- * `stills.json` keeps the titles and the order, and with `readme` a `README.md` lists them as a
- * table of titles and images when the folder has no README or `index.md`. Neither is ever
- * overwritten. The export refuses a folder that
+ * `stills.json` keeps the titles and the order, the mockup's `shots.mjs`, when it has one, is
+ * copied so the recipe that shot them is kept with them, and with `readme` a `README.md` lists
+ * them as a table of titles and images when the folder has no README or `index.md`. None is
+ * ever overwritten. The export refuses a folder that
  * holds a review already or an image it would replace.
  */
 
@@ -20,6 +21,9 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSyn
 import path from "node:path";
 import { readEvents, revisions, stills, storePaths } from "./review.mjs";
 import { DEFAULT_KEY, hashOf, keptFile, READMES, REVIEW_DIR, reviewPaths } from "./source.mjs";
+
+/** The mockup's shots recipe, copied beside the exported stills so it is kept with them. */
+export const SHOTS_FILE = "shots.mjs";
 
 /** The file name the variant `key` of the still `name` is exported as, `single` when it is its only one. */
 export function exportName(name, key, single) {
@@ -151,6 +155,8 @@ export function exportStills(dir, dest, { readme = false, title = null } = {}) {
       2
     )}\n`
   );
+  const recipe = path.join(dir, SHOTS_FILE);
+  if (existsSync(recipe)) extra(SHOTS_FILE, readFileSync(recipe));
   const hasReadme = READMES.some((f) => existsSync(path.join(dest, f)));
   if (readme && hasReadme) skipped.push(READMES.find((f) => existsSync(path.join(dest, f))));
   else if (readme) {

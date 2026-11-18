@@ -356,6 +356,7 @@ stopped and need only `docker` on the host.
 ```sh
 preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
   --viewport mobile --tag dark --title "Invite a user" --source "/invite?v=b"   # rev 1, then 2, ...
+preview stills shoot --only '^05-'   # shoot .mockup/shots.mjs as a batch; an unchanged image adds nothing
 preview stills ls --as Dante          # each variant's latest rev, reviewed by Dante or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
 preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still and the marked PNG
@@ -383,7 +384,9 @@ Tags are free labels (`dark`, `light`, `rtl`, `empty`, `logged-out`); `dark` and
 `prefers-color-scheme` when the still is shot, so they go in separate shots, never together.
 The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag dark` is
 `mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
-`--full-page` records that the whole document was captured. The viewer groups viewports by
+`--full-page` records that the whole page was captured. An image whose bytes equal the
+variant's latest revision adds none (`stills add` prints `unchanged`), so re-shooting leaves
+the reviewed marks of the stills that did not change alone. The viewer groups viewports by
 device class: `mobile` and `mobile-s` are Mobile, `tablet` is Tablet, `desktop` is Desktop,
 and a custom size goes by its width (under 600 Mobile, under 1100 Tablet, else Desktop). It
 shows a switcher of the classes (Mobile · Tablet · Desktop) and a row of tag chips only when
@@ -419,9 +422,62 @@ T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/ca
 runs Chromium in the mockup's own container and sets the device through the DevTools
 protocol (size, pixel ratio, touch, a mobile user agent, the colour scheme), as Chrome's device
 toolbar does, so `--viewport mobile` is a 1170×2532 PNG of a touch phone. Each `--viewport` is
-one shot and one variant. It waits for `load`, the fonts and 500 ms without a fetch or XHR in
-flight, never for an open WebSocket or EventSource, and shoots anyway after
-`MOCKUP_SHOT_WAIT_MS` (default 5000).
+one shot and one variant. It waits for the page to settle: `load`, the fonts, 500 ms without a
+fetch or XHR in flight (never an open WebSocket or EventSource), and a still page, no DOM
+mutation and no running finite animation or transition for 300 ms, which a mock API living in
+the page needs since it makes no request. It shoots anyway after `MOCKUP_SHOT_WAIT_MS`
+(default 5000). A full page is as tall as the document, or as the viewport plus what its
+tallest inner scroller hides, so an app shell whose document is the viewport's height lays out
+whole: the viewport is resized to that height (at most 6000 CSS px) before the shot. With a
+dialog open (`[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`, `dialog[open]`) the
+viewport is shot as is and the still is recorded as not full page.
+
+More than a couple of stills, or any that needs a click first, go in a **shots recipe**,
+`.mockup/shots.mjs`, shot with `preview stills shoot [<shots.mjs>] [--only REGEX]
+[--parallel N] [--strict] [--report FILE]`:
+
+```js
+export default {
+  defaults: { viewports: ["desktop", "mobile"], tags: [], fullPage: true },
+  ignore: [/Google Maps/],
+  shots: [
+    { name: "03-users", title: "Settings › Users", path: "/app?as=owner&p=/profileBuyer?tab=users" },
+    { name: "05-invite-user", title: "Invite user", path: "/app?as=owner&p=/profileBuyer?tab=users",
+      viewports: ["desktop"],
+      steps: async (page) => {
+        await page.click("Invite user");
+        await page.type("[role=dialog] input[type=email]", "luis@example.com");
+        await page.waitFor("[role=dialog] button", { text: "Send invitation" });
+      } },
+  ],
+};
+```
+
+Each shot is taken once per viewport and tag set (`tags: [["dark"], ["light"]]` is two), in
+one Chromium in the mockup's container, `--parallel` tabs at a time (default 4), each in a
+browser context of its own so cookies and storage never leak between shots. `steps(page, {
+viewport, tags })` run in Node and drive the page through the DevTools protocol with real
+input, touch on a touch viewport, after scrolling the target into view; a step that navigates
+does not end them. A target is a CSS selector, else the text (or label) of an element:
+
+| Step | Does |
+| ---- | ---- |
+| `click(target, { within })`, `hover(…)` | a click (a tap on touch) or a hover on the target, inside the element `within` names |
+| `type(selector, text)`, `press(key)` | focuses the field and inserts the text; one key (`Enter`, `Escape`, `a`) |
+| `waitFor(target, { text, gone, timeout })` | until the target is there (holding `text`), or `gone` |
+| `evaluate(fnOrString)` | runs in the page; a string sees `$$(selector)` and `byText(text)` |
+| `sleep(ms)` | a last resort |
+
+`click`, `hover`, `type` and `press` return once the page has settled again, each capped at
+`MOCKUP_SHOT_WAIT_MS`; a target not found fails the shot, naming it. A page that is still for
+300 ms counts as settled, so after an action whose answer comes later without touching the
+page meanwhile (an in-page mock on a timer), `waitFor` what it brings. A failing shot fails
+alone and the batch goes on. It prints one JSON line per shot and variant (ok or failed and
+why, time taken, uncaught page exceptions and console errors minus `ignore`, the PNG under
+`.mockup/shots/` and what was added, `rev 3` or `unchanged`), then a summary, and exits 1 when
+a shot failed. A shot whose steps failed is never added; one with page exceptions is added and
+flagged, or failed with `--strict`. `preview stills export` copies `shots.mjs` beside the
+stills, so the recipe is kept with them.
 
 `watch` is the backchannel: run it under a monitor and every remark, reply,
 resolve, reopen and reviewed mark a human makes arrives as one line within a

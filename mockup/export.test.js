@@ -196,3 +196,15 @@ test("an agent's write on a read-only folder says remarks are off", { skip: proc
   assert.equal(idle.code, 1);
   assert.equal(idle.err, "/host/kept: read-only folder: remarks off");
 });
+
+test("the mockup's shots recipe is copied beside the stills, and never over one", async (t) => {
+  const { dir } = await mockup(t);
+  writeFileSync(path.join(dir, "shots.mjs"), "export default { shots: [] };\n");
+  const dest = tmp(t, "mockup-export-dest-");
+  assert.deepEqual(exportStills(dir, dest).wrote, ["stills.json", "shots.mjs"]);
+  assert.equal(readFileSync(path.join(dest, "shots.mjs"), "utf8"), "export default { shots: [] };\n");
+  const other = tmp(t, "mockup-export-dest-");
+  writeFileSync(path.join(other, "shots.mjs"), "mine\n");
+  assert.deepEqual(exportStills(dir, other).skipped, ["shots.mjs"]);
+  assert.equal(readFileSync(path.join(other, "shots.mjs"), "utf8"), "mine\n");
+});
