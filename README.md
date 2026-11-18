@@ -383,12 +383,17 @@ Tags are free labels (`dark`, `light`, `rtl`, `empty`, `logged-out`); `dark` and
 `prefers-color-scheme` when the still is shot, so they go in separate shots, never together.
 The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag dark` is
 `mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
-`--full-page` records that the whole document was captured. The viewer shows a viewport
-switcher and a row of tag chips only when the stills have more than one of either; the choice
-sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`); a still
-without the chosen variant shows the same viewport, else its first variant, with a note such
-as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the reviewed
-count is the viewer's own.
+`--full-page` records that the whole document was captured. The viewer groups viewports by
+device class: `mobile` and `mobile-s` are Mobile, `tablet` is Tablet, `desktop` is Desktop,
+and a custom size goes by its width (under 600 Mobile, under 1100 Tablet, else Desktop). It
+shows a switcher of the classes (Mobile · Tablet · Desktop) and a row of tag chips only when
+the stills have more than one of either; the size of the variant on screen is a muted label
+(`1440×1250`), or a size picker when the still has several sizes of that class. The choice of
+class and tags sticks across stills, with the exact size where the next still has it, and the
+URL names the variant on screen (`/stills#05-invite-user@mobile+dark`); a still without the
+chosen class and tags shows its first variant of the class, else its first variant, with a
+note such as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the
+reviewed count is the viewer's own, for the chosen class and tags.
 
 **Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
 passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views

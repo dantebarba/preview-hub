@@ -218,8 +218,8 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   fingers (marks land on the zoomed still), the other controls behind **⋯**, the strip a
   grid behind the count, a card opening its conversation full screen, and a swipe on a card
   uncovering Resolve/Reopen (left, with a five-second Undo) or Reply (right).
-  Variants get a viewport switcher and tag chips, the agent's `working` shows as dots, and
-  every write names its reviewer, as the README's
+  Variants get a device-class switcher (Mobile · Tablet · Desktop) and tag chips, the
+  agent's `working` shows as dots, and every write names its reviewer, as the README's
   [Reviewing stills](../README.md#reviewing-stills) describes. The runtime reads a tailnet
   reviewer from the `Tailscale-User-Name` and `Tailscale-User-Login` headers `tailscale serve`
   adds; a guest on a share link, with no such headers, names themselves in a "What's your
