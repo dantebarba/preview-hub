@@ -185,6 +185,14 @@ test("review commands refuse unknown threads, bad usage and empty replies", asyn
   r = await cli(dir, ["review", "reply", remark.id, "  "]);
   assert.equal(r.code, 1);
   assert.match(r.err, /'body'/);
+  assert.equal((await cli(dir, ["constructor"])).code, 2);
+});
+
+test("review reply takes a body that starts with '-' verbatim", async (t) => {
+  const { dir, remark } = await withRemark(t);
+  const r = await cli(dir, ["review", "reply", remark.id, "- wrapped the label\n- shortened it"]);
+  assert.equal(r.code, 0);
+  assert.equal(threads(dir)[0].replies[0].body, "- wrapped the label\n- shortened it");
 });
 
 test("eventLine prints every event type on one line", () => {

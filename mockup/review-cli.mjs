@@ -44,7 +44,7 @@ const COMMANDS = {
   "stills ls": { options: { json: { type: "boolean" } }, args: [0, 0], run: stillsLs },
   "review ls": { options: { open: { type: "boolean" }, json: { type: "boolean" } }, args: [0, 0], run: reviewLs },
   "review show": { options: { json: { type: "boolean" } }, args: [1, 1], run: reviewShow },
-  "review reply": { options: {}, args: [2, Infinity], run: reviewReply },
+  "review reply": { options: {}, args: [2, Infinity], raw: true, run: reviewReply },
   "review resolve": { options: {}, args: [1, 1], run: (ctx, args) => mark(ctx, "resolve", args[0]) },
   "review reopen": { options: {}, args: [1, 1], run: (ctx, args) => mark(ctx, "reopen", args[0]) },
   "review watch": { options: { since: { type: "string" }, json: { type: "boolean" } }, args: [0, 0], run: reviewWatch },
@@ -247,7 +247,8 @@ async function reviewWatch({ dir, io }, _args, { since, json }) {
 
 /**
  * Run the CLI on `argv` (without node and the script) and return its exit status. `io` carries
- * `out` and `err` (one line each), `readStdin`, `env` and an optional abort `signal`.
+ * `out` and `err` (one line each), `readStdin`, `env` and an optional abort `signal`. A `raw`
+ * command takes its arguments verbatim, so a reply may start with '-'; one `--` is dropped.
  */
 export async function main(argv, io) {
   const env = io.env ?? {};
@@ -259,7 +260,8 @@ export async function main(argv, io) {
     io.out(USAGE);
     return 0;
   }
-  const command = COMMANDS[args.slice(0, 2).join(" ")];
+  const key = args.slice(0, 2).join(" ");
+  const command = Object.hasOwn(COMMANDS, key) ? COMMANDS[key] : null;
   if (!command) {
     io.err(USAGE);
     return 2;
@@ -271,10 +273,17 @@ export async function main(argv, io) {
   };
   try {
     let parsed;
-    try {
-      parsed = parseArgs({ args: args.slice(2), options: command.options, allowPositionals: true, strict: true });
-    } catch (e) {
-      throw new CliError(e.message, 2);
+    if (command.raw) {
+      const rest = args.slice(2);
+      const end = rest.indexOf("--");
+      if (end !== -1) rest.splice(end, 1);
+      parsed = { positionals: rest, values: {} };
+    } else {
+      try {
+        parsed = parseArgs({ args: args.slice(2), options: command.options, allowPositionals: true, strict: true });
+      } catch (e) {
+        throw new CliError(e.message, 2);
+      }
     }
     const [min, max] = command.args;
     if (parsed.positionals.length < min || parsed.positionals.length > max) throw new CliError(USAGE, 2);

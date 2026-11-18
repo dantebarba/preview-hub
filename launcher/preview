@@ -1232,22 +1232,36 @@ container_writable() {
 ## container of the runtime image on the scratch dir as the calling user, so it works with the
 ## preview stopped. `review watch` always takes the throwaway container, with --init: it outlives
 ## `preview stop` and dies with its caller, which an exec'd process would not. A PNG given to
-## `stills add` reaches the CLI on stdin, so no other host path has to be mounted.
+## `stills add`, its first positional wherever it sits among the options, reaches the CLI on
+## stdin, so no other host path has to be mounted. Either way the CLI runs as the calling user,
+## so the store stays writable by both.
 review_cli() {
-  local cid image png="" watch=0
+  local cid image png="" watch=0 i
   local env=(-e "MOCKUP_HOST_DIR=$PREVIEW_ROOT")
   [ -z "${REVIEW_AUTHOR:-}" ] || env+=(-e "REVIEW_AUTHOR=$REVIEW_AUTHOR")
   [ "${1:-}" = "review" ] && [ "${2:-}" = "watch" ] && watch=1
-  if [ "${1:-}" = "stills" ] && [ "${2:-}" = "add" ] && [ -n "${3:-}" ] && [ "$3" != "-" ]; then
-    png="$3"
-    [ -f "$png" ] || die "$png: no such file"
-    set -- stills add - "${@:4}"
+  if [ "${1:-}" = "stills" ] && [ "${2:-}" = "add" ]; then
+    local rest=("${@:3}")
+    for ((i = 0; i < ${#rest[@]}; i++)); do
+      case "${rest[i]}" in
+        --) i=$((i + 1)); break ;;
+        --name|--title|--source|--size) i=$((i + 1)) ;;
+        -|-*) [ "${rest[i]}" = "-" ] && i=${#rest[@]} ;;
+        *) break ;;
+      esac
+    done
+    if [ "$i" -lt "${#rest[@]}" ] && [ "${rest[i]}" != "-" ]; then
+      png="${rest[i]}"
+      [ -f "$png" ] || die "$png: no such file"
+      rest[i]="-"
+      set -- stills add "${rest[@]}"
+    fi
   fi
   cid="$(docker ps -q --filter "label=com.docker.compose.project=$PREVIEW_COMPOSE_PROJECT" \
     --filter "label=com.docker.compose.service=$PREVIEW_LABEL_SERVICE" 2>/dev/null | head -n1 || true)"
   if [ -n "$cid" ] && [ "$watch" = 0 ] \
     && container_writable "$cid" /app/.mockup/stills && container_writable "$cid" /app/.mockup/review; then
-    set -- docker exec -i "${env[@]}" "$cid" node /srv/review-cli.mjs --dir /app/.mockup "$@"
+    set -- docker exec -i --user "$(id -u):$(id -g)" "${env[@]}" "$cid" node /srv/review-cli.mjs --dir /app/.mockup "$@"
   else
     if [ -n "$cid" ]; then
       image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
@@ -1262,9 +1276,10 @@ review_cli() {
 }
 
 ## Dispatch `stills` and `review`. The mockup is resolved the way mockup.sh resolves it: from the
-## frontend root its `.mockup/.preview`, else the `.preview/` found walking up; a scratch dir named
-## `.mockup` takes mockup.sh's identity, mockup-<branch>, unless PREVIEW_ID is set. Help and a
-## bare group need no project and print the CLI's own usage.
+## frontend root its `.mockup/.preview`, else the `.preview/` found walking up, which must be a
+## scratch dir named `.mockup` so the store never lands in a project root; it takes mockup.sh's
+## identity, mockup-<branch>, unless PREVIEW_ID is set. Help and a bare group need no project
+## and print the CLI's own usage.
 cmd_review_cli() {
   case "${2:-}" in
     -h|--help|help|"")
@@ -1275,7 +1290,9 @@ cmd_review_cli() {
   esac
   if [ -z "${PREVIEW_DIR:-}" ] && [ -d "$PWD/.mockup/.preview" ]; then PREVIEW_DIR="$PWD/.mockup/.preview"; fi
   discover_preview_dir
-  if [ -z "${PREVIEW_ID:-}" ] && [ "$(basename "$PREVIEW_ROOT")" = ".mockup" ]; then
+  [ "$(basename "$PREVIEW_ROOT")" = ".mockup" ] \
+    || die "$PREVIEW_ROOT is not a mockup scratch dir (.mockup/); run from the frontend root or inside its .mockup/"
+  if [ -z "${PREVIEW_ID:-}" ]; then
     PREVIEW_ID="mockup-$(git -C "$PREVIEW_ROOT/.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
   fi
   setup
