@@ -7,7 +7,7 @@
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { addStill, appendEvent } from "./review.mjs";
@@ -208,7 +208,8 @@ describe("the mockup server", () => {
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.match(res.headers.get("content-type"), /^text\/html/);
     assert.match(await res.text(), /src="\/_review\/viewer\.js"/);
-    for (const [file, type] of [["viewer.js", /javascript/], ["state.js", /javascript/], ["viewer.css", /css/]]) {
+    const scripts = ["viewer.js", "state.js", "annotate.js"].map((file) => [file, /javascript/]);
+    for (const [file, type] of [...scripts, ["viewer.css", /css/]]) {
       const asset = await fetch(`${base}/_review/${file}`);
       assert.equal(asset.status, 200, file);
       assert.match(asset.headers.get("content-type"), type);
@@ -316,6 +317,33 @@ describe("the mockup server", () => {
     const found = (await res.json()).threads.find((t) => t.id === thread.id);
     assert.equal(found.body, "Too wide");
     assert.equal(found.status, "open");
+  });
+
+  test("a posted thread carries its annotated still, kept as review/annotated/<id>.png", async () => {
+    await shoot("boxed");
+    const annotated = `data:image/png;base64,${PNG.toString("base64")}`;
+    const anchor = { x: 0.1, y: 0.2, w: 0.5, h: 0.1 };
+    const remark = { type: "thread", still: "boxed", rev: 1, anchor, body: "Overflows" };
+    const file = (id) => path.join(app, ".mockup", "review", "annotated", `${id}.png`);
+    const res = await post(JSON.stringify({ ...remark, annotated }));
+    assert.equal(res.status, 201);
+    const stored = await res.json();
+    assert.deepEqual(stored.anchor, remark.anchor);
+    assert.equal(stored.rev, 1);
+    assert.equal("annotated" in stored, false);
+    assert.deepEqual(readFileSync(file(stored.id)), PNG);
+    const threads = async () => (await (await fetch(`${base}/_review/threads`)).json()).threads;
+    assert.deepEqual((await threads()).find((t) => t.id === stored.id).anchor, remark.anchor);
+    const before = (await threads()).length;
+    const notPng = `data:image/png;base64,${Buffer.from("GIF89a").toString("base64")}`;
+    assert.equal((await post(JSON.stringify({ ...remark, annotated: notPng }))).status, 400);
+    assert.equal((await post(JSON.stringify({ ...remark, annotated: "x".repeat(12 * 1024 * 1024) }))).status, 413);
+    const reply = { type: "reply", thread: stored.id, body: "And here", annotated };
+    assert.equal((await post(JSON.stringify(reply))).status, 400);
+    assert.equal((await post(JSON.stringify({ ...remark, still: "no-such-still", annotated }))).status, 400);
+    assert.equal((await threads()).length, before);
+    const bare = await (await post(JSON.stringify(remark))).json();
+    assert.equal(existsSync(file(bare.id)), false);
   });
 
   test("reloads the open tabs when the manifest changes", async () => {

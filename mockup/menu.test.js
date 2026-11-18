@@ -6,12 +6,21 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkManifest, listShots, renderMenu, reviewStills, rewriteRefs, route } from "./menu.mjs";
-import { addStill, appendEvent } from "./review.mjs";
-import { applyEvent, counts, edge, markOf, step } from "./stills/state.js";
+import {
+  annotatedPng,
+  checkManifest,
+  listShots,
+  renderMenu,
+  reviewStills,
+  rewriteRefs,
+  route,
+  storeAnnotated,
+} from "./menu.mjs";
+import { addStill, appendEvent, threads } from "./review.mjs";
+import { applyEvent, applyThread, counts, edge, markOf, moved, opposite, pin, region, step } from "./stills/state.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const HUMAN = { kind: "human", name: "dante" };
@@ -187,6 +196,102 @@ test("applyEvent folds viewed and unviewed into the marks: an older revision is 
   assert.deepEqual(stills[0].mark, { rev: 2, viewed: null, reviewed: false, changed: false });
   assert.equal(applyEvent(stills, { type: "viewed", still: "gone", rev: 1 }), false);
   assert.equal(applyEvent(stills, { type: "reply", thread: "t", body: "x" }), false);
+});
+
+test("a drag makes a region between its two ends, in either direction, kept inside the still", () => {
+  assert.deepEqual(region({ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.5 }), { x: 0.1, y: 0.2, w: 0.3, h: 0.3 });
+  assert.deepEqual(region({ x: 0.4, y: 0.5 }, { x: 0.1, y: 0.2 }), { x: 0.1, y: 0.2, w: 0.3, h: 0.3 });
+  assert.deepEqual(region({ x: -0.3, y: 0.5 }, { x: 1.4, y: 2 }), { x: 0, y: 0.5, w: 1, h: 0.5 });
+  assert.deepEqual(region({ x: 0.123456, y: 0 }, { x: 0.5, y: 1 }), { x: 0.1235, y: 0, w: 0.3765, h: 1 });
+  assert.deepEqual(region({ x: 1, y: 0 }, { x: 1, y: 0 }), { x: 0.99, y: 0, w: 0.01, h: 0.01 });
+  assert.deepEqual(pin({ x: 1.2, y: 0.33333 }), { x: 1, y: 0.3333 });
+});
+
+test("a mark moves without leaving the still or changing size, and resizes from the opposite corner", () => {
+  const box = { x: 0.2, y: 0.2, w: 0.3, h: 0.2 };
+  assert.deepEqual(moved(box, 0.1, -0.1), { x: 0.3, y: 0.1, w: 0.3, h: 0.2 });
+  assert.deepEqual(moved(box, 0.9, -0.9), { x: 0.7, y: 0, w: 0.3, h: 0.2 });
+  assert.deepEqual(moved({ x: 0.5, y: 0.5 }, 0.1, 0.9), { x: 0.6, y: 1 });
+  assert.deepEqual(opposite(box, "nw"), { x: 0.5, y: 0.4 });
+  assert.deepEqual(opposite(box, "se"), { x: 0.2, y: 0.2 });
+  assert.deepEqual(region(opposite(box, "ne"), { x: 0.9, y: 0.1 }), { x: 0.2, y: 0.1, w: 0.7, h: 0.3 });
+});
+
+test("every region a drag or a move can make is one the store takes", async (t) => {
+  const dir = scratch(t, { "shot.png": PNG });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "home" });
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const point = () => ({ x: random() * 1.4 - 0.2, y: random() * 1.4 - 0.2 });
+  for (let i = 0; i < 2000; i++) {
+    const drawn = region(point(), point());
+    for (const a of [drawn, moved(drawn, random() - 0.5, random() - 0.5)]) {
+      assert.ok(a.w > 0 && a.h > 0 && a.x >= 0 && a.y >= 0 && a.x + a.w <= 1 && a.y + a.h <= 1, JSON.stringify(a));
+    }
+  }
+  for (const anchor of [region({ x: 0.9999, y: 0.9999 }, { x: 3, y: 3 }), pin({ x: 2, y: -1 })]) {
+    const remark = { type: "thread", author: HUMAN, still: "home", rev: 1, anchor, body: "Here" };
+    const stored = await appendEvent(dir, remark);
+    assert.deepEqual(stored.anchor, anchor);
+  }
+});
+
+test("applyThread folds the log into the threads as the store does, and takes an event only once", async (t) => {
+  const dir = scratch(t, { "shot.png": PNG });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "home" });
+  const agent = { kind: "agent", name: "claude" };
+  const anchor = { x: 0.1, y: 0.2, w: 0.3, h: 0.3 };
+  const opened = await appendEvent(dir, { type: "thread", author: HUMAN, still: "home", rev: 1, anchor, body: "Wide" });
+  const whole = await appendEvent(dir, { type: "thread", author: HUMAN, still: "home", rev: 1, body: "All of it" });
+  const events = [
+    opened,
+    whole,
+    await appendEvent(dir, { type: "reply", author: agent, thread: opened.id, body: "Fixed in rev 2" }),
+    await appendEvent(dir, { type: "resolve", author: HUMAN, thread: opened.id }),
+    await appendEvent(dir, { type: "reopen", author: HUMAN, thread: opened.id }),
+    await appendEvent(dir, { type: "resolve", author: HUMAN, thread: whole.id }),
+    await appendEvent(dir, { type: "viewed", author: HUMAN, still: "home", rev: 1 }),
+  ];
+  const folded = [];
+  assert.deepEqual(events.map((e) => applyThread(folded, e)), [true, true, true, true, true, true, false]);
+  assert.deepEqual(folded, threads(dir));
+  const summary = folded.map((f) => [f.status, f.replies.length, f.anchor]);
+  assert.deepEqual(summary, [["open", 1, anchor], ["resolved", 0, null]]);
+  assert.deepEqual(events.map((e) => applyThread(folded, e)), events.map(() => false));
+  assert.deepEqual(folded, threads(dir));
+  const stray = { type: "reply", seq: 99, id: "x", thread: "gone", author: agent, body: "?" };
+  assert.equal(applyThread(folded, stray), false);
+});
+
+test("annotatedPng takes a PNG data URL only, of at most 8 MiB", () => {
+  const url = (bytes) => `data:image/png;base64,${bytes.toString("base64")}`;
+  assert.deepEqual(annotatedPng(url(PNG)), PNG);
+  const refused = (value) => {
+    try {
+      annotatedPng(value);
+    } catch (e) {
+      return e.status;
+    }
+    return null;
+  };
+  assert.equal(refused(PNG.toString("base64")), 400);
+  assert.equal(refused(`data:image/jpeg;base64,${PNG.toString("base64")}`), 400);
+  assert.equal(refused(url(Buffer.from("<svg onload=alert(1)>"))), 400);
+  assert.equal(refused(url(Buffer.alloc(0))), 400);
+  assert.equal(refused(42), 400);
+  assert.equal(refused(url(Buffer.concat([PNG, Buffer.alloc(8 * 1024 * 1024 - PNG.length)]))), null);
+  assert.equal(refused(url(Buffer.concat([PNG, Buffer.alloc(8 * 1024 * 1024)]))), 413);
+});
+
+test("storeAnnotated keeps a thread's PNG under its id, replacing it whole and leaving nothing beside it", (t) => {
+  const dir = scratch(t, {});
+  const file = storeAnnotated(dir, "3f9a0c1e", PNG);
+  assert.equal(file, path.join(dir, "review", "annotated", "3f9a0c1e.png"));
+  assert.deepEqual(readFileSync(file), PNG);
+  const again = Buffer.concat([PNG, Buffer.from("more")]);
+  storeAnnotated(dir, "3f9a0c1e", again);
+  assert.deepEqual(readFileSync(file), again);
+  assert.deepEqual(readdirSync(path.dirname(file)), ["3f9a0c1e.png"]);
 });
 
 test("rewriteRefs resolves ./ references of a nested page against its own directory", (t) => {
