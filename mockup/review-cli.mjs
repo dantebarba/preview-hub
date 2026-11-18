@@ -104,14 +104,18 @@ export function who(author) {
   return author.via ? `${author.name} (${VIA_LABEL[author.via]})` : author.name;
 }
 
+/** `still`, then its variant in brackets when it is known: `05-invite [mobile+dark]`. */
+function stillText(still, variant) {
+  return variant ? `${still} [${variant}]` : still;
+}
+
 /**
  * Where a thread points: `<still> [<variant>] r<rev> <anchor>`, or `general` for a thread on no
  * still. The variant is left out when it is not known.
  */
 function target(thread) {
   if (thread.still === null) return "general";
-  const variant = thread.variant ? ` [${thread.variant}]` : "";
-  return `${thread.still}${variant} r${thread.rev} ${anchorText(thread.anchor)}`;
+  return `${stillText(thread.still, thread.variant)} r${thread.rev} ${anchorText(thread.anchor)}`;
 }
 
 /** `body` on one line, quoted, so newlines in it never split a line of output. */
@@ -128,9 +132,10 @@ export function eventLine(event, first = new Map()) {
   const head = `#${event.seq} ${event.type}`;
   const variant = event.variant ?? first.get(event.still) ?? null;
   switch (event.type) {
-    case "thread":
+    case "thread": {
       const where = target({ rev: null, anchor: null, ...event, variant });
       return `${head} ${event.id} ${where} ${by}: ${quote(event.body)}`;
+    }
     case "reply":
       return `${head} ${event.thread} ${by}: ${quote(event.body)}`;
     case "resolve":
@@ -138,11 +143,11 @@ export function eventLine(event, first = new Map()) {
       return `${head} ${event.thread} ${by}`;
     case "working":
     case "idle": {
-      const about = event.thread ?? (event.still ? `${event.still}${variant ? ` [${variant}]` : ""}` : "");
+      const about = event.thread ?? (event.still ? stillText(event.still, variant) : "");
       return `${head}${about ? ` ${about}` : ""} ${by}`;
     }
     default:
-      return `${head} ${event.still}${variant ? ` [${variant}]` : ""} r${event.rev} ${by}`;
+      return `${head} ${stillText(event.still, variant)} r${event.rev} ${by}`;
   }
 }
 
@@ -279,7 +284,7 @@ function reviewShow({ dir, io }, [id], { json }) {
 /** Append `event` as the agent and print its seq, its type and what it is about. */
 async function agentEvent({ dir, io }, event) {
   const stored = await appendEvent(dir, { ...event, author: { kind: "agent", name: io.author, via: "cli" } });
-  const about = stored.thread ?? [stored.still, stored.variant && `[${stored.variant}]`].filter(Boolean).join(" ");
+  const about = stored.thread ?? (stored.still ? stillText(stored.still, stored.variant) : "");
   io.out(`#${stored.seq} ${stored.type}${about ? ` ${about}` : ""}`);
 }
 

@@ -669,10 +669,11 @@ export function reviewed(dir, by) {
 /**
  * The agent's working state in the log of `dir` at `now` (ms): what it is working on, oldest
  * first, as `{ thread, still, variant, note, author, since, at, until }`, each field the agent
- * did not give being null; a `working` a human wrote counts for nothing. One state per thread, or per still and variant, or one with
- * neither: a `working` starts it or keeps it on; it ends with the agent's next `reply` or
- * `idle` on that thread (an `idle` without a thread ends them all), or WORKING_MS after its
- * last `working`. `since` is when it started, `at` its last `working`, `until` when it expires.
+ * did not give being null; a `working` a human wrote counts for nothing. One state per
+ * thread, or per still and variant, or one with neither: a `working` starts it or keeps it on;
+ * it ends with the agent's next `reply` or `idle` on that thread (a reply ends only a state on
+ * its thread; an `idle` without a thread ends them all), or WORKING_MS after its last
+ * `working`. `since` is when it started, `at` its last `working`, `until` when it expires.
  */
 export function working(dir, now = Date.now()) {
   const on = new Map();

@@ -426,7 +426,8 @@ export function annotatedPng(value) {
  * without a preflight; Vite approves the preflight of a localhost origin, so a post whose
  * `Origin` is not this host is refused as well (403). A body that is not a JSON object, or an
  * event the store refuses, is a 400 with the reason. An event without an `author` is the
- * reviewer's.
+ * reviewer's. `working` and `idle` are the agent's, written by the CLI, so they are refused
+ * here (403).
  *
  * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
  * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
@@ -452,6 +453,9 @@ async function postEvent(req, res, { scratch, stream }) {
   const { annotated, ...fields } = event;
   if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
     return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
+  }
+  if (fields.type === "working" || fields.type === "idle") {
+    return sendJson(res, 403, { error: `a ${fields.type} event is the agent's; it writes it with 'preview review'` });
   }
   let png = null;
   if (annotated !== undefined) {

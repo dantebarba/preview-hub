@@ -259,6 +259,8 @@ describe("the mockup server", () => {
     assert.match((await unknown.json()).error, /no still 'no-such-still'/);
     assert.equal((await post(JSON.stringify({ type: "viewed", still: "posted", rev: 1, extra: 1 }))).status, 400);
     assert.equal((await post(JSON.stringify({ type: "x".repeat(70000) }))).status, 413);
+    assert.equal((await post(JSON.stringify({ type: "working", still: "posted" }))).status, 403);
+    assert.equal((await post(JSON.stringify({ type: "idle" }))).status, 403);
     assert.equal((await still("posted")).mark.reviewed, false);
     assert.equal((await fetch(`${base}/_review/stills`, { method: "POST" })).status, 405);
   });

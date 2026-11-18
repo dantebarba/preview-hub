@@ -102,10 +102,6 @@ case "${1:-status}" in
     [[ "$page" == /* ]] || { echo "path must start with / (e.g. /checkout?v=b)" >&2; exit 2; }
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] \
       || { echo "name: a letter or digit, then letters, digits, '.', '_' or '-' (100 at most)" >&2; exit 2; }
-    for v in "${viewports[@]}"; do
-      [[ "$v" =~ ^(mobile|mobile-s|tablet|desktop|web|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}(@[1-9](\.[0-9]{1,2})?)?(\+touch)?)$ ]] \
-        || { echo "viewport '$v': mobile, mobile-s, tablet, desktop, web or WxH[@dpr][+touch]" >&2; exit 2; }
-    done
     [ -z "$title" ] || [[ "$title" =~ [^[:space:]] ]] || { echo "title must not be blank" >&2; exit 2; }
     [ -f "$(state_dir)/base" ] || { echo "not running; mockup.sh start first" >&2; exit 1; }
     port=$(( $(cat "$(state_dir)/base") + 1 ))
