@@ -366,12 +366,45 @@ preview review watch --since 12       # one line per new human event, until stop
 ```
 
 A still is one screen with one or more **variants**, each a viewport and free tags with
-revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset,
-`mobile` (390×844 @3, touch), `mobile-s` (375×812 @3), `tablet` (820×1180 @2, touch) or
-`desktop`/`web` (1440×900 @1), or a custom `WxH[@dpr][+touch]`; the tags `dark` and `light`
-set `prefers-color-scheme` when it is shot. `--full-page` records that the whole document was
-captured. Without `--as`, `stills ls` says whose reviewed marks hold: each reviewer has their
-own, so a guest's marks hide nothing from the owner.
+revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset or a
+custom `WxH[@dpr][+touch]` (pixel ratio 1 unless given; `+touch` is a touch device with a
+mobile user agent):
+
+| Preset            | CSS size | Pixel ratio | Device |
+| ----------------- | -------- | ----------- | ------ |
+| `mobile`          | 390×844  | 3 | touch, mobile user agent |
+| `mobile-s`        | 375×812  | 3 | touch, mobile user agent (iPhone mini) |
+| `tablet`          | 820×1180 | 2 | touch, tablet user agent |
+| `desktop` (`web`) | 1440×900 | 1 | mouse |
+
+Tags are free labels (`dark`, `light`, `rtl`, `empty`, `logged-out`); `dark` and `light` set
+`prefers-color-scheme` when the still is shot, so they go in separate shots, never together.
+The variant's key is the viewport and its tags, sorted: `--viewport mobile --tag dark` is
+`mobile+dark`, and a custom viewport's key is `custom-WxH[@dpr][-touch]` (`custom-390x700`).
+`--full-page` records that the whole document was captured. The viewer shows a viewport
+switcher and a row of tag chips only when the stills have more than one of either; the choice
+sticks across stills and stays in the URL (`/stills#05-invite-user@mobile+dark`); a still
+without the chosen variant shows the same viewport, else its first variant, with a note such
+as "showing desktop". Revisions, remarks and reviewed marks are per variant, and the reviewed
+count is the viewer's own.
+
+**Who reviews.** On the tailnet the viewer writes as the Tailscale user (`tailscale serve`
+passes their name), with `via: "tailnet"` and no prompt. A guest on a share link views
+freely; their first write (a remark, a reply, a reviewed mark) asks "What's your name?" once
+per browser, and the server refuses a guest's write with no name (`400 name required`).
+Guest events carry `via: "share"`: the viewer shows a `guest` chip (*Ana · guest*) and
+`watch` prints `Ana (guest)`, so a guest calling themselves "dante" is still told apart.
+Guests remark, reply and mark their own reviewed; **resolve and reopen are the owner's and the
+agent's**: the viewer hides them from a guest and the server refuses them with `403`. Each reviewer has
+their own reviewed marks, so a guest's marks hide nothing from the owner; without `--as`,
+`stills ls` says whose marks hold.
+
+**Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
+for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
+"working…" dots and the note on that conversation and its card, and pulses its mark (for a
+still with no remark, the dots sit on the still's top bar). The agent's `reply` on the thread ends it (a reviewer's does not), as
+does `preview review idle [thread]`; it expires 10 minutes after the last `working`, so an
+agent that died does not look busy.
 
 The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
 T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)
