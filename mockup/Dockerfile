@@ -11,7 +11,7 @@ WORKDIR /srv
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
-COPY menu.mjs review.mjs server.mjs ./
+COPY menu.mjs review.mjs review-cli.mjs server.mjs ./
 
 ENV APP_DIR=/app \
     PORT=80 \
