@@ -22,16 +22,10 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { typeOf } from "./extras.mjs";
 import { eventStream, handleReview, reviewer, sendViewerPage } from "./menu.mjs";
 import { folder, keepRevisions, openSource, readSource } from "./source.mjs";
 
-const TYPES = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-};
 const LOCAL = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const KEPT = ".review/revs/";
 const READ_ONLY = "read-only folder: remarks off";
@@ -79,7 +73,7 @@ function sendImage(req, res, root, rel) {
     return sendJson(res, 404, { error: "no such still" });
   }
   res.writeHead(200, {
-    "Content-Type": TYPES[path.extname(rel).toLowerCase()] ?? "application/octet-stream",
+    "Content-Type": typeOf(rel) ?? "application/octet-stream",
     "Content-Length": size,
     "Cache-Control": rel.startsWith(KEPT) ? "max-age=31536000, immutable" : "no-store",
   });

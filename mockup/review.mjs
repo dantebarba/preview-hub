@@ -104,9 +104,9 @@ function paths(dir) {
   };
 }
 
-/** The annotated still of thread `id`, relative to the scratch dir. */
-export function annotatedFile(id) {
-  return `review/annotated/${id}.png`;
+/** The directory the annotated stills of `dir`, a scratch dir or a folder source, are kept in. */
+export function annotatedDir(dir) {
+  return paths(dir).annotated;
 }
 
 /** True when `bytes` starts with the PNG signature. */

@@ -59,6 +59,7 @@ PORT_BUCKETS=5000
 
 PREVIEW_STOP_ARGS=(stop)
 PREVIEW_STOP_HINT="preview stop"
+STILLS_STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/preview/stills"
 
 PREVIEW_REPO="${PREVIEW_REPO:-dantebarba/preview-hub}"
 PREVIEW_VERSION="${PREVIEW_VERSION:-0.0.0-dev}"
@@ -502,8 +503,9 @@ cmd_status() {
 
 ## killall: stop every recorded preview (re-invoking `stop` per identity so on_down runs with
 ## the right context and shares are retracted), then sweep strays — share forwarders and
-## compose projects under our prefix and Tailscale mappings inside 40000-59999. Named volumes
-## are kept; `tailscale serve reset` is never used.
+## compose projects under our prefix and Tailscale mappings inside 40000-59999 but those of a
+## served stills folder, which are not a project's. Named volumes are kept; `tailscale serve
+## reset` is never used.
 cmd_killall() {
   local dir id n=0
   for dir in "$STATE_ROOT"/*/; do
@@ -536,7 +538,10 @@ cmd_killall() {
         ;;
     esac
   done
+  local folders
+  folders=" $(cat "$STILLS_STATE_ROOT"/*/base 2>/dev/null | tr '\n' ' ') "
   for port in $(mapped_preview_ports); do
+    case "$folders" in *" $port "*) continue ;; esac
     plog "sweeping stray tailscale mapping :$port..."
     tailscale serve --https="$port" off >/dev/null 2>&1 || true
   done
@@ -1383,7 +1388,7 @@ folder_setup() {
   PREVIEW_SERVE_TARGET="127.0.0.1:$PREVIEW_PORT_1"
   PREVIEW_COMPOSE_PROJECT_PREFIX="stills"
   PREVIEW_COMPOSE_PROJECT="$PREVIEW_COMPOSE_PROJECT_PREFIX-$PREVIEW_SLUG"
-  STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/preview/stills"
+  STATE_ROOT="$STILLS_STATE_ROOT"
   STATE_DIR="$STATE_ROOT/$PREVIEW_SLUG"
   PREVIEW_STATE_DIR="$STATE_DIR"
   PREVIEW_COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
@@ -1509,7 +1514,6 @@ cmd_stills_folder() {
       fi
       [ "$STILLS_MODE" = "rw" ] || pwarn "$STILLS_DIR is not writable: served read-only, remarks off"
       cmd_start
-      printf '%s\n' "$STILLS_DIR" >"$STATE_DIR/root"
       plog "review it at:   ${PREVIEW_URL}stills"
       plog "agent listens:  preview review watch --dir $STILLS_DIR"
       ;;

@@ -108,7 +108,8 @@ later with no mockup running. When unsure whether they should outlive it, ask.
 serve <dir>`): listen with `preview review watch --dir <dir>` under Monitor and answer as
 above, every `preview review` and `preview stills ls` command taking `--dir <dir>`. To fix a
 still, rewrite its image in place under the same file name (`<name>@<variant>.png`, or
-`<name>.png` for `desktop`); the viewer shows it as the next revision. With the mockup still
+`<name>.png` for a still whose one variant is `desktop`); the viewer shows it as the next
+revision. With the mockup still
 up, `mockup.sh shot` and copy the PNG it names over that file. A read-only folder refuses
 every write: say so instead of retrying.
 

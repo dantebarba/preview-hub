@@ -32,7 +32,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   addStill,
-  annotatedFile,
+  annotatedDir,
   appendEvent,
   EVENTS_FILE,
   readEvents,
@@ -267,13 +267,14 @@ function stillsLs({ dir, io }, _args, { as, json }) {
 /**
  * Copy the mockup's stills and review into the folder `dest` (see `export.mjs`), which
  * `--folder` and `preview stills serve` then read as the same stills with the same remarks.
- * The folder is printed under `$MOCKUP_EXPORT_HOST_DIR` when set.
+ * The folder is printed, and a README without a mockup title is headed, by its name under
+ * `$MOCKUP_EXPORT_HOST_DIR` when set.
  */
 function stillsExport({ dir, io }, [dest], { readme }) {
   const shown = io.env.MOCKUP_EXPORT_HOST_DIR || path.resolve(dest);
   let done;
   try {
-    done = exportStills(dir, dest, { readme });
+    done = exportStills(dir, dest, { readme, title: path.basename(shown) });
   } catch (e) {
     throw new CliError(`${shown}: ${e.message}`);
   }
@@ -304,7 +305,7 @@ function reviewShow({ dir, root, io }, [id], { json }) {
     .find((s) => s.name === thread.still)
     ?.variants.find((v) => v.key === thread.variant)
     ?.revs.find((r) => r.n === thread.rev);
-  const annotated = typeof dir === "string" ? annotatedFile(thread.id) : `.review/annotated/${thread.id}.png`;
+  const annotated = path.relative(root, path.join(annotatedDir(dir), `${thread.id}.png`));
   const files = {
     image: rev ? io.host(rev.file) : null,
     annotated: existsSync(path.join(root, annotated)) ? io.host(annotated) : null,

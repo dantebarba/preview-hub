@@ -492,7 +492,8 @@ folder: remarks off", and every write is refused, the viewer's and `--dir`'s ali
 
 **Keeping a mockup's stills.** `preview stills export <dir> [--readme]` copies a mockup's stills
 into a folder that reads back as the same stills, revisions and remarks: each variant as
-`name@<variant>.png`, `stills.json` with the titles and order, and with `--readme` a README
+`name@<variant>.png` (`name.png` for a still whose one variant is `desktop`), `stills.json`
+with the titles and order, and with `--readme` a README
 table of titles and images. Run it before `/mockup stop`, which deletes `.mockup/`, then commit
 the folder. The [review contract](docs/review-contract.md#folder-sources) has the details.
 
