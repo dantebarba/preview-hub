@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Stills</title>
   <link rel="stylesheet" href="/_review/viewer.css">
 </head>
@@ -14,7 +14,8 @@
     <b id="title"></b>
     <span id="flag" hidden>changed since reviewed</span>
     <span id="count"></span>
-    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> Reviewed</label>
+    <button id="place" aria-label="All the stills" aria-expanded="false" hidden></button>
+    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> <span>Reviewed</span></label>
   </header>
   <div id="bar">
     <label id="revs" hidden>rev <select id="rev" aria-label="Revision"></select></label>
@@ -24,6 +25,7 @@
     <button id="remarks" aria-pressed="false" title="The remarks on this still">Remarks</button>
     <label id="filter"><input type="checkbox" id="all"> show reviewed</label>
     <a id="open" target="_blank" rel="noopener">open full size</a>
+    <button id="layout" title="Switch between the phone and the desktop layout, remembered on this device"></button>
   </div>
   <p id="hint" hidden>Drag a box on the still, or tap it for a pin.</p>
   <p id="error" role="alert" hidden></p>
@@ -50,16 +52,35 @@
         <button id="close" aria-label="Close the remarks">×</button>
       </div>
       <div id="threads"></div>
-      <form id="reply" hidden>
-        <textarea id="answer" rows="2" maxlength="10000" required aria-label="Reply" placeholder="Reply…"></textarea>
-        <div class="row">
-          <button type="button" id="status">Resolve</button>
-          <button id="send" class="go">Reply</button>
-        </div>
-      </form>
     </aside>
   </div>
   <nav id="strip" aria-label="Stills"></nav>
+  <div id="dock">
+    <button id="back" aria-label="Previous still">‹</button>
+    <button id="arm" aria-pressed="false">＋ Remark</button>
+    <button id="list" aria-pressed="false">Remarks<span id="badge" hidden></span></button>
+    <button id="more" aria-label="More" aria-expanded="false">⋯</button>
+    <button id="forth" aria-label="Next still">›</button>
+  </div>
+  <div id="shade" hidden></div>
+  <section id="talk" aria-label="Conversation" hidden>
+    <div id="talk-head">
+      <button id="talk-back" aria-label="Back to the remarks">‹</button>
+      <span id="talk-n" class="n"></span>
+      <b id="talk-title"></b>
+      <button id="talk-status">Resolve</button>
+    </div>
+    <button id="crop" aria-label="Show the mark on the still"><span id="shot"><img id="crop-image" alt=""><i id="crop-mark"></i></span></button>
+    <div id="talk-body">
+      <div id="entries"></div>
+      <button id="fresh" hidden>new reply ↓</button>
+    </div>
+  </section>
+  <form id="reply" hidden>
+    <textarea id="answer" rows="1" maxlength="10000" required aria-label="Reply" placeholder="Reply…"></textarea>
+    <button id="send" class="go">Send</button>
+  </form>
+  <div id="toast" role="status" hidden><span id="toast-text"></span><button id="undo">Undo</button></div>
   <script type="module" src="/_review/viewer.js"></script>
 </body>
 </html>

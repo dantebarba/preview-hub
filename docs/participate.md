@@ -209,8 +209,15 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   on, the header counts them, and a new revision clears the mark and flags the still
   "changed since reviewed". A drag on the still draws a box and a tap drops a pin (on a
   phone once **＋ Remark**, `c`, is on); the remark written next to it opens a thread, shown
-  as a numbered mark and a card in the remarks panel, where it is answered, resolved and
-  reopened.
+  as a numbered mark and a card in the remarks panel. A card shows the remark's first line,
+  its status, the latest message and a dot for replies not seen on this device, and carries
+  **Reply** and **Resolve**/**Reopen**; a click unfolds the conversation and resolved cards
+  sink into a collapsed group. Below 600 px of width or with a coarse pointer the viewer uses
+  its mobile layout, which "phone layout"/"desktop layout" forces either way per device: the
+  still between two one-row bars, zoomed and panned with a pinch, a double tap or two
+  fingers (marks land on the zoomed still), the other controls behind **⋯**, the strip a
+  grid behind the count, a card opening its conversation full screen, and a swipe on a card
+  uncovering Resolve/Reopen (left, with a five-second Undo) or Reply (right).
 - `/_review/`: what the viewer reads and writes, over the store of
   [`review-contract.md`](review-contract.md). `GET /_review/stills` is
   `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
