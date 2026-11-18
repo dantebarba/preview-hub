@@ -10,6 +10,8 @@
 #                                   ${PREVIEW_DESC:-...} form so a caller can override it per
 #                                   run — e.g. `PREVIEW_DESC="what to test" preview start` —
 #                                   to say what a specific preview is for.
+#   PREVIEW_REVIEW                  (optional) path of the preview's review page, relative to
+#                                   its URL (e.g. /stills); the hub card then offers Review.
 #   PREVIEW_COMPOSE_FILE            (optional) compose file to use; default docker-compose.yml.
 #   PREVIEW_COMPOSE_PROJECT_PREFIX  (optional) docker compose project prefix; default a slug
 #                                   of PREVIEW_PROJECT. The engine appends the branch/worktree.

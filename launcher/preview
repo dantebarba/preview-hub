@@ -174,6 +174,11 @@ finalize_config() {
   : "${PREVIEW_LABEL_SERVICE:?PREVIEW_LABEL_SERVICE must be set in .preview/config.sh}"
   : "${PREVIEW_SERVE_TARGET:?PREVIEW_SERVE_TARGET must be set in .preview/config.sh}"
   PREVIEW_DESC="${PREVIEW_DESC:-}"
+  PREVIEW_REVIEW="${PREVIEW_REVIEW:-}"
+  case "$PREVIEW_REVIEW" in
+    ''|/[!/]*|/) ;;
+    *) pwarn "PREVIEW_REVIEW must be a path starting with one '/', ignoring '$PREVIEW_REVIEW'"; PREVIEW_REVIEW="" ;;
+  esac
   PREVIEW_COMPOSE_FILE="${PREVIEW_COMPOSE_FILE:-docker-compose.yml}"
   case "$PREVIEW_COMPOSE_FILE" in
     /*) ;;
@@ -202,7 +207,7 @@ setup() {
   export PREVIEW_BASE TS_PORT PREVIEW_PORT_0 PREVIEW_PORT_1 PREVIEW_PORT_2 PREVIEW_PORT_3
   load_config
   finalize_config
-  export PREVIEW_PROJECT PREVIEW_DESC PREVIEW_COMPOSE_FILE PREVIEW_COMPOSE_PROJECT_PREFIX
+  export PREVIEW_PROJECT PREVIEW_DESC PREVIEW_REVIEW PREVIEW_COMPOSE_FILE PREVIEW_COMPOSE_PROJECT_PREFIX
   export PREVIEW_COMPOSE_PROJECT PREVIEW_STATE_DIR PREVIEW_LABELS_OVERRIDE
   export -f dc plog pwarn
 }
@@ -249,7 +254,8 @@ export_mockup_image() {
 }
 
 ## Write the compose override that adds the five preview.* labels, plus the three preview.edge.*
-## labels the hub needs to share the preview, to PREVIEW_LABEL_SERVICE.
+## labels the hub needs to share the preview, to PREVIEW_LABEL_SERVICE. A preview whose config
+## sets PREVIEW_REVIEW also gets preview.review, the path of its review page.
 ## Label values are written as ${PREVIEW_LABEL_*} interpolations, resolved by compose at `dc`
 ## time, so no runtime value (URL, branch, ...) is ever persisted into the file.
 write_labels_override() {
@@ -266,6 +272,7 @@ write_labels_override() {
     printf '      preview.edge.label: "${PREVIEW_LABEL_EDGE_LABEL}"\n'
     printf '      preview.edge.port: "${PREVIEW_LABEL_EDGE_PORT}"\n'
     printf '      preview.edge.target: "${PREVIEW_LABEL_EDGE_TARGET}"\n'
+    [ -z "$PREVIEW_REVIEW" ] || printf '      preview.review: "${PREVIEW_LABEL_REVIEW}"\n'
   } >"$PREVIEW_LABELS_OVERRIDE"
 }
 
@@ -366,6 +373,7 @@ cmd_start() {
          PREVIEW_LABEL_BRANCH="$PREVIEW_BRANCH" \
          PREVIEW_LABEL_WORKTREE="$PREVIEW_WORKTREE" \
          PREVIEW_LABEL_DESC="$PREVIEW_DESC" \
+         PREVIEW_LABEL_REVIEW="$PREVIEW_REVIEW" \
          PREVIEW_LABEL_EDGE_LABEL="$edge_label" \
          PREVIEW_LABEL_EDGE_PORT="$PREVIEW_BASE" \
          PREVIEW_LABEL_EDGE_TARGET="${PREVIEW_SERVE_TARGET%%/*}"
