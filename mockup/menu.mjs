@@ -193,7 +193,7 @@ export function reviewer(headers, hosts = []) {
 /**
  * The author of an event posted by `who` (see `reviewer`): the tailnet user, else the guest
  * named by `given`, the `author` of the posted body, as `{ kind: "human", name, via }`. Throws
- * a refusal (400) for a guest without a name, or with one over 40 characters.
+ * a refusal (400) for a guest without a name, or with one over `MAX_NAME` characters.
  */
 export function authorOf(who, given) {
   if (who) return { kind: "human", ...who };

@@ -195,7 +195,11 @@ async function importFromProject(app, pkg) {
  * one it is given.
  */
 async function plugins(app, postcss, cacheDir, hosts) {
-  const list = [menuPlugin({ app, hosts: [...hosts] }), tailwindV4Sources({ app }), tsconfigPaths({ root: app, loose: true })];
+  const list = [
+    menuPlugin({ app, hosts: [...hosts] }),
+    tailwindV4Sources({ app }),
+    tsconfigPaths({ root: app, loose: true }),
+  ];
   const wrappers = pageTsconfigs(app, path.join(cacheDir, "tsconfig"));
   if (wrappers.length) list.push(pageAliases({ app, wrappers }), tsconfigPaths({ root: app, projects: wrappers, loose: true }));
   if (projectHas(app, "react")) list.push(react());

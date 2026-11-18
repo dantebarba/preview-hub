@@ -66,6 +66,7 @@ import {
   MAX_NAME,
   moved,
   opposite,
+  pickOf,
   pin,
   progress,
   region,
@@ -516,8 +517,8 @@ function renderTalk() {
   const entries = el("entries");
   const opened = talk.hidden || talk.dataset.id !== t.id;
   const low = opened || stick || pinned;
-  const said = () => entries.querySelectorAll(".entry").length;
-  const had = opened ? Infinity : said();
+  const count = () => entries.querySelectorAll(".entry").length;
+  const had = opened ? Infinity : count();
   stick = false;
   talk.hidden = false;
   talk.dataset.id = t.id;
@@ -533,7 +534,7 @@ function renderTalk() {
     entries.scrollTop = entries.scrollHeight;
     markSeen(t);
   }
-  el("fresh").hidden = low || (el("fresh").hidden && said() <= had);
+  el("fresh").hidden = low || (el("fresh").hidden && count() <= had);
 }
 
 /**
@@ -685,15 +686,18 @@ function fillSwitcher(group, values, current, label, pick) {
 /**
  * Draw the switchers for the still `s`: its variant's viewport and tags pressed, the chip of
  * the mobile top bar, and the note that says which variant shows when the pick is not one of
- * this still's.
+ * this still's. A switch to a viewport and tags no still was shot at together picks the first
+ * variant at what was switched to.
  */
 function renderSwitchers(s) {
   const { viewports, tags } = choices(state.stills);
   const { key } = s.variant;
   const wanted = state.pick ?? key;
   const fell = key !== wanted;
-  fillSwitcher(el("viewports"), viewports, viewportOf(key), viewportLabel, (v) => setPick(keyOf(v, tagsOf(wanted))));
-  fillSwitcher(el("tags"), tags, tagsOf(key), tagsLabel, (t) => setPick(keyOf(viewportOf(wanted), t)));
+  const toViewport = (v) => setPick(pickOf(state.stills, keyOf(v, tagsOf(wanted)), (k) => viewportOf(k) === v));
+  const toTags = (t) => setPick(pickOf(state.stills, keyOf(viewportOf(wanted), t), (k) => tagsOf(k) === t));
+  fillSwitcher(el("viewports"), viewports, viewportOf(key), viewportLabel, toViewport);
+  fillSwitcher(el("tags"), tags, tagsOf(key), tagsLabel, toTags);
   el("variant").hidden = viewports.length < 2 && tags.length < 2;
   el("variant").textContent = key;
   el("variant").classList.toggle("fell", fell);
@@ -1029,6 +1033,7 @@ async function refresh(turn) {
   state.threads = threads;
   state.late = state.late.filter((e) => e.seq > data.cursor);
   for (const e of state.late) apply(e);
+  state.pick = state.pick && pickOf(state.stills, state.pick, () => false);
   derive();
   state.applied = Math.max(state.applied, data.cursor);
   buildStrip();
@@ -1487,6 +1492,7 @@ el("shade").onclick = () => {
 };
 el("layout").onclick = toggleLayout;
 el("variant").onclick = () => toggleSheet("more");
+el("who-name").maxLength = MAX_NAME;
 el("who-form").onsubmit = (e) => {
   e.preventDefault();
   closeWho(true);
@@ -1636,7 +1642,8 @@ onSwipe(
 addEventListener("hashchange", () => {
   const i = hashIndex();
   const { key } = hashParts();
-  if (key && key !== state.pick) setPick(key);
+  const pick = key && pickOf(state.stills, key, () => false);
+  if (pick && pick !== state.pick) setPick(pick);
   if (i !== -1 && i !== state.at) show(i);
 });
 

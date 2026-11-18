@@ -48,6 +48,7 @@ import {
   tagsOf,
   title,
   unread,
+  pickOf,
   variantFor,
   viewOn,
   viewportLabel,
@@ -287,6 +288,11 @@ test("a pick is sticky: a still without that variant shows the same viewport, el
     viewports: ["mobile", "desktop", "custom-360x740@2-touch"],
     tags: ["", "light", "dark"],
   });
+  const picked = (key, fits) => pickOf(stills, key, fits);
+  assert.equal(picked("mobile+dark", () => false), "mobile+dark");
+  assert.equal(picked("desktop+dark", (k) => viewportOf(k) === "desktop"), "desktop");
+  assert.equal(picked("custom-360x740@2-touch+dark", (k) => tagsOf(k) === "dark"), "mobile+dark");
+  assert.equal(picked("typo", () => false), null);
   assert.deepEqual(choices([stills[2]]), { viewports: ["desktop"], tags: [""] });
   const parts = [viewportOf("mobile+dark+rtl"), tagsOf("mobile+dark+rtl"), tagsOf("desktop")];
   assert.deepEqual(parts, ["mobile", "dark+rtl", ""]);

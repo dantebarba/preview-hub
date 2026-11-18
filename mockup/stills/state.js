@@ -60,6 +60,11 @@ function slot(o, key) {
   return o[key];
 }
 
+/** The revision the reviewer named `author` marked on the variant `key` of the still named `still`, if any. */
+function marked(marks, author, still, key) {
+  return own(own(own(marks, author), still), key);
+}
+
 /** The viewport part of the variant key `key`: `mobile` of `mobile+dark`. */
 export function viewportOf(key) {
   return key.split("+")[0];
@@ -100,6 +105,16 @@ export function choices(stills) {
 }
 
 /**
+ * The pick a switcher makes of `key`, a variant key put together from a viewport and tags:
+ * `key` when a still of `stills` has that variant, else the first variant `fits` takes, so
+ * the pick is always one that exists; null when there is none.
+ */
+export function pickOf(stills, key, fits) {
+  const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
+  return keys.includes(key) ? key : (keys.find(fits) ?? null);
+}
+
+/**
  * The variant of `still` the pick `pick`, a variant key, lands on: that variant, else the
  * first one at the same viewport, else its first; its first as well when nothing is picked.
  */
@@ -119,7 +134,7 @@ export function choose(stills, pick, marks, me) {
   for (const s of stills) {
     s.variant = variantFor(s, pick);
     s.revs = s.variant.revs;
-    s.mark = markOf(s.revs.at(-1).n, own(own(own(marks, me), s.name), s.variant.key) ?? null);
+    s.mark = markOf(s.revs.at(-1).n, marked(marks, me, s.name, s.variant.key) ?? null);
   }
 }
 
@@ -149,7 +164,7 @@ export function progress(marks, stills, me) {
     .filter((name) => name !== me)
     .map((name) => ({
       name,
-      reviewed: stills.filter((s) => own(own(marks[name], s.name), s.variant.key) === s.revs.at(-1).n).length,
+      reviewed: stills.filter((s) => marked(marks, name, s.name, s.variant.key) === s.revs.at(-1).n).length,
     }))
     .filter((p) => p.reviewed);
 }
