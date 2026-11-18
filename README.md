@@ -354,34 +354,55 @@ stopped and need only `docker` on the host.
 
 ```sh
 preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
-  --title "Invite a user" --source "/invite?v=b" --size 390x844   # rev 1, then 2, ...
-preview stills ls                     # each still's latest rev, reviewed or not, open threads
+  --viewport mobile --tag dark --title "Invite a user" --source "/invite?v=b"   # rev 1, then 2, ...
+preview stills ls --as dante          # each variant's latest rev, reviewed by dante or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
-preview review show 3f9a0c1e          # body, anchor, rev, replies, the still and the marked PNG
-preview review reply 3f9a0c1e "Wrapped the label; see rev 2"
+preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still and the marked PNG
+preview review working 3f9a0c1e --note "re-shooting mobile+dark"   # tells the reviewer the agent is on it
+preview review reply 3f9a0c1e "Wrapped the label; see rev 2"      # also ends working
+preview review idle                   # or idle <thread>; working also expires after 10 minutes
 preview review resolve 3f9a0c1e       # or reopen
 preview review watch --since 12       # one line per new human event, until stopped
 ```
+
+A still is one screen with one or more **variants**, each a viewport and free tags with
+revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset,
+`mobile` (390×844 @3, touch), `mobile-s` (375×812 @3), `tablet` (820×1180 @2, touch) or
+`desktop`/`web` (1440×900 @1), or a custom `WxH[@dpr][+touch]`; the tags `dark` and `light`
+set `prefers-color-scheme` when it is shot. `--full-page` records that the whole document was
+captured. Without `--as`, `stills ls` says whose reviewed marks hold: each reviewer has their
+own, so a guest's marks hide nothing from the owner.
+
+The `/mockup` skill shoots them with `mockup.sh shot <path> <name> [--viewport V]... [--tag
+T]... [--full-page] [--title T]`: the runtime's [`mockup/capture.mjs`](mockup/capture.mjs)
+runs Chromium in the mockup's own container and sets the device through the DevTools
+protocol (size, pixel ratio, touch, a mobile user agent, the colour scheme), as Chrome's device
+toolbar does, so `--viewport mobile` is a 1170×2532 PNG of a touch phone. Each `--viewport` is
+one shot and one variant. It waits for `load`, the fonts and 500 ms without a fetch or XHR in
+flight, never for an open WebSocket or EventSource, and shoots anyway after
+`MOCKUP_SHOT_WAIT_MS` (default 5000).
 
 `watch` is the backchannel: run it under a monitor and every remark, reply,
 resolve, reopen and reviewed mark a human makes arrives as one line within a
 fraction of a second. It is a stable stream, the seam other tools plug into:
 
 ```
-#13 thread 3f9a0c1e 05-invite-user r1 box 0.12,0.40 0.50x0.08 dante: "The button overflows"
-#14 reply 3f9a0c1e dante: "Still wraps at 320px"
-#15 resolve 3f9a0c1e dante
-#16 viewed 05-invite-user r2 dante
+#13 thread 3f9a0c1e 05-invite-user [mobile+dark] r1 box 0.12,0.40 0.50x0.08 Ana (guest): "The button overflows"
+#14 reply 3f9a0c1e Ana (guest): "Still wraps at 320px"
+#15 resolve 3f9a0c1e dante (tailnet)
+#16 viewed 05-invite-user [mobile+dark] r2 dante (tailnet)
 ```
 
 Each line starts with the event's `seq`; pass the last one to `--since` to resume
 without missing or repeating anything (without it, `watch` starts at the end of the
-log). Anchors are normalized to the still: `pin x,y`, `box x,y wxh`, or `whole`.
+log). The variant is in brackets after the still; the author's name is followed by how they
+came, `(tailnet)`, `(guest)` on a share link or `(cli)`, when the event says. Anchors are
+normalized to the still: `pin x,y`, `box x,y wxh`, or `whole`.
 Bodies are JSON strings, so a newline never splits a line. `--json` prints each
 event as its JSON line from the log instead. Agent events are left out, so the
 agent never wakes on its own replies. `watch` exits non-zero when `.mockup/` is
-removed, and it outlives `preview stop`. Replies are written as
-`{kind: "agent", name: $REVIEW_AUTHOR}` (default `agent`). The store and its events
+removed, and it outlives `preview stop`. Replies, `working` and `idle` are written as
+`{kind: "agent", name: $REVIEW_AUTHOR, via: "cli"}` (default name `agent`). The store and its events
 are specified in [`docs/review-contract.md`](docs/review-contract.md).
 
 ## Configuration
