@@ -281,12 +281,37 @@ Each working state reads as `{thread, still, variant, note, author, since, at, u
 `since` when it started, `at` its last `working`, `until` when it expires, and null for what
 the agent did not name. Only events of `kind: "agent"` end one.
 
+## Reviewers
+
+The viewer never says who is writing; the runtime does, per request, and writes it as the
+event's `author` (`kind: "human"`), whatever `author` the posted body claims:
+
+| Who       | How the runtime tells | `author` |
+| --------- | --------------------- | -------- |
+| A tailnet user | The request carries `Tailscale-User-Login`, which `tailscale serve` adds (and strips from what a client sends) | `name` from `Tailscale-User-Name`, else the login; `via: "tailnet"` |
+| A guest   | Anything else: a share link, or a request to a host under the share domain (a leading-dot entry of `PREVIEW_ALLOWED_HOSTS`), which did not come through `tailscale serve` whatever headers it carries | `name` from the body's `author.name`, trimmed, 1 to 40 characters; `via: "share"` |
+
+- **Reading never asks.** A guest sees everything a tailnet user sees.
+- **A guest's write needs a name.** A `POST /_review/events` from a guest without one is
+  refused, `400` with `{"error": "name required"}`. The viewer asks for it once, on the first
+  write, and keeps it in the browser.
+- **A guest cannot `resolve` or `reopen`**: `403`. Those are the owner's (any tailnet user)
+  and the agent's. A guest can open threads, reply and set their own reviewed mark.
+- **`working` and `idle` are the agent's**: `403` from the viewer for anyone.
+- A name is not an identity: a guest may type any name, so a reader tells *Dante* the owner
+  from a guest calling themself Dante by `via`. The viewer shows a `guest` chip, and
+  `preview review watch` prints `Ana (guest)`.
+
+`GET /_review/stills` answers `{stills, marks, working, me, cursor}`: `marks` every
+reviewer's marked revisions as `{author: {still: {variant key: rev}}}`, `working` the
+[working](#working) fold, and `me` who is asking, `{name, via}`, `name` null for a guest.
+
 ## Who writes what
 
 | File                        | Written by | Read by |
 | --------------------------- | ---------- | ------- |
 | `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill's `mockup.sh shot` | the viewer, `preview stills ls`, the agent |
-| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `resolve`, `reopen`, `viewed`, `unviewed`), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
+| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `viewed`, `unviewed`, and for a tailnet user `resolve`, `reopen`; see [Reviewers](#reviewers)), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
 | `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
 Readers need no lock. Writers go through the reference implementation or follow its
