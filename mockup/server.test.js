@@ -16,6 +16,8 @@ import { allowedHosts, findPostcssConfig, scratchOwner, start, tailwindV4Sources
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const HUMAN = { kind: "human", name: "dante" };
+const OWNER = { "Tailscale-User-Login": "dante@example.com", "Tailscale-User-Name": "Dante" };
+const GUEST = {};
 
 /** Write `files` (relative path to contents) under `dir`. */
 function write(dir, files) {
@@ -181,13 +183,13 @@ describe("the mockup server", () => {
     }
   });
 
-  /** POST `body` to the review log with the content type `type`. */
-  const post = (body, type = "application/json") =>
-    fetch(`${base}/_review/events`, { method: "POST", headers: { "Content-Type": type }, body });
+  /** POST `body` to the review log with the content type `type`, as the tailnet user or the guest `who` is. */
+  const post = (body, type = "application/json", who = OWNER) =>
+    fetch(`${base}/_review/events`, { method: "POST", headers: { "Content-Type": type, ...who }, body });
 
-  /** The entry of the still `name` in `GET /_review/stills`. */
+  /** The entry of the still `name` in `GET /_review/stills`, as the tailnet user sees it. */
   const still = async (name) => {
-    const res = await fetch(`${base}/_review/stills`);
+    const res = await fetch(`${base}/_review/stills`, { headers: OWNER });
     assert.equal(res.status, 200);
     return (await res.json()).stills.find((s) => s.name === name);
   };
@@ -270,7 +272,7 @@ describe("the mockup server", () => {
     const send = (origin) =>
       fetch(`${base}/_review/events`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: origin },
+        headers: { "Content-Type": "application/json", Origin: origin, ...OWNER },
         body: JSON.stringify({ type: "viewed", still: "origin", rev: 1 }),
       });
     assert.equal((await send("http://localhost:5173")).status, 403);
@@ -285,7 +287,7 @@ describe("the mockup server", () => {
     const res = await post(JSON.stringify({ type: "viewed", still: "marked", rev: 1 }));
     assert.equal(res.status, 201);
     const stored = await res.json();
-    assert.deepEqual(stored.author, { kind: "human", name: "reviewer" });
+    assert.deepEqual(stored.author, { kind: "human", name: "Dante", via: "tailnet" });
     assert.ok(stored.seq >= 1 && stored.id && stored.at);
     const mark = async () => {
       const { variants, ...m } = (await still("marked")).mark;
@@ -295,11 +297,43 @@ describe("the mockup server", () => {
     assert.deepEqual(await mark(), { rev: 1, viewed: 1, reviewed: true, changed: false });
     await shoot("marked");
     assert.deepEqual(await mark(), { rev: 2, viewed: 1, reviewed: false, changed: true });
-    const named = await post(JSON.stringify({ type: "unviewed", still: "marked", rev: 2, author: HUMAN }));
-    assert.deepEqual((await named.json()).author, HUMAN);
+    const unviewed = { type: "unviewed", still: "marked", rev: 2, author: { name: "Ana" } };
+    const other = await post(JSON.stringify(unviewed), "application/json", GUEST);
+    assert.deepEqual((await other.json()).author, { kind: "human", name: "Ana", via: "share" });
     assert.deepEqual(await mark(), { rev: 2, viewed: 1, reviewed: false, changed: true });
     await post(JSON.stringify({ type: "unviewed", still: "marked", rev: 2 }));
     assert.deepEqual(await mark(), { rev: 2, viewed: null, reviewed: false, changed: false });
+  });
+
+  test("a guest writes under the name they give, never as the tailnet, and cannot resolve or reopen", async () => {
+    await shoot("shared");
+    const guest = (event) => post(JSON.stringify(event), "application/json", GUEST);
+    const remark = { type: "thread", still: "shared", rev: 1, body: "Too dark" };
+    const nameless = await guest(remark);
+    assert.equal(nameless.status, 400);
+    assert.equal((await nameless.json()).error, "name required");
+    assert.equal((await guest({ ...remark, author: { name: "   " } })).status, 400);
+    assert.equal((await guest({ ...remark, author: { name: "x".repeat(41) } })).status, 400);
+    const claimed = { kind: "agent", name: " Dante ", via: "tailnet" };
+    const res = await guest({ ...remark, author: claimed });
+    assert.equal(res.status, 201);
+    const thread = await res.json();
+    assert.deepEqual(thread.author, { kind: "human", name: "Dante", via: "share" });
+    for (const type of ["resolve", "reopen"]) {
+      assert.equal((await guest({ type, thread: thread.id, author: { name: "Ana" } })).status, 403);
+    }
+    const ana = { name: "Ana" };
+    assert.equal((await guest({ type: "reply", thread: thread.id, body: "Still", author: ana })).status, 201);
+    assert.equal((await guest({ type: "viewed", still: "shared", rev: 1, author: ana })).status, 201);
+    const owner = await post(JSON.stringify({ type: "resolve", thread: thread.id, author: { name: "Ana" } }));
+    assert.deepEqual((await owner.json()).author, { kind: "human", name: "Dante", via: "tailnet" });
+    const seen = await (await fetch(`${base}/_review/stills`)).json();
+    assert.deepEqual(seen.me, { name: null, via: "share" });
+    assert.equal(seen.marks.Ana.shared.desktop, 1);
+    assert.equal(seen.stills.find((s) => s.name === "shared").mark.reviewed, false);
+    const mine = await (await fetch(`${base}/_review/stills`, { headers: OWNER })).json();
+    assert.deepEqual(mine.me, { name: "Dante", via: "tailnet" });
+    assert.deepEqual(mine.working, []);
   });
 
   test("GET /_review/events resumes from since, then pushes what is posted and what the CLI appends", async () => {

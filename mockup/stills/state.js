@@ -1,13 +1,16 @@
 /**
  * The state of the stills viewer, free of the DOM so the runtime's tests can import it.
  *
- * A still is an entry of `GET /_review/stills`: `{ name, title, source, revs, mark }`, with
- * `mark` its reviewed mark `{ rev, viewed, reviewed, changed }` as `reviewed()` of the review
- * store folds it. The functions here keep those marks in step with the event log, decide
+ * A still is an entry of `GET /_review/stills`, `{ name, title, source, variants }`, each variant
+ * `{ key, viewport, tags, revs }`. `choose` gives every still the variant the reviewer's pick
+ * lands on, as `variant`, with its `revs` and `mark`, the reviewed mark `{ rev, viewed, reviewed,
+ * changed }` the reviewer left on it; the marks of every reviewer are `{ author: { still: { key:
+ * rev } } }`, kept in step with the event log by `applyEvent`. The functions here also decide
  * where ←/→, Home/End and a swipe land, shape the anchor of a remark being drawn (a pin or a
- * region, in coordinates normalized to the still) and fold the log's threads. The runtime and
- * the viewer share from here the URL of a file of the scratch dir and the limit of an annotated
- * still's upload.
+ * region, in coordinates normalized to the still) and fold the log's threads and the agent's
+ * working states. The runtime and the viewer share from here the URL of a file of the scratch
+ * dir, the limit of an annotated still's upload and of a guest's name, and how long a working
+ * state lasts.
  *
  * For the mobile layout they also hold the zoom and pan of the still. A view is `{ z, x, y }`:
  * the zoom, 1 being the still fitted to the width of its room, and where the still's top left
@@ -33,19 +36,185 @@ export function markOf(rev, viewed) {
   return { rev, viewed, reviewed: viewed !== null && viewed === rev, changed: viewed !== null && viewed < rev };
 }
 
+/** The most characters a guest's name may hold. */
+export const MAX_NAME = 40;
+
+/** How long the agent's working state lasts after its last `working` event. */
+export const WORKING_MS = 10 * 60 * 1000;
+
+const PRESETS = { mobile: "Mobile", "mobile-s": "Mobile S", tablet: "Tablet", desktop: "Desktop" };
+
+/** The value `o` holds under `key` itself, never one it inherits. */
+function own(o, key) {
+  return o && Object.hasOwn(o, key) ? o[key] : undefined;
+}
+
+/** Make `value` what `o` holds under `key` itself, whatever the key is called. */
+function put(o, key, value) {
+  Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** The object `o` holds under `key`, made when it holds none. */
+function slot(o, key) {
+  if (!Object.hasOwn(o, key)) put(o, key, {});
+  return o[key];
+}
+
+/** The revision the reviewer named `author` marked on the variant `key` of the still named `still`, if any. */
+function marked(marks, author, still, key) {
+  return own(own(own(marks, author), still), key);
+}
+
+/** The viewport part of the variant key `key`: `mobile` of `mobile+dark`. */
+export function viewportOf(key) {
+  return key.split("+")[0];
+}
+
+/** The tags part of the variant key `key`: `dark+rtl` of `mobile+dark+rtl`, empty without tags. */
+export function tagsOf(key) {
+  return key.split("+").slice(1).join("+");
+}
+
+/** The variant key of the viewport part `viewport` with the tags part `tags`. */
+export function keyOf(viewport, tags) {
+  return tags ? `${viewport}+${tags}` : viewport;
+}
+
+/** What a switcher calls the viewport part `viewport`: a preset's name, or a custom one's size. */
+export function viewportLabel(viewport) {
+  return own(PRESETS, viewport) ?? viewport.replace(/^custom-/, "").replace("x", "×").replace("-touch", " touch");
+}
+
+/** What a switcher calls the tags part `tags`: the tags, or "default" for none. */
+export function tagsLabel(tags) {
+  return tags || "default";
+}
+
 /**
- * Fold one log event into `stills`: a `viewed` sets the marked revision of its still, an
- * `unviewed` clears it; one on a variant other than the still's first is left alone. True when
- * a mark changed, so the caller knows to draw again.
+ * What the stills can be switched between: `{ viewports, tags }`, the viewport parts and the
+ * tags parts of their variants' keys, each once; the presets first, in their order, then the
+ * custom viewports, and the tags as first met.
  */
-export function applyEvent(stills, event) {
+export function choices(stills) {
+  const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
+  const order = Object.keys(PRESETS);
+  const rank = (v) => (order.includes(v) ? order.indexOf(v) : order.length);
+  const viewports = [...new Set(keys.map(viewportOf))];
+  viewports.sort((a, b) => rank(a) - rank(b));
+  return { viewports, tags: [...new Set(keys.map(tagsOf))] };
+}
+
+/**
+ * The pick a switcher makes of `key`, a variant key put together from a viewport and tags:
+ * `key` when a still of `stills` has that variant, else the first variant `fits` takes, so
+ * the pick is always one that exists; null when there is none.
+ */
+export function pickOf(stills, key, fits) {
+  const keys = stills.flatMap((s) => s.variants.map((v) => v.key));
+  return keys.includes(key) ? key : (keys.find(fits) ?? null);
+}
+
+/**
+ * The variant of `still` the pick `pick`, a variant key, lands on: that variant, else the
+ * first one at the same viewport, else its first; its first as well when nothing is picked.
+ */
+export function variantFor(still, pick) {
+  const { variants } = still;
+  if (!pick) return variants[0];
+  const same = variants.find((v) => viewportOf(v.key) === viewportOf(pick));
+  return variants.find((v) => v.key === pick) ?? same ?? variants[0];
+}
+
+/**
+ * Give every still of `stills` the variant `pick` lands on (see `variantFor`): `variant`, its
+ * `revs`, and `mark`, the reviewed mark the reviewer named `me` left on it in `marks`; nobody's
+ * when `me` is empty.
+ */
+export function choose(stills, pick, marks, me) {
+  for (const s of stills) {
+    s.variant = variantFor(s, pick);
+    s.revs = s.variant.revs;
+    s.mark = markOf(s.revs.at(-1).n, marked(marks, me, s.name, s.variant.key) ?? null);
+  }
+}
+
+/**
+ * Fold one log event into `marks`, every reviewer's marked revisions as `{ author: { still:
+ * { key: rev } } }`: a `viewed` sets its author's mark of a variant of a still of `stills`, an
+ * `unviewed` clears it; an event without `variant` means the still's first. True when it was
+ * one, so the caller knows to draw again.
+ */
+export function applyEvent(marks, stills, event) {
   if (event.type !== "viewed" && event.type !== "unviewed") return false;
   const still = stills.find((s) => s.name === event.still);
   if (!still) return false;
-  const first = still.variants?.[0]?.key;
-  if (event.variant !== undefined && first !== undefined && event.variant !== first) return false;
-  still.mark = markOf(still.mark.rev, event.type === "viewed" ? event.rev : null);
+  const mine = slot(slot(marks, event.author.name), still.name);
+  const key = event.variant ?? still.variants[0].key;
+  if (event.type === "viewed") put(mine, key, event.rev);
+  else delete mine[key];
   return true;
+}
+
+/**
+ * How far the other reviewers are with the variants `choose` gave `stills`: `{ name, reviewed }`
+ * for each author of `marks` but `me` whose mark holds on the latest revision of at least one.
+ */
+export function progress(marks, stills, me) {
+  return Object.keys(marks)
+    .filter((name) => name !== me)
+    .map((name) => ({
+      name,
+      reviewed: stills.filter((s) => marked(marks, name, s.name, s.variant.key) === s.revs.at(-1).n).length,
+    }))
+    .filter((p) => p.reviewed);
+}
+
+/** What a working state is kept under: its thread, else its still and variant, else nothing. */
+export function workingKey(w) {
+  return w.thread ? `thread ${w.thread}` : `still ${w.still ?? ""} ${w.variant ?? ""}`;
+}
+
+/** When a working state whose last `working` came at the ISO time `at` expires, in milliseconds. */
+function expiry(at) {
+  return Date.parse(at) + WORKING_MS;
+}
+
+/**
+ * Fold one log event into `on`, the agent's working states by `workingKey`, oldest first: an
+ * agent's `working` starts one or keeps it on, as `{ thread, still, variant, note, author,
+ * since, at, until }` with null for what it did not name; its `reply` or `idle` on a thread
+ * ends that thread's, an `idle` without a thread ends them all. What a human wrote counts for
+ * nothing. True when `on` changed.
+ */
+export function applyWorking(on, event) {
+  if (event.author?.kind !== "agent") return false;
+  if (event.type === "working") {
+    const key = workingKey(event);
+    const last = on.get(key);
+    const since = last && expiry(last.at) > Date.parse(event.at) ? last.since : event.at;
+    on.delete(key);
+    on.set(key, {
+      thread: event.thread ?? null,
+      still: event.still ?? null,
+      variant: event.variant ?? null,
+      note: event.note ?? null,
+      author: event.author,
+      since,
+      at: event.at,
+      until: new Date(expiry(event.at)).toISOString(),
+    });
+    return true;
+  }
+  if (event.type !== "reply" && event.type !== "idle") return false;
+  const size = on.size;
+  if (event.thread) on.delete(`thread ${event.thread}`);
+  else on.clear();
+  return on.size !== size;
+}
+
+/** The working states of `on` that have not expired at `now` (ms), oldest first. */
+export function workingAt(on, now) {
+  return [...on.values()].filter((w) => Date.parse(w.until) > now);
 }
 
 /** True when the still at `i` is one to step onto: any still with `all`, else one not reviewed. */
@@ -144,10 +313,11 @@ export function opposite(anchor, name) {
 
 /**
  * Fold one log event into `threads`, the list `GET /_review/threads` answers, as `threads()`
- * of the review store does: a `thread` opens one, a `reply` joins its thread, a `resolve` or a
- * `reopen` sets its status. An event the list already holds (a thread of that id, or a `seq`
- * not above the thread's last) changes nothing, so events may be folded again in log order;
- * threads stay in the order they were opened even when one is folded early.
+ * of the review store does: a `thread` opens one, on the variant it names (null for its still's
+ * first), a `reply` joins its thread, a `resolve` or a `reopen` sets its status. An event the
+ * list already holds (a thread of that id, or a `seq` not above the thread's last) changes
+ * nothing, so events may be folded again in log order; threads stay in the order they were
+ * opened even when one is folded early.
  * True when the list changed.
  */
 export function applyThread(threads, event) {
@@ -156,6 +326,7 @@ export function applyThread(threads, event) {
     threads.push({
       id: event.id,
       still: event.still,
+      variant: event.variant ?? null,
       rev: event.rev ?? null,
       anchor: event.anchor ?? null,
       body: event.body,
