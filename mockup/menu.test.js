@@ -19,7 +19,29 @@ import {
   route,
 } from "./menu.mjs";
 import { addStill, appendEvent, threads } from "./review.mjs";
-import { applyEvent, applyThread, counts, edge, markOf, moved, opposite, pin, region, step } from "./stills/state.js";
+import {
+  ago,
+  applyEvent,
+  applyThread,
+  chip,
+  counts,
+  cropOf,
+  edge,
+  fitted,
+  latest,
+  markOf,
+  MAX_ZOOM,
+  moved,
+  opposite,
+  pin,
+  region,
+  revealed,
+  step,
+  title,
+  unread,
+  viewOn,
+  zoomed,
+} from "./stills/state.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const HUMAN = { kind: "human", name: "dante" };
@@ -300,4 +322,93 @@ test("rewriteRefs points ./ references at /pages/ when the file exists, and /app
     `<script type="module" src="/pages/pay.tsx?x"></script><link href='/pages/pay.css'><a href="./other">o</a>` +
       `<a href="?v=b">b</a><link rel="stylesheet" href="/@fs/srv/app/web/styles.css"><img src='/@fs/srv/app/logo.png'>`
   );
+});
+
+/** A phone's room, 375 by 600, holding a 1440 by 900 still. */
+const ROOM = { vw: 375, vh: 600, ratio: 900 / 1440 };
+
+/** The spot of the still under the point `p` of the room in `view`, normalized to the still. */
+function under(view, p, box = ROOM) {
+  const width = box.vw * view.z;
+  return { x: (p.x - view.x) / width, y: (p.y - view.y) / (width * box.ratio) };
+}
+
+test("fitted keeps the zoom in range, centers a still shorter than its room and leaves no gap past it", () => {
+  const short = (ROOM.vh - ROOM.vw * ROOM.ratio) / 2;
+  assert.deepEqual(fitted({ z: 0.4, x: -50, y: 90 }, ROOM), { z: 1, x: 0, y: short });
+  assert.equal(fitted({ z: 99, x: 0, y: 0 }, ROOM).z, MAX_ZOOM);
+  assert.deepEqual(fitted({ z: 4, x: 40, y: 30 }, ROOM), { z: 4, x: 0, y: 0 });
+  assert.deepEqual(fitted({ z: 4, x: -9999, y: -9999 }, ROOM), { z: 4, x: 375 - 1500, y: 600 - 937.5 });
+  const page = { vw: 375, vh: 600, ratio: 4 };
+  assert.deepEqual(fitted({ z: 1, x: 0, y: -200 }, page), { z: 1, x: 0, y: -200 });
+  assert.deepEqual(fitted({ z: 1, x: 0, y: -2000 }, page), { z: 1, x: 0, y: -900 });
+});
+
+test("zoomed keeps the spot under the fingers: a point marked at 3x lands where it was aimed", () => {
+  const start = fitted({ z: 1, x: 0, y: 0 }, ROOM);
+  const finger = { x: 300, y: 300 };
+  const spot = under(start, finger);
+  const close = zoomed(start, finger, finger, 3, ROOM);
+  assert.equal(close.z, 3);
+  const marked = under(close, finger);
+  assert.ok(Math.abs(marked.x - spot.x) < 0.01 && Math.abs(marked.y - spot.y) < 0.01, JSON.stringify({ spot, marked }));
+  const panned = zoomed(close, finger, { x: 200, y: 300 }, 1, ROOM);
+  const moved = under(panned, { x: 200, y: 300 });
+  assert.ok(Math.abs(moved.x - spot.x) < 1e-9 && Math.abs(moved.y - spot.y) < 1e-9);
+  const pinched = zoomed(close, { x: 100, y: 100 }, { x: 120, y: 140 }, 1.5, ROOM);
+  assert.equal(pinched.z, 4.5);
+  assert.deepEqual(zoomed(close, finger, finger, 1 / 3, ROOM), start);
+});
+
+test("viewOn and revealed bring a mark into the room", () => {
+  const anchor = { x: 0.7, y: 0.45, w: 0.2, h: 0.1 };
+  const view = viewOn(anchor, ROOM);
+  assert.ok(Math.abs(view.z - 3) < 1e-9);
+  const middle = under(view, { x: ROOM.vw / 2, y: ROOM.vh / 2 });
+  assert.ok(Math.abs(middle.x - 0.8) < 1e-9 && Math.abs(middle.y - 0.5) < 1e-9);
+  assert.equal(viewOn({ x: 0.5, y: 0.5 }, ROOM).z, 2);
+  assert.equal(viewOn({ x: 0, y: 0, w: 0.01, h: 0.01 }, ROOM).z, 4);
+  const seen = { z: 3, x: -700, y: -50 };
+  assert.equal(revealed(seen, anchor, ROOM), seen);
+  const away = revealed({ z: 3, x: 0, y: 0 }, anchor, ROOM);
+  assert.equal(away.z, 3);
+  assert.ok(Math.abs(under(away, { x: ROOM.vw / 2, y: ROOM.vh / 2 }).x - 0.8) < 1e-9);
+  const low = { vw: 375, vh: 150, ratio: 900 / 1440 };
+  const lifted = revealed(fitted({ z: 1, x: 0, y: 0 }, low), { x: 0.5, y: 0.95 }, low);
+  assert.ok(lifted.y + 0.95 * 375 * low.ratio <= low.vh);
+});
+
+test("cropOf frames a mark with what is around it and never leaves a gap", () => {
+  const image = { w: 1440, h: 900 };
+  const frame = { w: 375, h: 120 };
+  const box = cropOf({ x: 0.5, y: 0.5, w: 0.4, h: 0.1 }, image, frame);
+  assert.ok(Math.abs(box.width - (375 / (0.4 * 1.5 * 1440)) * 1440) < 1e-9);
+  assert.ok(Math.abs(box.left + 0.7 * box.width - 375 / 2) < 1e-9);
+  assert.ok(Math.abs(box.top + 0.55 * box.height - 60) < 1e-9);
+  const corner = cropOf({ x: 0, y: 0 }, image, frame);
+  assert.deepEqual([corner.left, corner.top], [0, 0]);
+  assert.ok(Math.abs(corner.width - 375 / 0.35) < 1e-9);
+  const end = cropOf({ x: 1, y: 1 }, image, frame);
+  assert.ok(Math.abs(end.left + end.width - 375) < 1e-9 && Math.abs(end.top + end.height - 120) < 1e-9);
+});
+
+test("a card's title, latest message, age, chip and unread replies", () => {
+  const reply = (seq, kind) => ({ seq, author: { kind, name: kind }, body: `r${seq}`, at: "2026-01-01T00:00:00Z" });
+  const thread = { id: "t1", rev: 1, status: "open", body: "\n  Label wraps \nsecond line", replies: [] };
+  assert.equal(title(thread.body), "Label wraps");
+  assert.equal(title("  "), "");
+  assert.equal(latest(thread), thread);
+  thread.replies.push(reply(5, "agent"), reply(7, "human"), reply(9, "agent"));
+  assert.equal(latest(thread).seq, 9);
+  const ages = [0, 59_000, 60_000, 3_599_000, 3_600_000, 86_400_000 * 3].map((ms) => ago(0, ms));
+  assert.deepEqual(ages, ["now", "now", "1m", "59m", "1h", "3d"]);
+  assert.equal(chip(thread, 1), "open");
+  assert.equal(chip(thread, 2), "moved");
+  assert.equal(chip({ ...thread, rev: null }, 2), "open");
+  assert.equal(chip({ ...thread, status: "resolved" }, 2), "resolved");
+  assert.equal(unread(thread, {}), 3);
+  assert.equal(unread(thread, { t1: 5 }), 2);
+  assert.equal(unread(thread, { t1: 5 }, "agent"), 1);
+  assert.equal(unread(thread, { t1: 9 }), 0);
+  assert.equal(unread(thread, { constructor: 99 }, "agent"), 2);
 });
