@@ -136,6 +136,11 @@ export function eventLine(event, first = new Map()) {
     case "resolve":
     case "reopen":
       return `${head} ${event.thread} ${by}`;
+    case "working":
+    case "idle": {
+      const about = event.thread ?? (event.still ? `${event.still}${variant ? ` [${variant}]` : ""}` : "");
+      return `${head}${about ? ` ${about}` : ""} ${by}`;
+    }
     default:
       return `${head} ${event.still}${variant ? ` [${variant}]` : ""} r${event.rev} ${by}`;
   }

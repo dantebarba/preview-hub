@@ -114,7 +114,7 @@ async function launch(chrome) {
       await Promise.race([exited, sleep(3000)]);
     }
     try {
-      process.kill(-proc.pid, "SIGKILL");
+      if (proc.pid !== undefined) process.kill(-proc.pid, "SIGKILL");
     } catch (e) {
       if (e.code !== "ESRCH") throw e;
     }

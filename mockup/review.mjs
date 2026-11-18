@@ -145,7 +145,8 @@ function nameProblem(name) {
 /**
  * The viewport `spec` names: a preset (`mobile`, `mobile-s`, `tablet`, `desktop` or its alias
  * `web`) or a custom `WxH[@dpr][+touch]`. Returns `{ preset, width, height, dpr, mobile,
- * fullPage }`, `preset` being "custom" for a custom one; throws on anything else.
+ * fullPage }`, `preset` being "custom" for a custom one; a custom one that is exactly a preset
+ * (`1440x900` is `desktop`) is that preset. Throws on anything else.
  */
 export function parseViewport(spec, fullPage = false) {
   const name = ALIASES[spec] ?? spec;
@@ -155,14 +156,14 @@ export function parseViewport(spec, fullPage = false) {
   const m = typeof spec === "string" ? CUSTOM.exec(spec) : null;
   if (!m) throw new Error(`a viewport is one of ${[...Object.keys(VIEWPORTS), "web"].join(", ")} or WxH[@dpr][+touch]`);
   const [, width, height, dpr = "1", touch] = m;
-  return {
-    preset: "custom",
-    width: Number(width),
-    height: Number(height),
-    dpr: Number(dpr),
-    mobile: Boolean(touch),
-    fullPage: Boolean(fullPage),
-  };
+  const custom = { width: Number(width), height: Number(height), dpr: Number(dpr), mobile: Boolean(touch) };
+  const preset = Object.keys(VIEWPORTS).find((k) => sameDevice(VIEWPORTS[k], custom));
+  return { preset: preset ?? "custom", ...custom, fullPage: Boolean(fullPage) };
+}
+
+/** True when the viewports `a` and `b` have the same size, pixel ratio and touch. */
+function sameDevice(a, b) {
+  return a.width === b.width && a.height === b.height && a.dpr === b.dpr && a.mobile === b.mobile;
 }
 
 /** The key of `viewport`: its preset's name, or `custom-<W>x<H>[@<dpr>][-touch]`. */
@@ -193,10 +194,7 @@ export function variantKey(viewport, tags = []) {
  * custom one at 1x. A still without a size is read as `desktop`.
  */
 function legacyViewport(size) {
-  const m = typeof size === "string" ? SIZE.exec(size) : null;
-  const desktop = VIEWPORTS.desktop;
-  if (!m || (Number(m[1]) === desktop.width && Number(m[2]) === desktop.height)) return parseViewport("desktop");
-  return parseViewport(`${m[1]}x${m[2]}`);
+  return parseViewport(typeof size === "string" && SIZE.test(size) ? size : "desktop");
 }
 
 /** The viewport a variant key names, for a v2 variant stored without a readable one. */
@@ -423,6 +421,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
   const vp = parseViewport(viewport, fullPage);
   const sorted = parseTags(tags);
   const key = variantKey(vp, sorted);
+  if (!KEY.test(key)) throw new Error(`variant '${key}': at most 16 tags`);
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
@@ -625,10 +624,9 @@ export function threads(dir) {
  * an author name to the marked revision of each still and variant, `Map<name, Map<still,
  * Map<key, rev>>>`, set by that author's last `viewed` and cleared by an `unviewed` after it;
  * an event without `variant` marks the still's first variant. `reviewers` lists, sorted, every
- * author with a mark that holds.
+ * author with a mark that holds. `known` is `revisions(dir)`, when the caller has it already.
  */
-export function reviewMarks(dir) {
-  const known = revisions(dir);
+export function reviewMarks(dir, known = revisions(dir)) {
   const marks = new Map();
   for (const e of readEvents(dir).events) {
     if (e.type !== "viewed" && e.type !== "unviewed") continue;
@@ -655,9 +653,10 @@ export function reviewMarks(dir) {
  * marks count for nothing.
  */
 export function reviewed(dir, by) {
-  const mine = reviewMarks(dir).marks.get(by) ?? new Map();
+  const known = revisions(dir);
+  const mine = reviewMarks(dir, known).marks.get(by) ?? new Map();
   const out = {};
-  for (const [name, still] of revisions(dir)) {
+  for (const [name, still] of known) {
     const variants = {};
     for (const [key, revs] of still.variants) {
       variants[key] = markOf(Math.max(0, ...revs), mine.get(name)?.get(key) ?? null);
@@ -670,7 +669,7 @@ export function reviewed(dir, by) {
 /**
  * The agent's working state in the log of `dir` at `now` (ms): what it is working on, oldest
  * first, as `{ thread, still, variant, note, author, since, at, until }`, each field the agent
- * did not give being null. One state per thread, or per still and variant, or one with
+ * did not give being null; a `working` a human wrote counts for nothing. One state per thread, or per still and variant, or one with
  * neither: a `working` starts it or keeps it on; it ends with the agent's next `reply` or
  * `idle` on that thread (an `idle` without a thread ends them all), or WORKING_MS after its
  * last `working`. `since` is when it started, `at` its last `working`, `until` when it expires.
@@ -679,7 +678,7 @@ export function working(dir, now = Date.now()) {
   const on = new Map();
   const expiry = (at) => Date.parse(at) + WORKING_MS;
   for (const e of readEvents(dir).events) {
-    if (e.type === "working") {
+    if (e.type === "working" && e.author.kind === "agent") {
       const key = e.thread ? `thread ${e.thread}` : `still ${e.still ?? ""} ${e.variant ?? ""}`;
       const last = on.get(key);
       const since = last && expiry(last.at) > Date.parse(e.at) ? last.since : e.at;

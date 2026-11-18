@@ -85,6 +85,7 @@ test("parseViewport knows the presets, the web alias and custom WxH[@dpr][+touch
   });
   assert.equal(parseViewport("tablet").dpr, 2);
   assert.deepEqual(parseViewport("web"), parseViewport("desktop"));
+  assert.deepEqual(parseViewport("1440x900"), parseViewport("desktop"));
   assert.deepEqual(parseViewport("1440x1250"), {
     preset: "custom",
     width: 1440,
@@ -165,6 +166,8 @@ test("addStill rejects bad names, viewports, tags and files that are not PNGs", 
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "../x" }), /still name/);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "x", viewport: "big" }), /viewport/);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "x", tags: ["a/b"] }), /tag/);
+  const many = Array.from({ length: 17 }, (_, i) => `t${i}`);
+  await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "x", tags: many }), /16 tags/);
   await addStill(dir, { file: png(dir, "a"), name: "home" });
   await assert.rejects(addStill(dir, { file: png(dir, "b"), name: "Home" }), /only in case/);
   writeFileSync(path.join(dir, "shot.png"), "not a png");
@@ -412,6 +415,8 @@ test("working lasts until the agent replies, goes idle or stays quiet for ten mi
     ["invite"]
   );
   await appendEvent(dir, { type: "idle", author: AGENT });
+  assert.deepEqual(working(dir, now), []);
+  await appendEvent(dir, { type: "working", author: HUMAN, thread: other.id });
   assert.deepEqual(working(dir, now), []);
 });
 

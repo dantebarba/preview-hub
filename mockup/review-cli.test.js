@@ -272,6 +272,8 @@ test("eventLine prints every event type on one line, with the variant and how th
     eventLine({ ...base, type: "viewed", still: "invite", rev: 2 }, first),
     "#4 viewed invite [desktop] r2 dante"
   );
+  assert.doesNotMatch(eventLine({ ...base, type: "working", thread: "t1" }), /undefined/);
+  assert.doesNotMatch(eventLine({ ...base, type: "idle" }), /undefined/);
 });
 
 test("review working and idle write the agent's working state on a thread or a still", async (t) => {

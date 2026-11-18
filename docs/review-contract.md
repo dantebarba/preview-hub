@@ -49,7 +49,8 @@ points at the pixels it was made on after rev 2 lands.
 | `desktop`  | 1440×900  | 1 | mouse; `web` is an alias |
 
 A **custom** viewport is given as `WxH[@dpr][+touch]`: `360x740`, `360x740@2.5+touch`. Its
-pixel ratio is 1 unless given; `+touch` makes it a touch device with a mobile user agent.
+pixel ratio is 1 unless given; `+touch` makes it a touch device with a mobile user agent. One
+that is exactly a preset (`1440x900`, `390x844@3+touch`) is that preset.
 
 A variant's **viewport** is stored as `{preset, width, height, dpr, mobile, fullPage}`:
 `preset` is the preset's name or `"custom"`, `mobile` is true for a touch device and
@@ -170,7 +171,7 @@ An event carries exactly the fields of its type; any other field makes the line 
 | `viewed`   | `still`, `variant?`, `rev`       | Marks revision `rev` of a variant of `still` reviewed, by the event's author. |
 | `unviewed` | `still`, `variant?`, `rev`       | Clears the author's reviewed mark of a variant of `still`; `rev` is the revision on screen. |
 | `working`  | `thread?`, `still?`, `variant?`, `note?` | The agent is working on thread `thread`, or on `still` (a variant of it with `variant`), or on something it does not name; `note` says on what. See [Working](#working). |
-| `idle`     | `thread?`                        | The agent stopped working on thread `thread`, or on everything it had not tied to a thread. |
+| `idle`     | `thread?`                        | The agent stopped working on thread `thread`, or, with no `thread`, on everything. |
 
 - `still` is a still name from the manifest, `variant` the key of one of its variants and
   `rev` one of that variant's revision numbers, at the time the event was appended.
