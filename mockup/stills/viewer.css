@@ -104,7 +104,7 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 .kind.agent { border-color: #7dd3fc; color: #7dd3fc; }
 .text { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 #reply { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
-#answer { flex: 1; min-width: 0; resize: none; max-height: 160px; }
+#answer { flex: 1; min-width: 0; resize: none; }
 #place, #dock, #shade, #talk { display: none; }
 #toast { position: fixed; z-index: 9; left: 50%; translate: -50% 0; bottom: calc(72px + var(--keyboard, 0px) + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; background: #2a2a2e; border: 1px solid #555; border-radius: 999px; box-shadow: 0 8px 24px #000a; white-space: nowrap; }
 #undo { border-radius: 999px; min-height: 36px; color: #7dd3fc; }
@@ -136,7 +136,8 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 .mobile #back, .mobile #forth, .mobile #more, .mobile #talk-back { font-size: 22px; line-height: 1; }
 #badge { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; display: grid; place-items: center; background: #38bdf8; color: #082f49; border-radius: 9px; font-size: 11px; font-weight: 600; }
 .mobile #shade { display: block; position: fixed; z-index: 6; inset: 0; background: #0009; }
-.mobile #bar, .mobile nav { position: fixed; z-index: 7; left: 0; right: 0; bottom: 0; max-height: 75dvh; overflow-y: auto; box-sizing: border-box; padding: 8px 12px max(12px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid #555; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
+.mobile #bar, .mobile nav, .mobile #panel, .mobile #composer { border: 0; border-top: 1px solid #555; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
+.mobile #bar, .mobile nav { position: fixed; z-index: 7; left: 0; right: 0; bottom: 0; max-height: 75dvh; overflow-y: auto; box-sizing: border-box; padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
 .mobile #bar { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; color: #eee; font-size: 16px; }
 .mobile #bar > * { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 0; padding: 0 4px; border: 0; border-radius: 0; background: none; color: #eee; text-align: left; text-decoration: none; }
 .mobile #bar > * + * { border-top: 1px solid #2a2a2e; }
@@ -146,12 +147,14 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 .mobile #remark, .mobile #remarks, .mobile #shown:empty, .mobile #bar:not(.up), .mobile nav:not(.up) { display: none; }
 .mobile nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; padding-top: 12px; }
 .mobile nav img { width: 100%; height: 96px; box-sizing: border-box; object-fit: cover; object-position: top; }
-.mobile #panel { position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; width: auto; max-height: 70%; border: 0; border-top: 1px solid #555; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
-.mobile #composer { position: fixed; z-index: 5; left: 0; right: 0; top: auto; bottom: var(--keyboard, 0px); width: auto; border-width: 1px 0 0; border-radius: 14px 14px 0 0; padding-bottom: max(10px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); }
+.mobile #panel { position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; width: auto; max-height: 70%; }
+.mobile #composer { position: fixed; z-index: 5; left: 0; right: 0; top: auto; bottom: var(--keyboard, 0px); width: auto; padding-bottom: max(10px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); }
 .mobile #composer button, .mobile #talk-status, .mobile #send, .mobile #fresh, .mobile #undo { min-height: 44px; }
 .mobile .thread { padding: 12px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .mobile .foot button { display: none; }
-.mobile .chip.moved { min-height: 32px; padding: 0 10px; }
+.mobile .chip.moved { position: relative; min-height: 0; }
+.mobile .chip.moved::before { content: ""; position: absolute; inset: -11px -4px; }
+.mobile #draft i::before { inset: -15px; }
 .mobile .sunk summary { min-height: 44px; box-sizing: border-box; padding: 12px 4px; }
 .mobile .acts { display: flex; justify-content: space-between; position: absolute; inset: 0; border-radius: 8px; overflow: hidden; visibility: hidden; }
 .slot[data-open], .slot[data-dragging] { overflow: hidden; }

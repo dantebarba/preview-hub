@@ -13,8 +13,7 @@
  * dragged, and a box resized by its corners, while the comment is written in the composer,
  * next to the mark or, on a phone, in a sheet at the bottom. Posting sends the `thread` event
  * with the annotated still. The threads of the still are numbered marks on it and cards in the
- * remarks panel, where the selected one is answered, resolved and reopened; what the other
- * side writes arrives over the event stream.
+ * remarks panel; what the other side writes arrives over the event stream.
  *
  * A remark's card shows its number, its title (the remark's first line), a status chip, the
  * latest message, a dot for replies not seen on this device and the reply count; resolved cards
@@ -43,7 +42,7 @@ import {
   edge,
   fileUrl,
   fitted,
-  latest,
+  lastMessage,
   moved,
   opposite,
   pin,
@@ -116,8 +115,10 @@ let tapped = null;
 let seen = readSeen();
 let answerFor = null;
 let stick = false;
+let pinned = true;
+let tall = 0;
 let toastTimer = null;
-let compact = false;
+let mobile = false;
 let leaving = false;
 let aim = null;
 
@@ -142,11 +143,6 @@ function store(key, value) {
   } catch {
     return;
   }
-}
-
-/** True when the mobile layout is the one in use, as `applyLayout` last set it. */
-function mobile() {
-  return compact;
 }
 
 /** True when the mobile layout is the one to use: the one forced on this device, else by its screen. */
@@ -264,18 +260,43 @@ function entry({ author, at, body }) {
   return made;
 }
 
-/** The Reply and the Resolve or Reopen button of thread `t`, of class `className`. */
-function actions(t, className) {
+/** What the button that resolves thread `t`, or reopens it, says. */
+function statusLabel(t) {
+  return t.status === "open" ? "Resolve" : "Reopen";
+}
+
+/** True when the image element `image` has its picture. */
+function loaded(image) {
+  return image.complete && image.naturalWidth > 0;
+}
+
+/** True when the conversation open full screen is scrolled to its end, or nearly. */
+function atEnd() {
+  const entries = el("entries");
+  return entries.scrollHeight - entries.scrollTop - entries.clientHeight < NEAR_PX;
+}
+
+/** Step to the next or the previous still when a finger went `dx` by `dy`: far enough, and sideways. */
+function flick(dx, dy) {
+  if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > 2 * Math.abs(dy)) move(dx < 0 ? 1 : -1);
+}
+
+/**
+ * The Reply and the Resolve or Reopen button of thread `t`; with `swiped`, the pair a swipe
+ * uncovers, whose resolve can be undone.
+ */
+function actions(t, swiped) {
+  const className = swiped ? "act" : "";
   const reply = node("button", `${className} reply`.trim(), "Reply");
   reply.onclick = (e) => {
     e.stopPropagation();
     answer(t.id);
   };
-  const status = node("button", `${className} status`.trim(), t.status === "open" ? "Resolve" : "Reopen");
+  const status = node("button", `${className} status`.trim(), statusLabel(t));
   status.disabled = busy.has(t.id);
   status.onclick = (e) => {
     e.stopPropagation();
-    setStatus(t.id);
+    setStatus(t.id, swiped);
   };
   return [reply, status];
 }
@@ -288,7 +309,6 @@ function actions(t, className) {
  * message. Behind the card are the two actions a swipe uncovers in the mobile layout.
  */
 function threadCard(t, n) {
-  const small = mobile();
   const on = t.id === state.thread;
   const slot = node("div", "slot");
   slot.dataset.id = t.id;
@@ -313,15 +333,15 @@ function threadCard(t, n) {
   const foot = node("div", "foot");
   const replies = t.replies.length;
   const count = node("span", "count", replies === 1 ? "1 reply" : `${replies} replies`);
-  foot.append(count, ...actions(t, ""), node("span", "chev", "›"));
+  foot.append(count, ...actions(t, false), node("span", "chev", "›"));
   card.append(head);
-  if (on && !small) {
+  if (on && !mobile) {
     const all = node("div", "entries");
     all.append(entry(t), ...t.replies.map(entry));
     all.onclick = (e) => e.stopPropagation();
     card.append(foot, all);
   } else {
-    const m = latest(t);
+    const m = lastMessage(t);
     const last = node("div", "last");
     if (unread(t, seen)) last.append(node("span", "dot"));
     const said = node("span", "said");
@@ -330,7 +350,7 @@ function threadCard(t, n) {
     card.append(last, foot);
   }
   card.onclick = () => {
-    if (small) openTalk(t.id);
+    if (mobile) openTalk(t.id);
     else if (on) unselect();
     else select(t.id);
   };
@@ -338,23 +358,22 @@ function threadCard(t, n) {
     if (e.key === "Enter" && e.target === card) card.click();
   };
   const acts = node("div", "acts");
-  acts.append(...actions(t, "act"));
+  acts.append(...actions(t, true));
   slot.append(acts, card);
-  if (small) {
+  if (mobile) {
     if (state.swiped?.id === t.id) slot.dataset.open = state.swiped.side;
     swipeable(slot, card, ACT_PX, (side) => {
-      closeSwipe();
+      closeSwipe(slot);
       state.swiped = side ? { id: t.id, side } : null;
-      if (side) slot.dataset.open = side;
     });
   }
   return slot;
 }
 
-/** Slide back the card a swipe left open. */
-function closeSwipe() {
+/** Slide back the card a swipe left open, but for the one in the slot `keep`. */
+function closeSwipe(keep) {
   state.swiped = null;
-  for (const slot of el("threads").querySelectorAll(".slot[data-open]")) delete slot.dataset.open;
+  for (const slot of el("threads").querySelectorAll(".slot[data-open]")) if (slot !== keep) delete slot.dataset.open;
 }
 
 /** The thread whose conversation is open full screen, when it is of the still on screen. */
@@ -375,7 +394,7 @@ function drawCrop(t) {
   const image = el("crop-image");
   const url = imageUrl(rev);
   if (image.getAttribute("src") !== url) image.src = url;
-  if (!image.complete || !image.naturalWidth) return;
+  if (!loaded(image)) return;
   const frame = { w: crop.clientWidth, h: crop.clientHeight };
   const at = cropOf(t.anchor, { w: image.naturalWidth, h: image.naturalHeight }, frame);
   for (const side of ["width", "height", "left", "top"]) el("shot").style[side] = `${at[side]}px`;
@@ -385,14 +404,16 @@ function drawCrop(t) {
 
 /**
  * Draw the conversation open full screen in the mobile layout, or hide it. Opened, or already
- * at its end, it shows the newest message and its replies count as seen; scrolled up, a new
- * reply shows the "new reply" pill instead of moving it.
+ * at its end (`pinned`, which also keeps it there when the keyboard or the reply box resize
+ * it: a scroll the browser reports before that resize is seen, at a height other than `tall`,
+ * does not count as the reader's), it shows the newest message and its replies count as seen;
+ * scrolled up, a new reply shows the "new reply" pill instead of moving it.
  */
 function renderTalk() {
   const list = remarks();
   const at = list.findIndex((t) => t.id === state.talk);
   const talk = el("talk");
-  if (at === -1 || !mobile()) {
+  if (at === -1 || !mobile) {
     state.talk = null;
     talk.hidden = true;
     return;
@@ -400,7 +421,7 @@ function renderTalk() {
   const t = list[at];
   const entries = el("entries");
   const opened = talk.hidden || talk.dataset.id !== t.id;
-  const low = opened || stick || entries.scrollHeight - entries.scrollTop - entries.clientHeight < NEAR_PX;
+  const low = opened || stick || pinned;
   const had = opened ? Infinity : entries.childElementCount;
   stick = false;
   talk.hidden = false;
@@ -408,10 +429,11 @@ function renderTalk() {
   talk.classList.toggle("resolved", t.status !== "open");
   el("talk-n").textContent = at + 1;
   el("talk-title").textContent = title(t.body);
-  el("talk-status").textContent = t.status === "open" ? "Resolve" : "Reopen";
+  el("talk-status").textContent = statusLabel(t);
   el("talk-status").disabled = busy.has(t.id);
   entries.replaceChildren(entry(t), ...t.replies.map(entry));
   drawCrop(t);
+  pinned = low;
   if (low) {
     entries.scrollTop = entries.scrollHeight;
     markSeen(t);
@@ -427,8 +449,8 @@ function renderTalk() {
  */
 function placeReply(held) {
   const form = el("reply");
-  const id = mobile() ? state.talk : state.replying;
-  const home = mobile() ? el("talk") : el("threads").querySelector(`.slot[data-id="${id}"]`);
+  const id = mobile ? state.talk : state.replying;
+  const home = mobile ? el("talk") : el("threads").querySelector(`.slot[data-id="${id}"]`);
   form.hidden = !id || !home;
   if (form.hidden) return document.body.append(form);
   if (answerFor !== id) {
@@ -444,23 +466,25 @@ function placeReply(held) {
  * Draw the remarks of the still on screen: the numbered marks made on the revision shown or an
  * older one (those dimmed, with "made on rev N"), a resolved one only while it is selected;
  * the draft; the conversation open full screen; and the panel with a card per thread, the
- * resolved ones in a group that is closed until asked for or one of them is selected. The reply
- * form steps out of the cards while they are drawn again, so it is never lost with one.
+ * resolved ones in a group that is closed until asked for or one of them is selected, and
+ * that lets go of the selected one when it is folded. The reply form steps out of the cards
+ * while they are drawn again, so it is never lost with one, and is in the conversation before
+ * that is scrolled to its end.
  */
 function renderRemarks() {
   const list = remarks();
-  const small = mobile();
   const held = document.activeElement === el("answer");
   if (el("reply").parentElement !== el("talk")) document.body.append(el("reply"));
   const open = list.filter((t) => t.status === "open").length;
   const selected = list.find((t) => t.id === state.thread);
-  if (selected && !small) markSeen(selected);
+  if (selected && !mobile) markSeen(selected);
+  if (mobile) placeReply(held);
   renderTalk();
-  const fresh = list.reduce((sum, t) => sum + unread(t, seen, "agent"), 0);
+  const unseen = list.reduce((sum, t) => sum + unread(t, seen, "agent"), 0);
   el("remarks").textContent = list.length ? `Remarks · ${open} open` : "Remarks";
-  el("badge").textContent = fresh;
-  el("badge").hidden = !fresh;
-  el("list").setAttribute("aria-label", fresh ? `Remarks, ${fresh} unread` : "Remarks");
+  el("badge").textContent = unseen;
+  el("badge").hidden = !unseen;
+  el("list").setAttribute("aria-label", unseen ? `Remarks, ${unseen} unread` : "Remarks");
   for (const id of ["remarks", "list"]) el(id).setAttribute("aria-pressed", String(state.panel));
   for (const id of ["remark", "arm"]) el(id).setAttribute("aria-pressed", String(state.armed));
   el("hint").hidden = !state.armed;
@@ -493,8 +517,11 @@ function renderRemarks() {
     const group = node("details", "sunk");
     group.open = state.sunk || done.some(([t]) => t.id === state.thread);
     const summary = node("summary", "", `Resolved (${done.length})`);
-    summary.onclick = () => {
+    summary.onclick = (e) => {
+      e.preventDefault();
       state.sunk = !group.open;
+      if (!state.sunk && selected && selected.status !== "open") unselect();
+      else render();
     };
     group.append(summary, ...done.map(([, card]) => card));
     el("threads").append(group);
@@ -524,7 +551,7 @@ function box() {
  */
 function layoutStage() {
   const stage = el("stage");
-  if (!mobile()) {
+  if (!mobile) {
     for (const side of ["width", "left", "top"]) stage.style[side] = "";
     return;
   }
@@ -547,7 +574,7 @@ function render() {
   const some = stills.length > 0;
   el("empty").hidden = some;
   el("stage").hidden = !some;
-  for (const id of ["prev", "next", "mark", "bar", "place"]) el(id).hidden = !some;
+  for (const id of ["prev", "next", "mark", "bar", "place", "dock"]) el(id).hidden = !some;
   el("bar").classList.toggle("up", state.more);
   el("strip").classList.toggle("up", state.overview);
   el("shade").hidden = !state.more && !state.overview;
@@ -602,12 +629,12 @@ function render() {
   el("open").href = url;
   thumbs.forEach((t, i) => {
     const mark = stills[i].mark;
-    t.hidden = !mobile() && !state.all && mark.reviewed && i !== at;
+    t.hidden = !mobile && !state.all && mark.reviewed && i !== at;
     t.classList.toggle("on", i === at);
     t.classList.toggle("done", mark.reviewed);
     t.classList.toggle("changed", mark.changed);
   });
-  if (!mobile()) thumbs[at].scrollIntoView({ block: "nearest", inline: "center" });
+  if (!mobile) thumbs[at].scrollIntoView({ block: "nearest", inline: "center" });
   if (location.hash !== `#${s.name}`) history.replaceState(history.state, "", `#${s.name}`);
   for (const delta of [1, -1]) new Image().src = imageUrl(stills[step(stills, at, delta, state.all)].revs.at(-1));
   if (index > 0) new Image().src = imageUrl(s.revs[index - 1]);
@@ -626,13 +653,14 @@ function select(id) {
   render();
   el("threads").querySelector(`.slot[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
   const anchor = state.threads.find((t) => t.id === id)?.anchor;
-  if (mobile() && anchor) reveal(anchor);
+  if (mobile && anchor) reveal(anchor);
   else el("marks").querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: PHONE.matches ? "start" : "nearest" });
 }
 
-/** Let go of the selected thread, folding its card. */
+/** Let go of the selected thread and of a reply being written, folding its card. */
 function unselect() {
   state.thread = null;
+  state.replying = null;
   render();
 }
 
@@ -641,7 +669,7 @@ function unselect() {
  * desktop one the reply form opens under its card, or closes when it was there.
  */
 function answer(id) {
-  if (mobile()) return openTalk(id, true);
+  if (mobile) return openTalk(id, true);
   state.replying = state.replying === id ? null : id;
   state.thread = id;
   state.panel = true;
@@ -689,8 +717,7 @@ function jump() {
   state.rev = t.rev;
   state.compare = false;
   render();
-  const still = el("still");
-  if (still.complete && still.naturalWidth) view = viewOn(t.anchor, box());
+  if (loaded(el("still"))) view = viewOn(t.anchor, box());
   else aim = t.anchor;
   layoutStage();
 }
@@ -720,9 +747,9 @@ function toast(text, undo) {
 
 /** Make the reply box as tall as what is written in it, up to a limit past which it scrolls. */
 function grow() {
-  const box = el("answer");
-  box.style.height = "auto";
-  box.style.height = `${Math.min(box.scrollHeight + 2, MAX_ANSWER_PX)}px`;
+  const field = el("answer");
+  field.style.height = "auto";
+  field.style.height = `${Math.min(field.scrollHeight + 2, MAX_ANSWER_PX)}px`;
 }
 
 /**
@@ -936,19 +963,21 @@ async function postReply() {
 }
 
 /**
- * Resolve thread `id`, or reopen it when it is resolved; the change shows at once. In the
- * mobile layout, where a swipe gets here, it can be undone for five seconds.
+ * Resolve thread `id`, or reopen it when it is resolved; the change shows at once, and a reply
+ * being written under its card is let go. With `undoable`, a resolve can be undone for five
+ * seconds.
  */
-async function setStatus(id) {
+async function setStatus(id, undoable = false) {
   const thread = state.threads.find((t) => t.id === id);
   if (!thread || busy.has(id)) return;
   const type = thread.status === "open" ? "resolve" : "reopen";
   busy.add(id);
   state.swiped = null;
+  if (state.replying === id) state.replying = null;
   render();
   try {
     applyThread(state.threads, await send({ type, thread: id }));
-    if (mobile()) toast(type === "resolve" ? "Remark resolved" : "Remark reopened", () => setStatus(id));
+    if (undoable && type === "resolve") toast("Remark resolved", () => setStatus(id));
   } catch (e) {
     report(`Could not ${type} the remark: ${e.message}`);
   } finally {
@@ -971,7 +1000,7 @@ function toggleArmed() {
   if (!state.stills.length) return;
   state.armed = !state.armed;
   closeSheets();
-  if (state.armed && mobile()) state.panel = false;
+  if (state.armed && mobile) state.panel = false;
   render();
 }
 
@@ -1005,10 +1034,9 @@ function toggleSheet(name) {
  */
 function applyLayout() {
   closeTalk();
-  compact = wantsMobile();
-  const small = compact;
-  root.classList.toggle("mobile", small);
-  el("layout").textContent = small ? "desktop layout" : "phone layout";
+  mobile = wantsMobile();
+  root.classList.toggle("mobile", mobile);
+  el("layout").textContent = mobile ? "desktop layout" : "phone layout";
   closeSheets();
   view = FIT;
   render();
@@ -1016,7 +1044,7 @@ function applyLayout() {
 
 /** Force the other layout on this device, or stop forcing one when that is what its screen gets anyway. */
 function toggleLayout() {
-  const next = mobile() ? "desktop" : "mobile";
+  const next = mobile ? "desktop" : "mobile";
   store(LAYOUT_KEY, (next === "mobile") === SMALL.matches ? "" : next);
   applyLayout();
 }
@@ -1067,8 +1095,8 @@ function endDrag() {
   state.armed = false;
   render();
   if (!state.draft) return;
-  el("body").focus({ preventScroll: PHONE.matches || mobile() });
-  if (mobile()) return reveal(state.draft.anchor);
+  el("body").focus({ preventScroll: PHONE.matches || mobile });
+  if (mobile) return reveal(state.draft.anchor);
   const covered = el("draft").getBoundingClientRect().bottom > el("composer").getBoundingClientRect().top;
   if (PHONE.matches && covered) el("draft").scrollIntoView({ block: "start" });
 }
@@ -1092,7 +1120,7 @@ function liftSheets() {
   const covered = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
   root.style.setProperty("--keyboard", `${covered}px`);
   root.style.setProperty("--top", `${visualViewport.offsetTop}px`);
-  if (state.draft && mobile()) reveal(state.draft.anchor);
+  if (state.draft && mobile) reveal(state.draft.anchor);
   else layoutStage();
 }
 
@@ -1114,7 +1142,7 @@ function span() {
  * into a pan, a swipe or a tap.
  */
 function startTouch(e) {
-  if (!mobile() || e.pointerType === "mouse" || e.target.closest("#composer")) return;
+  if (!mobile || e.pointerType === "mouse" || e.target.closest("#composer")) return;
   fingers.set(e.pointerId, local(e));
   if (fingers.size === 2) {
     drag = null;
@@ -1169,9 +1197,7 @@ function endTouch(e) {
   }
   if (e.type === "pointercancel") return;
   const at = local(e);
-  const dx = at.x - was.at.x;
-  const dy = at.y - was.at.y;
-  if (was.kind === "swipe" && Math.abs(dx) > SWIPE_PX && Math.abs(dx) > 2 * Math.abs(dy)) move(dx < 0 ? 1 : -1);
+  if (was.kind === "swipe") flick(at.x - was.at.x, at.y - was.at.y);
   if (was.kind !== "press") return;
   const near = tapped && Math.hypot(at.x - tapped.at.x, at.y - tapped.at.y) < DOUBLE_TAP_PX;
   const again = near && e.timeStamp - tapped.time < DOUBLE_TAP_MS;
@@ -1187,7 +1213,7 @@ function endTouch(e) {
  * would swallow the next tap.
  */
 function holdPage(e) {
-  if (mobile() && e.cancelable && !e.target.closest("#composer")) e.preventDefault();
+  if (mobile && e.cancelable && !e.target.closest("#composer")) e.preventDefault();
 }
 
 /**
@@ -1195,7 +1221,7 @@ function holdPage(e) {
  * trackpad's pinch sends it, zooms it.
  */
 function wheel(e) {
-  if (!mobile() || e.target.closest("#composer")) return;
+  if (!mobile || e.target.closest("#composer")) return;
   e.preventDefault();
   const at = local(e);
   const to = e.ctrlKey ? at : { x: at.x - e.deltaX, y: at.y - e.deltaY };
@@ -1236,12 +1262,16 @@ el("fresh").onclick = () => {
   render();
 };
 el("entries").onscroll = () => {
-  const entries = el("entries");
-  const t = talking();
-  if (el("fresh").hidden || !t || entries.scrollHeight - entries.scrollTop - entries.clientHeight >= NEAR_PX) return;
+  if (el("entries").clientHeight !== tall) return;
+  pinned = atEnd();
+  if (el("fresh").hidden || !talking() || !pinned) return;
   stick = true;
   render();
 };
+new ResizeObserver(() => {
+  tall = el("entries").clientHeight;
+  if (pinned) el("entries").scrollTop = el("entries").scrollHeight;
+}).observe(el("entries"));
 el("answer").oninput = grow;
 el("send").onpointerdown = (e) => e.preventDefault();
 el("threads").addEventListener("pointerdown", (e) => {
@@ -1328,13 +1358,7 @@ function onSwipe(target, free, done) {
   });
 }
 
-onSwipe(
-  room,
-  () => !mobile() && !state.armed && !state.draft,
-  (dx, dy) => {
-    if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > 2 * Math.abs(dy)) move(dx < 0 ? 1 : -1);
-  }
-);
+onSwipe(room, () => !mobile && !state.armed && !state.draft, flick);
 onSwipe(
   el("talk"),
   (e) => !e.target.closest("#reply") && (!e.target.closest("#entries") || el("entries").scrollTop <= 0),

@@ -281,7 +281,7 @@ export function title(body) {
 }
 
 /** The latest message of `thread`: its last reply, or the remark itself while it has none. */
-export function latest(thread) {
+export function lastMessage(thread) {
   return thread.replies.at(-1) ?? thread;
 }
 

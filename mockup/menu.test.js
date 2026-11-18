@@ -28,7 +28,7 @@ import {
   cropOf,
   edge,
   fitted,
-  latest,
+  lastMessage,
   markOf,
   MAX_ZOOM,
   moved,
@@ -353,8 +353,8 @@ test("zoomed keeps the spot under the fingers: a point marked at 3x lands where 
   const marked = under(close, finger);
   assert.ok(Math.abs(marked.x - spot.x) < 0.01 && Math.abs(marked.y - spot.y) < 0.01, JSON.stringify({ spot, marked }));
   const panned = zoomed(close, finger, { x: 200, y: 300 }, 1, ROOM);
-  const moved = under(panned, { x: 200, y: 300 });
-  assert.ok(Math.abs(moved.x - spot.x) < 1e-9 && Math.abs(moved.y - spot.y) < 1e-9);
+  const dragged = under(panned, { x: 200, y: 300 });
+  assert.ok(Math.abs(dragged.x - spot.x) < 1e-9 && Math.abs(dragged.y - spot.y) < 1e-9);
   const pinched = zoomed(close, { x: 100, y: 100 }, { x: 120, y: 140 }, 1.5, ROOM);
   assert.equal(pinched.z, 4.5);
   assert.deepEqual(zoomed(close, finger, finger, 1 / 3, ROOM), start);
@@ -397,9 +397,9 @@ test("a card's title, latest message, age, chip and unread replies", () => {
   const thread = { id: "t1", rev: 1, status: "open", body: "\n  Label wraps \nsecond line", replies: [] };
   assert.equal(title(thread.body), "Label wraps");
   assert.equal(title("  "), "");
-  assert.equal(latest(thread), thread);
+  assert.equal(lastMessage(thread), thread);
   thread.replies.push(reply(5, "agent"), reply(7, "human"), reply(9, "agent"));
-  assert.equal(latest(thread).seq, 9);
+  assert.equal(lastMessage(thread).seq, 9);
   const ages = [0, 59_000, 60_000, 3_599_000, 3_600_000, 86_400_000 * 3].map((ms) => ago(0, ms));
   assert.deepEqual(ages, ["now", "now", "1m", "59m", "1h", "3d"]);
   assert.equal(chip(thread, 1), "open");
