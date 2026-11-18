@@ -248,8 +248,8 @@ with `preview stills add`, passing the title, the page path as the source and th
 shooting a name again makes its next revision in `/stills`. The skill then runs
 `preview review watch` under a monitor and answers each remark: it reads the thread and its
 marked PNG (`preview review show`), fixes the page, re-shoots the still and replies
-(`preview review reply`); resolving is left to the reviewer. A mockup no longer writes a
-stills page of its own. `mockup.sh stop` runs `preview stop` and deletes the scratch
+(`preview review reply`); resolving is left to the reviewer. The viewer is `/stills`; a
+mockup writes no stills page. `mockup.sh stop` runs `preview stop` and deletes the scratch
 directory, stills and remarks included; the pinned runtime image stays for the next mockup.
 
 Requirements on the machine: `docker`, `tailscale`, the `preview` launcher and `git`,
