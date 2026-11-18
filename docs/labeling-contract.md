@@ -18,6 +18,7 @@ project. All values are strings.
 | `preview.branch`   | **yes**  | —                    | Branch name the preview was built from. |
 | `preview.worktree` | no       | `Root Worktree`      | Worktree name. When the preview comes from the root checkout rather than a linked worktree, it defaults to `Root Worktree`. |
 | `preview.desc`     | no       | `` (empty string)    | Short human-readable description shown alongside the preview. |
+| `preview.review`   | no       | absent               | Path of the preview's review page, relative to `preview.url` (e.g. `/stills`). See [The review label](#the-review-label). |
 
 ### `preview.url` presence is the filter
 
@@ -49,6 +50,7 @@ The engine exposes these variables for the labels:
 - `PREVIEW_LABEL_BRANCH`
 - `PREVIEW_LABEL_WORKTREE`
 - `PREVIEW_LABEL_DESC`
+- `PREVIEW_LABEL_REVIEW` (only when the project's config sets `PREVIEW_REVIEW`)
 
 ## Labels live on a container even when the app is a host process
 
@@ -99,11 +101,29 @@ becomes one preview entry:
 - `preview.worktree` → `worktree` (or `Root Worktree` when the label is absent).
 - `preview.desc` → `desc` (or `""` when absent).
 - `preview.url` → `url`.
+- `preview.review` → `review`, the absolute URL of the review page (the key is absent without the label).
 
 The hub also reads the standard `com.docker.compose.project` label to deduplicate: a stack
 may put the `preview.*` labels on more than one container, but each compose project appears
 in the hub at most once. The same label scopes the hub's **Stop** action: stopping a card
 stops every running container of that compose project, after retracting its share.
+
+## The review label
+
+`preview.review` is optional. Its value is a path, relative to `preview.url`, of a page where
+the preview is reviewed: the `/mockup` runtime's stills viewer stamps `/stills`. The hub then
+adds `review`, the absolute URL `<preview.url><path>`, to the preview, and its card offers a
+**Review** action next to Stop and the share actions, a plain link that opens that URL. A
+preview without the label has no `review` key and no Review action.
+
+The value must start with exactly one `/` and hold only printable ASCII with no space and no
+backslash; a query and a fragment are allowed. Anything else, a full URL included, is ignored,
+so Review can only ever lead to the origin of `preview.url`. The hub keeps no review state and
+never fetches the page: counts, remarks and the reviewed mark live in the preview's own files
+(see [the review contract](review-contract.md)).
+
+A project sets it with `PREVIEW_REVIEW="/stills"` in `.preview/config.sh`; the launcher writes
+the label only then, so an ordinary app preview does not carry it.
 
 ## Edge labels
 

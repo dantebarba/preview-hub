@@ -10,7 +10,8 @@
  * forwarder container carrying `preview.share.*` labels; its public host and
  * expiry are attached to the preview as `share`. The key is never in a label.
  * A preview whose `preview.edge.*` labels say where it can be shared from is
- * marked `shareable`.
+ * marked `shareable`. A preview whose `preview.review` label names a path gets
+ * `review`, the URL of its review page; the hub keeps no review state.
  *
  * Docker access is best-effort: an unreachable engine or a non-OK response yields
  * an empty list (logged to stderr) rather than a thrown error, so the PWA can
@@ -49,6 +50,7 @@ const EDGE_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const EDGE_TARGET = /^[A-Za-z0-9.:[\]-]+:\d{1,5}$/;
 const EDGE_PORT_MIN = 40000;
 const EDGE_PORT_MAX = 59999;
+const REVIEW_PATH = /^\/(?![/\\])[\x21-\x5b\x5d-\x7e]*$/;
 
 /** Call the Docker Engine API at `path`, over the socket or TCP endpoint. */
 export function dockerFetch(path, init = {}) {
@@ -82,13 +84,41 @@ export function edgeOf(labels) {
 }
 
 /**
- * Turn one raw Docker container object into a preview record, or null when it
- * lacks the required `preview.url` label.
+ * Read the URL of a preview's review page out of its `preview.review` label, a
+ * path relative to `preview.url` such as `/stills`: the absolute URL, or null
+ * when the label is missing, is not a plain absolute path, or `preview.url` is
+ * not an http(s) URL. The result always stays on the origin of `preview.url`.
  */
-function toPreview(container) {
+export function reviewOf(labels) {
+  const source = labels || {};
+  const path = source["preview.review"] || "";
+  if (!REVIEW_PATH.test(path)) return null;
+  let base;
+  try {
+    base = new URL(source["preview.url"] || "");
+  } catch {
+    return null;
+  }
+  if (base.protocol !== "http:" && base.protocol !== "https:") return null;
+  let review;
+  try {
+    review = new URL(`${base.origin}${base.pathname.replace(/\/+$/, "")}${path}`);
+  } catch {
+    return null;
+  }
+  return review.origin === base.origin ? review.href : null;
+}
+
+/**
+ * Turn one raw Docker container object into a preview record, or null when it
+ * lacks the required `preview.url` label. `review` is set only when the
+ * preview names a review page.
+ */
+export function toPreview(container) {
   const labels = (container && container.Labels) || {};
   const url = labels["preview.url"];
   if (!url) return null;
+  const review = reviewOf(labels);
   return {
     project: labels["preview.project"] || "",
     branch: labels["preview.branch"] || "",
@@ -98,6 +128,7 @@ function toPreview(container) {
     id: container.Id || "",
     composeProject: labels["com.docker.compose.project"] || "",
     shareable: edgeOf(labels) !== null,
+    ...(review ? { review } : {}),
   };
 }
 

@@ -43,6 +43,7 @@ PREVIEW_SERVE_TARGET="127.0.0.1:${PREVIEW_PORT_1}"
 | -------------------------------- | -------- | --------------------------- | ------- |
 | `PREVIEW_PROJECT`                | **yes**  | —                           | Project name; becomes the hub grouping key and `preview.project`. |
 | `PREVIEW_DESC`                   | no       | empty                       | Short description; becomes `preview.desc`. Write it as `${PREVIEW_DESC:-...}` so a caller can override it per run (see below). |
+| `PREVIEW_REVIEW`                 | no       | empty                       | Path of the preview's review page, relative to its URL (e.g. `/stills`); becomes `preview.review`, and the hub card offers **Review**. |
 | `PREVIEW_COMPOSE_FILE`           | no       | `docker-compose.yml`        | The compose file the launcher layers the labels override on top of. |
 | `PREVIEW_COMPOSE_PROJECT_PREFIX` | no       | a slug of the project name  | Prefix for the isolated compose project name. |
 | `PREVIEW_LABEL_SERVICE`          | **yes**  | —                           | Which compose service carries the `preview.*` labels. It **must** be a service that `on_up` actually brings up. |
@@ -193,11 +194,36 @@ The compose service is the `/mockup` runtime, `ghcr.io/dantebarba/preview-mockup
 name at its own release tag as `PREVIEW_MOCKUP_IMAGE` before the hooks run, and the
 scaffolded compose file reads only that, so no project file names the image or its
 version; set the variable yourself to run another build. It mounts the frontend root
-read-only at `/app` and `.mockup/shots/` read-write, and runs one Vite dev server, the
-same for every project, with its own pinned plugins; the project's Vite config is never
-read. What it serves:
+read-only at `/app` and `.mockup/shots/`, `.mockup/stills/` and `.mockup/review/`
+read-write, and runs one Vite dev server, the same for every project, with its own pinned
+plugins; the project's Vite config is never read. The server starts as root and carries on
+as the owner of `.mockup/`, so what it writes there stays the host user's. What it serves:
 
-- `/`: a menu rendered per request from `.mockup/manifest.json` and the `shots/` listing.
+- `/`: a menu rendered per request from `.mockup/manifest.json` and the stills of
+  `stills/manifest.json` (the bare `shots/` listing for a mockup that has none).
+- `/stills#<name>`: the stills viewer, served from the image; the slug is reserved, so a
+  `pages/stills.html` is not served there. ←/→, Home/End, a swipe and the thumbnail strip
+  step through the stills; a still with several revisions gets a picker and a before/after
+  flip (`b`) against the previous one. The **Reviewed** checkbox (`v`) works like "Viewed"
+  on a pull request's files: stepping skips the reviewed stills unless "show reviewed" is
+  on, the header counts them, and a new revision clears the mark and flags the still
+  "changed since reviewed". A drag on the still draws a box and a tap drops a pin (on a
+  phone once **＋ Remark**, `c`, is on); the remark written next to it opens a thread, shown
+  as a numbered mark and a card in the remarks panel, where it is answered, resolved and
+  reopened.
+- `/_review/`: what the viewer reads and writes, over the store of
+  [`review-contract.md`](review-contract.md). `GET /_review/stills` is
+  `{stills: [{name, title, source, revs, mark}], cursor}`, `mark` being
+  `{rev, viewed, reviewed, changed}`; `GET /_review/threads` is `{threads}`;
+  `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
+  `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
+  every new one within about a second, plus an event named `stills` when the stills change;
+  `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
+  one (415 unless `application/json`, 403 from another origin, 400 for an event the store
+  refuses, 413 for an event over 64 KiB), `author` defaulting to
+  `{"kind":"human","name":"reviewer"}`. A `thread` on a still may carry `annotated`, the
+  still with its mark drawn as a `data:image/png;base64,` URL of at most 8 MiB, kept as
+  `review/annotated/<id>.png` and not stored in the event.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;
@@ -211,7 +237,8 @@ read. What it serves:
 Hot reload goes over Vite's websocket on the same port, which `tailscale serve` proxies:
 React Fast Refresh, Vue and Svelte keep component state on save, CSS is swapped in place,
 an HTML or plain `.js` edit reloads the page. Errors show in Vite's overlay and the
-container log. Every response is `Cache-Control: no-store`.
+container log. Every response is `Cache-Control: no-store`, but a still's revision
+(`/stills/<name>/<n>.png`), which never changes.
 
 Not compiled: Angular, whose compiler owns the template format; Svelte before 5, since the
 image pins the Svelte 5 compiler; and route-level features of SvelteKit, Nuxt and Next
@@ -221,10 +248,15 @@ plain pages against the app's compiled CSS.
 
 `on_build` only validates the manifest and that every page file exists, with the runtime
 image and the compose file alone, so the one-off container never shows on the hub.
-`mockup.sh shot <path> <name> [WxH]` captures a still of the live page with
-`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, listed on
-the menu. `mockup.sh stop` runs `preview stop` and deletes the scratch directory; the
-pinned runtime image stays for the next mockup.
+`mockup.sh shot <path> <name> [WxH] [title]` captures a still of the live page with
+`zenika/alpine-chrome` on the host network (390×844 by default) into `shots/`, then adds it
+with `preview stills add`, passing the title, the page path as the source and the size, so
+shooting a name again makes its next revision in `/stills`. The skill then runs
+`preview review watch` under a monitor and answers each remark: it reads the thread and its
+marked PNG (`preview review show`), fixes the page, re-shoots the still and replies
+(`preview review reply`); resolving is left to the reviewer. The viewer is `/stills`; a
+mockup writes no stills page. `mockup.sh stop` runs `preview stop` and deletes the scratch
+directory, stills and remarks included; the pinned runtime image stays for the next mockup.
 
 Requirements on the machine: `docker`, `tailscale`, the `preview` launcher and `git`,
 plus the project's `node_modules` when pages import its packages.

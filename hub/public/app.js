@@ -13,8 +13,11 @@
  * A preview shared on the internet shows a "Shared" badge with its expiry and
  * public host.
  *
+ * A preview that names a review page offers Review, a plain link to it among
+ * the card's actions; the hub holds no review state.
+ *
  * A right-click (or Delete on a focused card) or a left swipe slides the card
- * aside to reveal its actions: Stop, which retracts any share first, and, when
+ * aside to reveal its actions: Review when the preview has one, Stop, which retracts any share first, and, when
  * the hub has share settings, Share (a dialog picks the duration and confirms
  * credential files, then copies the link), or Copy link and Unshare for a
  * shared preview. The link, key included, is fetched only when a share
@@ -36,6 +39,7 @@ const DEFAULT_POLL_MS = 10000;
 const MIN_POLL_MS = 1000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ACTION_WIDTH = 84;
+const CARD_PEEK = 48;
 const SWIPE_SLOP = 8;
 
 const appEl = document.getElementById("app");
@@ -57,6 +61,7 @@ const busy = new Map();
 const failed = new Map();
 
 const ACTIONS = {
+  review: { label: "Review", busyLabel: "Review", tone: "muted" },
   share: { label: "Share", busyLabel: "Sharing…", tone: "accent" },
   copy: { label: "Copy link", busyLabel: "Copying…", tone: "accent" },
   unshare: { label: "Unshare", busyLabel: "Unsharing…", tone: "muted" },
@@ -187,7 +192,8 @@ function applySlotState(slot) {
 
   for (const button of slot.querySelectorAll(".slot__action")) {
     const key = button.dataset.action;
-    button.disabled = Boolean(action);
+    if (button.tagName === "A") button.setAttribute("aria-disabled", String(Boolean(action)));
+    else button.disabled = Boolean(action);
     if (action === key) button.textContent = ACTIONS[key].busyLabel;
     else if (failed.get(id) === key) button.textContent = "Retry";
     else button.textContent = ACTIONS[key].label;
@@ -439,10 +445,38 @@ function copyLink(id) {
   });
 }
 
-/** Pick the actions a card offers: share controls when this hub can share, then Stop. */
+/**
+ * Pick the actions a card offers: Review when the preview names a review page,
+ * share controls when this hub can share, then Stop.
+ */
 function actionsFor(source) {
-  if (liveShare(source.share)) return shareOn ? ["copy", "unshare", "stop"] : ["unshare", "stop"];
-  return shareOn ? ["share", "stop"] : ["stop"];
+  const review = safeUrl(source.review) ? ["review"] : [];
+  if (liveShare(source.share)) return [...review, ...(shareOn ? ["copy", "unshare"] : ["unshare"]), "stop"];
+  return [...review, ...(shareOn ? ["share"] : []), "stop"];
+}
+
+/** Build one action of a card: a link for Review, a button for the rest. */
+function createAction(key, id, branch, source, handlers) {
+  const label = ACTIONS[key].label;
+  let node;
+  if (key === "review") {
+    node = el("a", "slot__action", label);
+    node.href = safeUrl(source.review);
+    node.target = "_blank";
+    node.rel = "noopener noreferrer";
+    node.addEventListener("click", (event) => {
+      if (busy.has(id)) event.preventDefault();
+      else setOpen(null);
+    });
+  } else {
+    node = el("button", "slot__action", label);
+    node.type = "button";
+    node.addEventListener("click", handlers[key]);
+  }
+  node.dataset.action = key;
+  node.dataset.tone = ACTIONS[key].tone;
+  node.setAttribute("aria-label", `${label} preview ${branch}`);
+  return node;
 }
 
 /**
@@ -484,7 +518,7 @@ function attachGestures(slot, card, id, width) {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      base: openId === id ? -width : 0,
+      base: openId === id ? -Math.min(width, slot.clientWidth - CARD_PEEK) : 0,
       dx: 0,
       swiping: false,
     };
@@ -536,6 +570,7 @@ function createSlot(preview) {
   slot.dataset.id = id;
   slot.style.setProperty("--action-w", `${width}px`);
   slot.style.setProperty("--action-each", `${ACTION_WIDTH}px`);
+  slot.style.setProperty("--card-peek", `${CARD_PEEK}px`);
 
   const branch = str(source.branch) || "unknown";
   const handlers = {
@@ -545,15 +580,7 @@ function createSlot(preview) {
     stop: () => stopPreview(id),
   };
   const actions = el("div", "slot__actions");
-  for (const key of keys) {
-    const button = el("button", "slot__action", ACTIONS[key].label);
-    button.type = "button";
-    button.dataset.action = key;
-    button.dataset.tone = ACTIONS[key].tone;
-    button.setAttribute("aria-label", `${ACTIONS[key].label} preview ${branch}`);
-    button.addEventListener("click", handlers[key]);
-    actions.appendChild(button);
-  }
+  for (const key of keys) actions.appendChild(createAction(key, id, branch, source, handlers));
 
   slot.append(actions, card);
   attachGestures(slot, card, id, width);

@@ -7,11 +7,16 @@
  * `node_modules` (bare imports resolve by walking up from the importer), `.env*`,
  * `tsconfig.json`/`jsconfig.json` paths and `postcss.config.*`. Vite's cache goes to /tmp.
  *
+ * The one thing it writes in the project is the review store, `.mockup/stills/` and
+ * `.mockup/review/`, which the `preview` CLI on the host writes too. So a server started as
+ * root, as in the image, carries on as the owner of `.mockup/`: what it writes there stays the
+ * host user's.
+ *
  *   node server.mjs            serve on PORT (default 80) with hot module replacement
  *   node server.mjs --check    validate manifest.json and its pages, then exit
  */
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -238,6 +243,25 @@ async function viteConfig({ app, port, hosts, cacheDir }) {
   };
 }
 
+/**
+ * Who a server started by `uid` should run as: the `{ uid, gid }` owning `scratch` when `uid`
+ * is root and the owner is not, else null to stay as it is.
+ */
+export function scratchOwner(scratch, uid = process.getuid?.()) {
+  if (uid !== 0 || !existsSync(scratch)) return null;
+  const owner = statSync(scratch);
+  return owner.uid === 0 ? null : { uid: owner.uid, gid: owner.gid };
+}
+
+/** Give up root for the owner of the scratch dir of `app`, when `scratchOwner` names one. */
+function dropPrivileges(app) {
+  const owner = scratchOwner(scratchDir(app));
+  if (!owner) return;
+  process.setgroups([owner.gid]);
+  process.setgid(owner.gid);
+  process.setuid(owner.uid);
+}
+
 /** Start the server; resolves to the Vite dev server once it listens. */
 export async function start({
   app = APP,
@@ -246,6 +270,7 @@ export async function start({
   cacheDir = process.env.MOCKUP_CACHE_DIR || "/tmp/vite",
 } = {}) {
   process.chdir(app);
+  dropPrivileges(app);
   const server = await createServer(await viteConfig({ app, port, hosts, cacheDir }));
   await server.listen();
   return server;

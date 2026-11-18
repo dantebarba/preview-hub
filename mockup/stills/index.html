@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stills</title>
+  <link rel="stylesheet" href="/_review/viewer.css">
+</head>
+<body>
+  <header>
+    <a id="menu" href="/" aria-label="Back to the menu" title="Back to the menu">☰</a>
+    <button id="prev" aria-label="Previous still" title="Previous still (←)">←</button>
+    <button id="next" aria-label="Next still" title="Next still (→)">→</button>
+    <b id="title"></b>
+    <span id="flag" hidden>changed since reviewed</span>
+    <span id="count"></span>
+    <label id="mark" title="Mark this still reviewed (v)"><input type="checkbox" id="viewed"> Reviewed</label>
+  </header>
+  <div id="bar">
+    <label id="revs" hidden>rev <select id="rev" aria-label="Revision"></select></label>
+    <button id="compare" hidden aria-pressed="false" title="Flip to the previous revision and back (b)">before / after</button>
+    <span id="shown"></span>
+    <button id="remark" aria-pressed="false" title="Mark an area of the still and comment on it (c)">＋ Remark</button>
+    <button id="remarks" aria-pressed="false" title="The remarks on this still">Remarks</button>
+    <label id="filter"><input type="checkbox" id="all"> show reviewed</label>
+    <a id="open" target="_blank" rel="noopener">open full size</a>
+  </div>
+  <p id="hint" hidden>Drag a box on the still, or tap it for a pin.</p>
+  <p id="error" role="alert" hidden></p>
+  <div id="work">
+    <main>
+      <div id="stage">
+        <img id="still" alt="" draggable="false">
+        <div id="marks"></div>
+        <div id="draft" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+        <form id="composer" hidden>
+          <textarea id="body" rows="3" maxlength="10000" required aria-label="Remark" placeholder="What is wrong here?"></textarea>
+          <div class="row">
+            <span id="where"></span>
+            <button type="button" id="cancel">Cancel</button>
+            <button id="post" class="go">Post</button>
+          </div>
+        </form>
+      </div>
+      <p id="empty" hidden>No stills yet.</p>
+    </main>
+    <aside id="panel" aria-label="Remarks" hidden>
+      <div id="panel-head">
+        <b id="panel-title">Remarks</b>
+        <button id="close" aria-label="Close the remarks">×</button>
+      </div>
+      <div id="threads"></div>
+      <form id="reply" hidden>
+        <textarea id="answer" rows="2" maxlength="10000" required aria-label="Reply" placeholder="Reply…"></textarea>
+        <div class="row">
+          <button type="button" id="status">Resolve</button>
+          <button id="send" class="go">Reply</button>
+        </div>
+      </form>
+    </aside>
+  </div>
+  <nav id="strip" aria-label="Stills"></nav>
+  <script type="module" src="/_review/viewer.js"></script>
+</body>
+</html>

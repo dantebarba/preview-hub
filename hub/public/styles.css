@@ -460,7 +460,7 @@ body[data-loading] .topbar::before {
 }
 
 .slot[data-open] > .card {
-  translate: calc(var(--action-w) * -1) 0;
+  translate: max(calc(var(--action-w) * -1), calc(var(--card-peek) - 100%)) 0;
 }
 
 .slot[data-dragging] > .card {
@@ -483,6 +483,7 @@ body[data-loading] .topbar::before {
   inset: 0;
   display: flex;
   justify-content: flex-end;
+  padding-left: var(--card-peek);
   border-radius: var(--r-card);
   overflow: hidden;
   background: var(--surface-3);
@@ -496,7 +497,8 @@ body[data-loading] .topbar::before {
 }
 
 .slot__action {
-  flex: 0 0 var(--action-each);
+  flex: 0 1 var(--action-each);
+  min-width: 0;
   padding: 0 0.4rem;
   border: 0;
   color: #fff;
@@ -506,6 +508,13 @@ body[data-loading] .topbar::before {
   font-weight: 600;
   line-height: 1.2;
   cursor: pointer;
+}
+
+a.slot__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .slot__action[data-tone="danger"] {
@@ -532,7 +541,12 @@ body[data-loading] .topbar::before {
   outline-offset: -4px;
 }
 
-.slot__action:disabled {
+.slot__action[aria-disabled="true"] {
+  pointer-events: none;
+}
+
+.slot__action:disabled,
+.slot__action[aria-disabled="true"] {
   cursor: progress;
   opacity: 0.8;
 }
