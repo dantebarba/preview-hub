@@ -445,7 +445,8 @@ function threadCard(t, n) {
     const when = ago(Date.parse(m.at), Date.now());
     said.append(node("b", m.author.kind, m.author.name), `${how} · ${when}: “${m.body}”`);
     last.append(said);
-    card.append(last, ...dotsOf(busyOn(t.id)), foot);
+    const busy = dotsOf(busyOn(t.id));
+    card.append(...(busy.length ? busy : [last]), foot);
   }
   card.onclick = () => {
     if (mobile) openTalk(t.id);

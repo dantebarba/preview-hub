@@ -108,8 +108,8 @@ added; each still's variants are in the order they were first shot:
 | `source.path` | The mockup page the still was shot from (`/invite`), or null. |
 | `variants`    | Every variant: `key`, `viewport` and `tags` as above, and `revs`, every revision, oldest first: `n` from 1, `file` the PNG, `at` when it was added (ISO 8601, UTC). The last one is the variant's current revision. |
 
-A still's **first variant** is the first in its list. An event about a still that names no
-variant means that one.
+A still's **first variant** is the first in its list with a revision. An event about a still
+that names no variant means that one.
 
 The manifest is rewritten whole on every change: written to a temporary file next to it,
 then renamed over it, so a reader always sees either the old or the new list, never a

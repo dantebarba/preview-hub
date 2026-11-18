@@ -166,7 +166,7 @@ header .working { margin: 0; white-space: nowrap; }
 .mobile #bar > * { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 0; padding: 0 4px; border: 0; border-radius: 0; background: none; color: #eee; text-align: left; text-decoration: none; }
 .mobile #bar > * + * { border-top: 1px solid #2a2a2e; }
 .mobile #bar > [aria-pressed="true"] { color: #fcd34d; }
-.mobile #bar select { margin-left: auto; min-height: 40px; font-size: 16px; }
+.mobile #bar select { margin-left: auto; min-height: 44px; font-size: 16px; }
 .mobile #bar input { width: 22px; height: 22px; margin: 0; }
 .mobile #remark, .mobile #remarks, .mobile #shown:empty, .mobile #bar:not(.up), .mobile nav:not(.up) { display: none; }
 .mobile nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; padding-top: 12px; }
@@ -203,11 +203,11 @@ header .working { margin: 0; white-space: nowrap; }
 #entries .entry.human { margin-left: auto; background: #3b1220; }
 #fresh { position: absolute; left: 50%; translate: -50% 0; bottom: 8px; border-radius: 999px; border-color: #38bdf8; color: #7dd3fc; box-shadow: 0 4px 16px #000a; }
 #talk #reply { flex: none; margin: 0; padding: 8px 8px max(8px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); background: #1b1b1f; border-top: 1px solid #333; }
-.mobile #variant { display: block; flex: none; max-width: 96px; min-height: 0; padding: 1px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; color: #bbb; font-size: 11px; }
+.mobile #variant { display: block; flex: none; max-width: 96px; min-height: 44px; padding: 0 8px; line-height: 42px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; color: #bbb; font-size: 11px; }
 .mobile #variant.fell { border-color: #b45309; color: #fcd34d; }
 .mobile header .what { display: none; }
 .mobile #bar .seg { flex-wrap: wrap; gap: 6px; padding: 6px 4px; }
-.mobile #bar .seg button { min-height: 40px; padding: 0 14px; font-size: 14px; }
+.mobile #bar .seg button { min-height: 44px; padding: 0 14px; font-size: 14px; }
 .mobile .as { min-height: 44px; }
 .mobile #who { place-items: end stretch; padding-bottom: var(--keyboard, 0px); }
 .mobile #who-form { width: auto; border-width: 1px 0 0; border-radius: 14px 14px 0 0; padding: 10px 16px max(16px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); box-shadow: 0 -8px 24px #000c; }
