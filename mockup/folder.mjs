@@ -7,22 +7,22 @@
  * The directory is read as a stills source (`source.mjs`), its review kept in `<dir>/.review/`:
  *
  *   GET  /, /stills                    the viewer (`/` redirects to `/stills`)
- *   GET  /_review/stills               as in a mockup, plus the folder's `groups`, `notes`,
- *                                      `about` and `writable`
- *   GET  /_review/threads, /_review/events, viewer assets   as in a mockup (`menu.mjs`)
+ *   GET  /_review/stills, /_review/threads, /_review/events, /_review/about,
+ *        /_review/file/<path>, viewer assets   as `menu.mjs` answers them for a folder source
  *   POST /_review/events               as in a mockup; 403 on a read-only folder
  *   GET  /<file>                       an image of a revision of a still, and nothing else
  *
  * A writable folder keeps the revisions of its images when the server starts, so the first
  * rewrite of an image already shows as rev 2 with before/after; a changed image is kept again
- * as it is seen. Every response is `Cache-Control: no-store` but a kept revision's image, which
- * never changes. A request whose `Host` is not one the server accepts is refused, as Vite does.
+ * as it is seen, by `/_review/stills` and by the event stream's watch of the folder. Every
+ * response is `Cache-Control: no-store` but a kept revision's image, which never changes. A
+ * request whose `Host` is not one the server accepts is refused, as Vite does.
  */
 
-import { createReadStream, statSync, watch } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { eventStream, handleReview, reviewer, reviewStills, sendViewerPage } from "./menu.mjs";
+import { eventStream, handleReview, reviewer, sendViewerPage } from "./menu.mjs";
 import { folder, keepRevisions, openSource, readSource } from "./source.mjs";
 
 const TYPES = {
@@ -34,7 +34,6 @@ const TYPES = {
 };
 const LOCAL = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const KEPT = ".review/revs/";
-const SETTLE_MS = 150;
 const READ_ONLY = "read-only folder: remarks off";
 
 /**
@@ -89,34 +88,6 @@ function sendImage(req, res, root, rel) {
 }
 
 /**
- * Watch the folder `root` for changed images and extras, and call `onChange` once they settle;
- * the review's own files are left out, the event log being followed by the event stream.
- * Returns a function that stops watching, a no-op when the platform cannot watch.
- */
-function watchFolder(root, onChange) {
-  let timer = null;
-  let watcher;
-  try {
-    watcher = watch(root, { recursive: true }, (_type, name) => {
-      const rel = String(name ?? "")
-        .split(path.sep)
-        .join("/");
-      if (rel === ".review" || rel.startsWith(".review/")) return;
-      clearTimeout(timer);
-      timer = setTimeout(onChange, SETTLE_MS);
-    });
-  } catch (e) {
-    console.warn(`[mockup] not watching ${root}: ${e.message}`);
-    return () => {};
-  }
-  watcher.on("error", (e) => console.warn(`[mockup] stopped watching ${root}: ${e.message}`));
-  return () => {
-    clearTimeout(timer);
-    watcher.close();
-  };
-}
-
-/**
  * The request handler of the folder `root`, with `hosts` the names it accepts. `stream` is the
  * live side of its review log (see `eventStream`).
  */
@@ -133,12 +104,7 @@ export function folderHandler({ root, hosts = [], stream }) {
         return res.end();
       }
       if (pathname === "/stills" || pathname === "/stills/") return sendViewerPage(req, res);
-      if (pathname === "/_review/stills" && req.method === "GET") {
-        const source = await openSource(root);
-        const me = who ?? { name: null, via: "share" };
-        const { groups, notes, writable, about } = source;
-        return sendJson(res, 200, { ...reviewStills(store, me.name), me, groups, notes, writable, about });
-      }
+      if (pathname === "/_review/stills" && req.method === "GET") await openSource(root);
       if (pathname === "/_review/events" && req.method === "POST" && !readSource(root).writable) {
         return sendJson(res, 403, { error: READ_ONLY });
       }
@@ -169,14 +135,6 @@ export async function startFolder({ dir, port, hosts = [], host = "0.0.0.0" }) {
   if (readSource(root).writable) await keepRevisions(root);
   const stream = eventStream(folder(root));
   const server = createServer(folderHandler({ root, hosts, stream }));
-  const unwatch = watchFolder(root, async () => {
-    try {
-      await openSource(root);
-    } catch (e) {
-      console.warn(`[mockup] ${root}: ${e.message}`);
-    }
-    stream.notify("stills");
-  });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
@@ -186,7 +144,6 @@ export async function startFolder({ dir, port, hosts = [], host = "0.0.0.0" }) {
   if (!writable) console.warn(`[mockup] ${READ_ONLY}`);
   const close = () =>
     new Promise((resolve) => {
-      unwatch();
       stream.close();
       server.close(() => resolve());
       server.closeAllConnections();

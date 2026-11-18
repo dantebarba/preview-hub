@@ -281,7 +281,7 @@ function imageRefs(line) {
 }
 
 /** The path from `dir` an image reference `target` of a file in `dir` names, or null for a URL. */
-function resolveRef(target) {
+export function resolveRef(target) {
   if (/^[a-z][\w+.-]*:/i.test(target) || target.startsWith("/") || target.startsWith("#")) return null;
   let clean = target.replace(/[?#].*$/, "");
   try {
