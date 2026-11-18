@@ -98,6 +98,20 @@ that still, same name, same variant (`mobile+dark` is `--viewport mobile --tag d
 review reply <id> "Ana, <what changed>"` by the reviewer's name, which ends working
 (`preview review idle` if you stop without replying). After a restart, `watch --since <seq>`.
 
+**Keep the stills** when the work should outlive the mockup (a mockup branch, an epic's
+stills): before stopping, `preview stills export docs/mockups/<topic> --readme`, then commit
+the folder, `.review/` included so the remarks and revisions travel with it. The folder reads
+back as the same stills, revisions and remarks, and `preview stills serve <dir>` reviews it
+later with no mockup running. When unsure whether they should outlive it, ask.
+
+**Remarks on a folder** (an exported one, or any folder of images served with `preview stills
+serve <dir>`): listen with `preview review watch --dir <dir>` under Monitor and answer as
+above, every `preview review` and `preview stills ls` command taking `--dir <dir>`. To fix a
+still, rewrite its image in place under the same file name (`<name>@<variant>.png`, or
+`<name>.png` for `desktop`); the viewer shows it as the next revision. With the mockup still
+up, `mockup.sh shot` and copy the PNG it names over that file. A read-only folder refuses
+every write: say so instead of retrying.
+
 `<skill>/scripts/mockup.sh stop` (on `/mockup stop`) runs `preview stop` and deletes
 `.mockup/`, remarks included (`KEEP=1` keeps it); `git status` then shows nothing from the
 mockup. Do not stop while the reviewer may still be looking.

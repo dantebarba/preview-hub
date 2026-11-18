@@ -345,7 +345,8 @@ services:
 
 A mockup's stills are reviewed in place: the human marks an area of a still and
 comments on it in the viewer, and the agent hears about it and answers from its
-shell. `preview stills` and `preview review` are the agent's side. Run them from
+shell. Any folder of images can be reviewed the same way, with no mockup
+([Any folder of images](#any-folder-of-images)). `preview stills` and `preview review` are the agent's side. Run them from
 the frontend root (they find `.mockup/` and its `mockup-<branch>` identity the way
 `mockup.sh` does) or from inside `.mockup/`. They run the review CLI of the
 `/mockup` runtime image ([`mockup/review-cli.mjs`](mockup/review-cli.mjs)), in
@@ -365,19 +366,6 @@ preview review resolve 3f9a0c1e       # or reopen
 preview review watch --since 12       # one line per new human event, until stopped
 preview stills export docs/mockups/invite --readme   # keep the stills and remarks in a folder
 ```
-
-Any folder of images can be reviewed the same way, git or not, with no `.preview/` and no
-mockup: images are the only requirement.
-
-```sh
-preview stills serve docs/mockups/invite    # a preview of its own: URL, hub card "invite stills", watchdog
-preview stills status docs/mockups/invite   # or stop | share | unshare; the same folder keeps its URL
-preview review watch --dir docs/mockups/invite   # every review command, and stills ls, take --dir
-```
-
-Its remarks live in `<dir>/.review/`, created on the first write; a folder the host user cannot
-write is served read-only, remarks off. The [review contract](docs/review-contract.md#folder-sources)
-has what a folder may add and what `.review/` holds.
 
 A still is one screen with one or more **variants**, each a viewport and free tags with
 revisions of its own: `mobile+dark`, `mobile+light`, `desktop`. The viewport is a preset or a
@@ -452,6 +440,61 @@ agent never wakes on its own replies. `watch` exits non-zero when `.mockup/` is
 removed, and it outlives `preview stop`. Replies, `working` and `idle` are written as
 `{kind: "agent", name: $REVIEW_AUTHOR, via: "cli"}` (default name `agent`). The store and its events
 are specified in [`docs/review-contract.md`](docs/review-contract.md).
+
+#### Any folder of images
+
+Any folder of images can be reviewed the same way, git or not, with no `.preview/` and no
+mockup: **images are the only requirement**. A folder of PNGs, end to end:
+
+1. Serve it: `preview stills serve docs/mockups/invite` prints the URL to review it at
+   (`<url>stills`) and the command the agent listens with. The folder is a preview of its own,
+   with its own Tailscale URL, a hub card "invite stills" with **Review**, and the auto-stop
+   watchdog; the same folder always gets the same URL.
+2. The agent listens: `preview review watch --dir docs/mockups/invite` under a monitor prints
+   each remark the moment it is made, the same lines as for a mockup (above).
+3. The reviewer opens the URL (or the card's **Review**), marks an area of a still and writes
+   a remark.
+4. The agent answers: `preview review reply <thread> "<what changed>" --dir docs/mockups/invite`.
+   To fix the still it rewrites the image in place, under the same file name: the viewer shows
+   it as the next revision, with before/after, without a reload.
+
+```sh
+preview stills serve docs/mockups/invite    # default: the working directory
+preview stills status docs/mockups/invite   # or stop | share | unshare
+preview stills ls --dir docs/mockups/invite      # stills ls and every review command take --dir
+preview review watch --dir docs/mockups/invite   # served or not: --dir reads the folder itself
+```
+
+Everything else in the folder is optional and only adds to the viewer; a missing extra falls
+back silently and a broken one shows as a note line, never an error:
+
+| The folder may also have | It adds |
+| ------------------------ | ------- |
+| `stills.json`, `[{name, title, group?, file?}]` | Titles, order and groups. |
+| `README.md` (or `index.md`) | The order of the images it references, groups from the heading above each, titles from their table row or alt text, and the document itself as the viewer's **About** page. |
+| subfolders of images | A group per subfolder, when neither file above gives groups; `admin/01-list.png` is the still `admin.01-list`. |
+| `name@<variant>.png` | A variant of the still `name`: `onboarding@mobile+dark.png`, `onboarding@desktop.png`. `<variant>` is a variant key (above), `web` or `WxH[@dpr]`; a plain `name.png` is the `desktop` variant. |
+| `stills/manifest.json` | The full format of a mockup's stills, read as declared. |
+
+Images are `png`, `jpg`, `jpeg`, `webp` or `gif`, ordered by name naturally (`2` before `10`)
+and titled from it (`05-invite-user` is "05 invite user"); hidden entries are skipped.
+
+**`.review/`** holds the folder's review: the event log of remarks and replies, the marked
+stills, and every revision of every image (`revs.json` and `revs/`), so a remark on rev 1
+still shows the pixels it was made on once the image is rewritten. Serving a writable folder
+creates it at start; on a folder never served it appears on the first write, and reading never
+creates it. Commit it to keep the remarks and revisions with the folder, or add it to
+`.gitignore` to keep them on this machine.
+
+**Read-only folders.** A folder the host user cannot write (or whose `.review/` they cannot) is
+served read-only: the stills, the README and the existing remarks show, under "read-only
+folder: remarks off", and every write is refused, the viewer's and `--dir`'s alike.
+
+**Keeping a mockup's stills.** `preview stills export <dir> [--readme]` copies a mockup's stills
+into a folder that reads back as the same stills, revisions and remarks: each variant as
+`name@<variant>.png`, `stills.json` with the titles and order, and with `--readme` a README
+table of titles and images. Run it before `/mockup stop`, which deletes `.mockup/`, then commit
+the folder. The [review contract](docs/review-contract.md#folder-sources) has the details.
 
 ## Configuration
 
