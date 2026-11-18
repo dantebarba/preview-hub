@@ -15,8 +15,9 @@ the `/mockup` runtime serves and which gitignores itself:
 
 ```
 .mockup/
-  stills/manifest.json        the stills and their revisions
-  stills/<name>/<n>.png       one file per revision, immutable
+  stills/manifest.json        the stills, their variants and their revisions
+  stills/<name>/<key>/<n>.png one file per revision of a variant, immutable
+  stills/<name>/<n>.png       a revision written before variants, kept where it was
   stills/.lock                held while the manifest is being changed
   review/events.jsonl         append-only event log: the backchannel
   review/.lock                held while an event is being appended
@@ -27,27 +28,74 @@ All paths in the files below are relative to `.mockup/`.
 
 ## Stills
 
-A **still** is a named screenshot of a mockup page, such as `05-invite-user`. A name is 1 to
-100 characters of letters, digits, `.`, `_` and `-`, starting with a letter or digit, so it
-is safe as a directory name and in a URL. Two names that differ only in case are refused,
-since a case-insensitive filesystem would give them one directory.
+A **still** is one named screen of a mockup, such as `05-invite-user`. A name is 1 to 100
+characters of letters, digits, `.`, `_` and `-`, starting with a letter or digit, so it is
+safe as a directory name and in a URL. Two names that differ only in case are refused, since
+a case-insensitive filesystem would give them one directory.
 
-Shooting a still again under the same name makes a new **revision**: rev 1, 2, 3, ... Every
-revision keeps its own file, `stills/<name>/<n>.png`, which is never rewritten, so a remark
-made on rev 1 still points at the pixels it was made on after rev 2 lands.
+A still has one or more **variants**: the same screen shot at a viewport, with free tags,
+such as `mobile+dark` and `desktop`. Shooting a variant again makes its next **revision**:
+rev 1, 2, 3, ..., counted per variant. Every revision keeps its own file,
+`stills/<name>/<key>/<n>.png`, which is never rewritten, so a remark made on rev 1 still
+points at the pixels it was made on after rev 2 lands.
+
+### Viewports
+
+| Preset     | CSS size  | Pixel ratio | Device |
+| ---------- | --------- | ----------- | ------ |
+| `mobile`   | 390×844   | 3 | touch, mobile user agent |
+| `mobile-s` | 375×812   | 3 | touch, mobile user agent (iPhone mini) |
+| `tablet`   | 820×1180  | 2 | touch, tablet user agent |
+| `desktop`  | 1440×900  | 1 | mouse; `web` is an alias |
+
+A **custom** viewport is given as `WxH[@dpr][+touch]`: `360x740`, `360x740@2.5+touch`. Its
+pixel ratio is 1 unless given; `+touch` makes it a touch device with a mobile user agent. One
+that is exactly a preset (`1440x900`, `390x844@3+touch`) is that preset.
+
+A variant's **viewport** is stored as `{preset, width, height, dpr, mobile, fullPage}`:
+`preset` is the preset's name or `"custom"`, `mobile` is true for a touch device and
+`fullPage` true when the whole document was captured, beyond the viewport.
+
+### Tags
+
+Tags are free labels, 1 to 32 lowercase letters, digits, `.`, `_` and `-`: `dark`, `light`,
+`rtl`, `es`, `logged-out`. `dark` and `light` set `prefers-color-scheme` when the still is
+shot; the others only label it.
+
+### Variant keys
+
+A variant's **key** is `<viewport>[+<tag>...]`, the tags sorted, so the same viewport and
+tags always give the same key. The viewport part is the preset's name, or
+`custom-<W>x<H>[@<dpr>][-touch]` (the pixel ratio left out when it is 1):
+
+| Viewport and tags            | Key |
+| ---------------------------- | --- |
+| `mobile`, `dark`             | `mobile+dark` |
+| `web`                        | `desktop` |
+| `mobile`, `rtl` and `dark`   | `mobile+dark+rtl` |
+| `360x740@2+touch`, `es`      | `custom-360x740@2-touch+es` |
+
+### The manifest
 
 `stills/manifest.json` is a JSON list, one entry per still, in the order they were first
-added:
+added; each still's variants are in the order they were first shot:
 
 ```json
 [
   {
     "name": "05-invite-user",
     "title": "Invite a user",
-    "source": { "path": "/invite", "size": "390x844" },
-    "revs": [
-      { "n": 1, "file": "stills/05-invite-user/1.png", "at": "2026-11-17T10:02:11.120Z" },
-      { "n": 2, "file": "stills/05-invite-user/2.png", "at": "2026-11-17T10:31:40.007Z" }
+    "source": { "path": "/invite" },
+    "variants": [
+      {
+        "key": "mobile+dark",
+        "viewport": { "preset": "mobile", "width": 390, "height": 844, "dpr": 3, "mobile": true, "fullPage": false },
+        "tags": ["dark"],
+        "revs": [
+          { "n": 1, "file": "stills/05-invite-user/mobile+dark/1.png", "at": "2026-11-17T10:02:11.120Z" },
+          { "n": 2, "file": "stills/05-invite-user/mobile+dark/2.png", "at": "2026-11-17T10:31:40.007Z" }
+        ]
+      }
     ]
   }
 ]
@@ -58,12 +106,34 @@ added:
 | `name`        | The still's name, its key. |
 | `title`       | Human-readable title; the name until one is given. |
 | `source.path` | The mockup page the still was shot from (`/invite`), or null. |
-| `source.size` | The viewport it was shot at, `WxH`, or null. |
-| `revs`        | Every revision, oldest first: `n` from 1, `file` the PNG, `at` when it was added (ISO 8601, UTC). The last one is the current revision. |
+| `variants`    | Every variant: `key`, `viewport` and `tags` as above, and `revs`, every revision, oldest first: `n` from 1, `file` the PNG, `at` when it was added (ISO 8601, UTC). The last one is the variant's current revision. |
+
+A still's **first variant** is the first in its list. An event about a still that names no
+variant means that one.
 
 The manifest is rewritten whole on every change: written to a temporary file next to it,
 then renamed over it, so a reader always sees either the old or the new list, never a
 partial one.
+
+### Upgrading a v1 manifest
+
+Before variants, an entry had its revisions at the top level and its size in its source:
+
+```json
+{ "name": "01-organization", "title": "Organization", "source": { "path": "/org", "size": "1440x1250" },
+  "revs": [{ "n": 1, "file": "stills/01-organization/1.png", "at": "2026-11-18T14:35:37.223Z" }] }
+```
+
+Readers accept both shapes. A v1 entry (one with `revs` and no `variants`) is read as one
+variant, with no tags, whose viewport comes from `source.size`: `desktop` when it is 1440
+wide at the preset's height (`1440x900`), else the custom viewport `<W>x<H>` at pixel ratio
+1, key `custom-<W>x<H>`; an entry without a size is read as `desktop`. Its revisions and
+their files stay where they are, `stills/<name>/<n>.png`.
+
+Reading never rewrites the manifest. The first write to a v1 still (a new revision of any of
+its variants) rewrites that entry in v2 shape, `source.size` dropped and its old revisions
+moved, as they are, into its variant; the other entries are left as they were. A new revision
+of the upgraded variant takes the next number and lands in `stills/<name>/<key>/<n>.png`.
 
 ## Events
 
@@ -86,7 +156,7 @@ the state of the review (open threads, reviewed stills) is a fold over the log.
 | `id`          | The event's id, unique in the log: 8 lowercase hex characters from the reference writer; a reader accepts any 1 to 64 letters, digits, `_` and `-`. A `thread` event's id is the thread's id. |
 | `type`        | One of the types below. |
 | `at`          | When it was appended: ISO 8601 date and time with a zone, `YYYY-MM-DDTHH:MM[:SS[.sss]]` then `Z` or `±HH:MM`. The reference writer always writes UTC (`Z`) with milliseconds. |
-| `author`      | `{kind, name}`: `kind` is `"human"` (someone in the viewer) or `"agent"` (the agent answering, or any other program); `name` a string of at most 100 characters, not empty or only whitespace. |
+| `author`      | `{kind, name, via?}`: `kind` is `"human"` (someone in the viewer) or `"agent"` (the agent answering, or any other program); `name` a string of at most 100 characters, not empty or only whitespace; `via`, when present, how the author came: `"tailnet"` (a user on the tailnet), `"share"` (a guest on a share link) or `"cli"` (the `preview` CLI). |
 
 An event carries exactly the fields of its type; any other field makes the line malformed.
 
@@ -94,20 +164,24 @@ An event carries exactly the fields of its type; any other field makes the line 
 
 | Type       | Extra fields                     | Meaning |
 | ---------- | -------------------------------- | ------- |
-| `thread`   | `still`, `rev`, `anchor?`, `body` | Opens a thread: a remark on revision `rev` of `still`, on the area `anchor` (the whole still when absent). |
+| `thread`   | `still`, `variant?`, `rev`, `anchor?`, `body` | Opens a thread: a remark on revision `rev` of a variant of `still`, on the area `anchor` (the whole still when absent). |
 | `reply`    | `thread`, `body`                 | Answers thread `thread`. |
 | `resolve`  | `thread`                         | Marks thread `thread` resolved. |
 | `reopen`   | `thread`                         | Marks thread `thread` open again. |
-| `viewed`   | `still`, `rev`                   | Marks revision `rev` of `still` reviewed. |
-| `unviewed` | `still`, `rev`                   | Clears the reviewed mark of `still`; `rev` is the revision on screen. |
+| `viewed`   | `still`, `variant?`, `rev`       | Marks revision `rev` of a variant of `still` reviewed, by the event's author. |
+| `unviewed` | `still`, `variant?`, `rev`       | Clears the author's reviewed mark of a variant of `still`; `rev` is the revision on screen. |
+| `working`  | `thread?`, `still?`, `variant?`, `note?` | The agent is working on thread `thread`, or on `still` (a variant of it with `variant`), or on something it does not name; `note` says on what. See [Working](#working). |
+| `idle`     | `thread?`                        | The agent stopped working on thread `thread`, or, with no `thread`, on everything. |
 
-- `still` is a still name from the manifest and `rev` one of its revision numbers, at the
-  time the event was appended.
+- `still` is a still name from the manifest, `variant` the key of one of its variants and
+  `rev` one of that variant's revision numbers, at the time the event was appended.
+- `variant` absent means the still's first variant, so logs written before variants keep
+  their meaning. `variant` goes only with a `still`.
 - `still: null` on a `thread` is a **general thread**, about no still: it has no `rev` and no
   `anchor`. Reserved for chat in a later version; a reader may ignore it.
 - `thread` is the `id` of a `thread` event earlier in the log.
-- `body` is a non-empty string (not only whitespace) of at most 10000 characters, plain
-  text, shown as written.
+- `body` and `note` are non-empty strings (not only whitespace) of at most 10000 characters,
+  plain text, shown as written.
 
 ### Anchors
 
@@ -163,7 +237,7 @@ torn line becomes one malformed line and the next event is whole.
 ## Folds
 
 Readers derive the review's state from the whole log; the reference implementation calls
-these `threads(dir)` and `reviewed(dir)`.
+these `threads(dir)`, `reviewMarks(dir)` with `reviewed(dir, by)`, and `working(dir, now)`.
 
 **Threads.** One per `thread` event, in log order: its still, rev, anchor, body, author and
 time; `status` `"open"` when opened, then set by each `resolve` (`"resolved"`) and `reopen`
@@ -171,9 +245,16 @@ time; `status` `"open"` when opened, then set by each `resolve` (`"resolved"`) a
 does not change the status. An open thread is one whose last resolve was followed by a
 reopen, or that was never resolved.
 
-**Reviewed marks.** Per still in the manifest: the last `viewed` event for it sets the
-reviewed revision, an `unviewed` after it clears it. With `rev` the still's current revision
-and `viewed` the reviewed revision:
+**Threads** carry their `variant`: the one their event names, else the still's first
+variant (null for a general thread).
+
+**Reviewed marks are per reviewer.** For each author name, per still in the manifest and per
+variant: that author's last `viewed` event for it sets the reviewed revision, and their
+`unviewed` after it clears it. Another author's events never touch it, so a guest marking
+stills reviewed hides nothing from the owner. "Reviewed" always means reviewed by someone in
+particular: the viewer's own identity, or the reviewer `preview stills ls --as` names. The
+fold also gives the **reviewers**, every author with a mark that holds. With `rev` the
+variant's current revision and `viewed` the revision that reviewer marked:
 
 | State                       | When |
 | --------------------------- | ---- |
@@ -184,12 +265,28 @@ and `viewed` the reviewed revision:
 So after a round of fixes, the stills to step through are the ones not reviewed or changed
 since reviewed.
 
+### Working
+
+The agent's **working state** tells the reviewer it has seen a remark and is on it. It is a
+fold too, `working(dir, now)` in the reference implementation:
+
+- A `working` event starts a working state, one per thread, or per still and variant, or one
+  with neither; another `working` for the same one keeps it on.
+- It ends with the agent's next `reply` on that thread, its next `idle` on that thread, or an
+  `idle` with no thread, which ends every one.
+- It expires 10 minutes after its last `working`, so an agent that died does not look busy
+  for good.
+
+Each working state reads as `{thread, still, variant, note, author, since, at, until}`:
+`since` when it started, `at` its last `working`, `until` when it expires, and null for what
+the agent did not name. Only events of `kind: "agent"` end one.
+
 ## Who writes what
 
 | File                        | Written by | Read by |
 | --------------------------- | ---------- | ------- |
-| `stills/manifest.json`, `stills/<name>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill | the viewer, `preview stills ls`, the agent |
-| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `resolve`, `reopen`, `viewed`, `unviewed`), `preview review reply\|resolve\|reopen` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
+| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, the `/mockup` skill's `mockup.sh shot` | the viewer, `preview stills ls`, the agent |
+| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `resolve`, `reopen`, `viewed`, `unviewed`), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
 | `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
 Readers need no lock. Writers go through the reference implementation or follow its
@@ -202,14 +299,15 @@ same files at once:
    own, delete it if what moved is still older than 10 seconds (else hard-link it back), and
    retry.
 2. **Validate** the event against the schema, and that its thread exists in the log and its
-   still and rev in the manifest.
+   still, variant (the first when it names none) and rev in the manifest.
 3. **Assign** `seq` (one above the log's last good `seq`, 1 for an empty log), a fresh `id`
    and `at`.
 4. **Append** the line, `\n`-terminated, with a single `write` on a descriptor opened with
    `O_APPEND`, preceded by a `\n` when the file does not end with one.
 5. **Release** the lock by removing it, only if it is still the file you created (same inode).
 
-Adding a still under `stills/.lock`: copy the PNG to `stills/<name>/<n>.png` with `n` one past
-the still's last revision, then rewrite the manifest through a temporary file and a rename.
+Adding a still under `stills/.lock`: copy the PNG to `stills/<name>/<key>/<n>.png` with `n`
+one past the variant's last revision, then rewrite the manifest through a temporary file and
+a rename, the still's entry in v2 shape.
 The file lands before the manifest names it, so a reader never sees a revision without its
 image.

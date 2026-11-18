@@ -3,8 +3,11 @@
  *
  * Everything lives in the mockup's scratch dir (`<app>/.mockup/`, called `dir` below):
  *
- *   stills/manifest.json        [{ name, title, source: { path, size }, revs: [{ n, file, at }] }]
- *   stills/<name>/<n>.png       one file per revision, immutable
+ *   stills/manifest.json        [{ name, title, source: { path }, variants: [{ key, viewport, tags,
+ *                                 revs: [{ n, file, at }] }] }]; a v1 entry, { source: { path,
+ *                                 size }, revs }, is read as one variant (see `upgraded`)
+ *   stills/<name>/<key>/<n>.png one file per revision of a variant, immutable; a v1 revision
+ *                               stays at stills/<name>/<n>.png
  *   review/events.jsonl         append-only event log, one JSON event per line
  *   review/annotated/<id>.png   a thread's still with its mark drawn, written by the viewer
  *
@@ -35,26 +38,50 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { applyThread, markOf } from "./stills/state.js";
 
-const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed"];
+const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
 const FIELDS = {
-  thread: ["still", "rev", "anchor", "body"],
+  thread: ["still", "variant", "rev", "anchor", "body"],
   reply: ["thread", "body"],
   resolve: ["thread"],
   reopen: ["thread"],
-  viewed: ["still", "rev"],
-  unviewed: ["still", "rev"],
+  viewed: ["still", "variant", "rev"],
+  unviewed: ["still", "variant", "rev"],
+  working: ["thread", "still", "variant", "note"],
+  idle: ["thread"],
 };
+const OPTIONAL_FIELDS = new Set(["working", "idle"]);
 const STORED = ["seq", "id", "at"];
+const VIA = ["tailnet", "share", "cli"];
 const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
 const ID = /^[\w-]{1,64}$/;
-const SIZE = /^[1-9]\d{0,4}x[1-9]\d{0,4}$/;
+const SIZE = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/;
+const CUSTOM = /^([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(\+touch)?$/;
+const CUSTOM_KEY = /^custom-([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(-touch)?$/;
+const TAG = /^[a-z0-9][a-z0-9_.-]{0,31}$/;
+const KEY = /^[a-z0-9][\w.@-]{0,63}(\+[a-z0-9][\w.-]{0,31}){0,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BODY = 10000;
 const MAX_AUTHOR = 100;
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
+
+/** How long the agent's `working` state lasts after its last `working` event. */
+export const WORKING_MS = 10 * 60 * 1000;
+
+/**
+ * The viewport presets a variant is shot at, by name: CSS size, device pixel ratio, and
+ * `mobile`, which means touch, a mobile user agent and a phone's viewport handling.
+ */
+export const VIEWPORTS = {
+  mobile: { width: 390, height: 844, dpr: 3, mobile: true },
+  "mobile-s": { width: 375, height: 812, dpr: 3, mobile: true },
+  tablet: { width: 820, height: 1180, dpr: 2, mobile: true },
+  desktop: { width: 1440, height: 900, dpr: 1, mobile: false },
+};
+
+const ALIASES = { web: "desktop" };
 
 /** The stills manifest, relative to the scratch dir. */
 export const MANIFEST_FILE = "stills/manifest.json";
@@ -115,6 +142,103 @@ function nameProblem(name) {
   return null;
 }
 
+/**
+ * The viewport `spec` names: a preset (`mobile`, `mobile-s`, `tablet`, `desktop` or its alias
+ * `web`) or a custom `WxH[@dpr][+touch]`. Returns `{ preset, width, height, dpr, mobile,
+ * fullPage }`, `preset` being "custom" for a custom one; a custom one that is exactly a preset
+ * (`1440x900` is `desktop`) is that preset. Throws on anything else.
+ */
+export function parseViewport(spec, fullPage = false) {
+  const name = ALIASES[spec] ?? spec;
+  if (typeof name === "string" && Object.hasOwn(VIEWPORTS, name)) {
+    return { preset: name, ...VIEWPORTS[name], fullPage: Boolean(fullPage) };
+  }
+  const m = typeof spec === "string" ? CUSTOM.exec(spec) : null;
+  if (!m) throw new Error(`a viewport is one of ${[...Object.keys(VIEWPORTS), "web"].join(", ")} or WxH[@dpr][+touch]`);
+  const [, width, height, dpr = "1", touch] = m;
+  const custom = { width: Number(width), height: Number(height), dpr: Number(dpr), mobile: Boolean(touch) };
+  const preset = Object.keys(VIEWPORTS).find((k) => sameDevice(VIEWPORTS[k], custom));
+  return { preset: preset ?? "custom", ...custom, fullPage: Boolean(fullPage) };
+}
+
+/** True when the viewports `a` and `b` have the same size, pixel ratio and touch. */
+function sameDevice(a, b) {
+  return a.width === b.width && a.height === b.height && a.dpr === b.dpr && a.mobile === b.mobile;
+}
+
+/** The key of `viewport`: its preset's name, or `custom-<W>x<H>[@<dpr>][-touch]`. */
+export function viewportKey(viewport) {
+  if (viewport.preset !== "custom") return viewport.preset;
+  const dpr = viewport.dpr === 1 ? "" : `@${viewport.dpr}`;
+  return `custom-${viewport.width}x${viewport.height}${dpr}${viewport.mobile ? "-touch" : ""}`;
+}
+
+/** `tags` lowercased, checked, deduplicated and sorted; throws on a bad one. */
+export function parseTags(tags = []) {
+  const out = new Set();
+  for (const tag of tags) {
+    const t = typeof tag === "string" ? tag.trim().toLowerCase() : "";
+    if (!TAG.test(t)) throw new Error(`tag '${tag}': 1-32 lowercase letters, digits, '.', '_' or '-'`);
+    out.add(t);
+  }
+  return [...out].sort();
+}
+
+/** The key of the variant shot at `viewport` with `tags`: `<viewport>[+<tag>...]`, tags sorted. */
+export function variantKey(viewport, tags = []) {
+  return [viewportKey(viewport), ...parseTags(tags)].join("+");
+}
+
+/**
+ * The viewport of a v1 still shot at `size` (`WxH`): `desktop` at the preset's size, else a
+ * custom one at 1x. A still without a size is read as `desktop`.
+ */
+function legacyViewport(size) {
+  return parseViewport(typeof size === "string" && SIZE.test(size) ? size : "desktop");
+}
+
+/** The viewport a variant key names, for a v2 variant stored without a readable one. */
+function keyViewport(key) {
+  const head = key.split("+")[0];
+  const m = CUSTOM_KEY.exec(head);
+  if (m) return parseViewport(`${m[1]}x${m[2]}${m[3] ? `@${m[3]}` : ""}${m[4] ? "+touch" : ""}`);
+  return Object.hasOwn(VIEWPORTS, head) ? parseViewport(head) : null;
+}
+
+/** The revisions of `revs` a reader can use: `{ n, file, at }` with a number and a file. */
+function goodRevs(revs) {
+  return Array.isArray(revs) ? revs.filter((r) => isObject(r) && isRev(r.n) && typeof r.file === "string") : [];
+}
+
+/**
+ * The manifest entry `entry` in v2 shape, `{ name, title, source: { path }, variants }`, or
+ * null when it has no name. A v1 entry, with top-level `revs` and `source.size`, becomes one
+ * variant whose key comes from its size (see `legacyViewport`) and whose files stay where they
+ * are. Unreadable variants and revisions are left out. `entry` is not changed.
+ */
+export function upgraded(entry) {
+  if (!isObject(entry) || typeof entry.name !== "string") return null;
+  const title = typeof entry.title === "string" && entry.title.trim() ? entry.title : entry.name;
+  const source = { path: typeof entry.source?.path === "string" ? entry.source.path : null };
+  let variants;
+  if (Array.isArray(entry.variants)) {
+    variants = entry.variants
+      .filter((v) => isObject(v) && typeof v.key === "string" && KEY.test(v.key))
+      .map((v) => ({
+        key: v.key,
+        viewport: isObject(v.viewport) ? v.viewport : keyViewport(v.key),
+        tags: Array.isArray(v.tags) ? v.tags.filter((t) => typeof t === "string") : v.key.split("+").slice(1),
+        revs: goodRevs(v.revs),
+      }));
+  } else if (Array.isArray(entry.revs)) {
+    const viewport = legacyViewport(entry.source?.size);
+    variants = [{ key: viewportKey(viewport), viewport, tags: [], revs: goodRevs(entry.revs) }];
+  } else {
+    variants = [];
+  }
+  return { name: entry.name, title, source, variants };
+}
+
 /** Why `anchor` is not a valid pin `{x,y}` or region `{x,y,w,h}`, or null when it is. */
 function anchorProblem(anchor) {
   if (!isObject(anchor)) return "'anchor' must be an object";
@@ -147,26 +271,37 @@ function eventProblem(event, stored) {
     }
   }
   const { author } = event;
-  if (!isObject(author) || shape(author) !== "kind,name") {
-    return "'author' must be {kind, name}";
+  if (!isObject(author) || (shape(author) !== "kind,name" && shape(author) !== "kind,name,via")) {
+    return "'author' must be {kind, name, via?}";
   }
   if (author.kind !== "human" && author.kind !== "agent") return "'author.kind' must be 'human' or 'agent'";
   if (typeof author.name !== "string" || !author.name.trim() || author.name.length > MAX_AUTHOR) {
     return `'author.name' must be a non-empty string of at most ${MAX_AUTHOR} characters`;
   }
+  if (author.via !== undefined && !VIA.includes(author.via)) return `'author.via' must be one of ${VIA.join(", ")}`;
   const fields = FIELDS[event.type];
-  if (fields.includes("body")) {
-    if (typeof event.body !== "string" || !event.body.trim()) return "'body' must be a non-empty string";
-    if (event.body.length > MAX_BODY) return `'body' must be at most ${MAX_BODY} characters`;
+  const optional = OPTIONAL_FIELDS.has(event.type);
+  for (const field of ["body", "note"]) {
+    if (!fields.includes(field) || (optional && event[field] === undefined)) continue;
+    if (typeof event[field] !== "string" || !event[field].trim()) return `'${field}' must be a non-empty string`;
+    if (event[field].length > MAX_BODY) return `'${field}' must be at most ${MAX_BODY} characters`;
   }
-  if (fields.includes("thread") && (typeof event.thread !== "string" || !ID.test(event.thread))) {
-    return "'thread' must be the id of a thread event";
+  if (fields.includes("thread") && !(optional && event.thread === undefined)) {
+    if (typeof event.thread !== "string" || !ID.test(event.thread)) return "'thread' must be the id of a thread event";
+  }
+  if (event.variant !== undefined && (typeof event.variant !== "string" || !KEY.test(event.variant))) {
+    return "'variant' must be a variant key, such as mobile+dark";
   }
   if (event.type === "thread" && event.still === null) {
-    if (event.rev !== undefined || event.anchor !== undefined) {
-      return "a general thread (still: null) has no 'rev' or 'anchor'";
+    if (event.rev !== undefined || event.anchor !== undefined || event.variant !== undefined) {
+      return "a general thread (still: null) has no 'rev', 'variant' or 'anchor'";
     }
     return null;
+  }
+  if (optional) {
+    if (event.still === undefined) return event.variant === undefined ? null : "'variant' goes with a 'still'";
+    const problem = nameProblem(event.still);
+    return problem ? `'still': ${problem}` : null;
   }
   if (fields.includes("still")) {
     const problem = nameProblem(event.still);
@@ -243,10 +378,10 @@ async function withLock(file, fn) {
 }
 
 /**
- * The stills of `dir`, as listed in `stills/manifest.json`; empty when there is none yet. A
- * manifest that is not a JSON list throws: only `addStill` writes it.
+ * The manifest of `dir` as written, a list of entries in v1 or v2 shape; empty when there is
+ * none yet. A manifest that is not a JSON list throws: only `addStill` writes it.
  */
-export function stills(dir) {
+function readManifest(dir) {
   const file = paths(dir).manifest;
   if (!existsSync(file)) return [];
   let manifest;
@@ -260,21 +395,33 @@ export function stills(dir) {
 }
 
 /**
- * Add a revision of the still `name`: copy the PNG `file` to `stills/<name>/<n>.png`, n one past
- * the still's last revision (1 for a new still), and record it in the manifest, written to a
- * temp file and renamed over it. `title`, `source` (the page path shot) and `size` (`WxH`)
- * update the still's entry when given. Returns the still's manifest entry.
+ * The stills of `dir`, as listed in `stills/manifest.json`, each in v2 shape (see `upgraded`)
+ * whatever shape it is stored in; entries without a name are left out.
  */
-export async function addStill(dir, { file, name, title, source, size }) {
+export function stills(dir) {
+  return readManifest(dir).map(upgraded).filter(Boolean);
+}
+
+/**
+ * Add a revision of a variant of the still `name`: the variant shot at `viewport` (a preset or
+ * `WxH[@dpr][+touch]`, default `desktop`) with `tags`. The PNG `file` is copied to
+ * `stills/<name>/<key>/<n>.png`, n one past the variant's last revision (1 for a new one), and
+ * recorded in the manifest, written to a temp file and renamed over it; the still's entry is
+ * written in v2 shape, the others as they were. `title` and `source` (the page path shot)
+ * update the entry when given, `fullPage` the variant's viewport. Returns `{ entry, variant,
+ * rev }`, the still's entry, the variant and the revision added.
+ */
+export async function addStill(dir, { file, name, title, source, viewport = "desktop", tags = [], fullPage = false }) {
   const problem = nameProblem(name);
   if (problem) throw new Error(problem);
   if (title !== undefined && (typeof title !== "string" || !title.trim())) {
     throw new Error("'title' must be a non-empty string");
   }
   if (source !== undefined && (typeof source !== "string" || !source)) throw new Error("'source' must be a page path");
-  if (size !== undefined && (typeof size !== "string" || !SIZE.test(size))) {
-    throw new Error("'size' must look like 390x844");
-  }
+  const vp = parseViewport(viewport, fullPage);
+  const sorted = parseTags(tags);
+  const key = variantKey(vp, sorted);
+  if (!KEY.test(key)) throw new Error(`variant '${key}': at most 16 tags`);
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
@@ -286,27 +433,31 @@ export async function addStill(dir, { file, name, title, source, size }) {
   }
   const { manifest: manifestFile, stillsLock } = paths(dir);
   return withLock(stillsLock, () => {
-    const manifest = stills(dir);
-    let entry = manifest.find((s) => s && s.name === name);
+    const manifest = readManifest(dir);
     const folded = name.toLowerCase();
     const clash = manifest.find(
       (s) => typeof s?.name === "string" && s.name !== name && s.name.toLowerCase() === folded
     );
     if (clash) throw new Error(`'${name}' differs from the still '${clash.name}' only in case`);
-    if (!entry) {
-      entry = { name, title: title || name };
-      manifest.push(entry);
-    }
+    const at = manifest.findIndex((s) => s && s.name === name);
+    const entry =
+      at === -1 ? { name, title: title || name, source: { path: null }, variants: [] } : upgraded(manifest[at]);
+    if (at === -1) manifest.push(entry);
+    else manifest[at] = entry;
     if (title !== undefined) entry.title = title;
-    if (!isObject(entry.source)) entry.source = { path: null, size: null };
     if (source !== undefined) entry.source.path = source;
-    if (size !== undefined) entry.source.size = size;
-    if (!Array.isArray(entry.revs)) entry.revs = [];
-    const n = entry.revs.reduce((max, r) => (r && isRev(r.n) && r.n > max ? r.n : max), 0) + 1;
-    const rel = `stills/${name}/${n}.png`;
-    mkdirSync(path.join(dir, "stills", name), { recursive: true });
+    let variant = entry.variants.find((v) => v.key === key);
+    if (!variant) {
+      variant = { key, viewport: vp, tags: sorted, revs: [] };
+      entry.variants.push(variant);
+    }
+    variant.viewport = vp;
+    const n = variant.revs.reduce((max, r) => (r.n > max ? r.n : max), 0) + 1;
+    const rel = `stills/${name}/${key}/${n}.png`;
+    mkdirSync(path.join(dir, "stills", name, key), { recursive: true });
     copyFileSync(file, path.join(dir, rel));
-    entry.revs.push({ n, file: rel, at: new Date().toISOString() });
+    const rev = { n, file: rel, at: new Date().toISOString() };
+    variant.revs.push(rev);
     const tmp = sideFile(manifestFile, "tmp");
     try {
       writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -315,7 +466,7 @@ export async function addStill(dir, { file, name, title, source, size }) {
       rmSync(tmp, { force: true });
       throw e;
     }
-    return entry;
+    return { entry, variant, rev };
   });
 }
 
@@ -386,15 +537,19 @@ export function readEvents(dir, since = 0) {
   return { events, problems, cursor };
 }
 
-/** The revision numbers of each still in the manifest, by name. */
-function revisions(dir) {
-  const revs = new Map();
+/**
+ * The variants of each still in the manifest of `dir`, by name: `{ first, variants }`, `first`
+ * the key of its first variant (the one an event without `variant` means) and `variants` the
+ * revision numbers of each variant, by key. Stills without a variant are left out.
+ */
+export function revisions(dir) {
+  const out = new Map();
   for (const s of stills(dir)) {
-    if (s && typeof s.name === "string" && Array.isArray(s.revs)) {
-      revs.set(s.name, new Set(s.revs.filter((r) => r && isRev(r.n)).map((r) => r.n)));
-    }
+    if (!s.variants.length) continue;
+    const variants = new Map(s.variants.map((v) => [v.key, new Set(v.revs.map((r) => r.n))]));
+    out.set(s.name, { first: s.variants[0].key, variants });
   }
-  return revs;
+  return out;
 }
 
 /**
@@ -413,8 +568,12 @@ export async function appendEvent(dir, event) {
     if (event.thread !== undefined && !events.some((e) => e.type === "thread" && e.id === event.thread)) {
       throw new Error(`no thread '${event.thread}'`);
     }
-    if (typeof event.still === "string" && !revisions(dir).get(event.still)?.has(event.rev)) {
-      throw new Error(`no still '${event.still}' at rev ${event.rev}`);
+    if (typeof event.still === "string") {
+      const still = revisions(dir).get(event.still);
+      const revs = still?.variants.get(event.variant ?? still.first);
+      const where = `still '${event.still}'${event.variant === undefined ? "" : ` [${event.variant}]`}`;
+      if (!revs) throw new Error(`no ${where}`);
+      if (event.rev !== undefined && !revs.has(event.rev)) throw new Error(`no ${where} at rev ${event.rev}`);
     }
     const ids = new Set(events.map((e) => e.id));
     let id;
@@ -442,34 +601,103 @@ export async function appendEvent(dir, event) {
 
 /**
  * The threads of `dir`, folded from the log in the order they were opened. Each is
- * `{ id, still, rev, anchor, body, author, at, seq, status, replies, updated }`: `still`,
- * `rev` and `anchor` are null where the thread has none, `status` is "open" or "resolved" as
- * the last resolve or reopen left it, `replies` are `{ id, author, body, at, seq }`, and
- * `updated` is the `seq` of the last event on the thread.
+ * `{ id, still, variant, rev, anchor, body, author, at, seq, status, replies, updated }`:
+ * `still`, `variant`, `rev` and `anchor` are null where the thread has none, `variant` being
+ * the still's first variant when the event names none; `status` is "open" or "resolved" as the
+ * last resolve or reopen left it, `replies` are `{ id, author, body, at, seq }`, and `updated`
+ * is the `seq` of the last event on the thread.
  */
 export function threads(dir) {
+  const { events } = readEvents(dir);
   const out = [];
-  for (const e of readEvents(dir).events) applyThread(out, e);
+  for (const e of events) applyThread(out, e);
+  const named = new Map(events.filter((e) => e.type === "thread").map((e) => [e.id, e.variant]));
+  const stillsByName = revisions(dir);
+  return out.map((t) => ({
+    ...t,
+    variant: t.still === null ? null : (named.get(t.id) ?? stillsByName.get(t.still)?.first ?? null),
+  }));
+}
+
+/**
+ * The reviewed marks of the log of `dir`, per reviewer: `{ reviewers, marks }`. `marks` maps
+ * an author name to the marked revision of each still and variant, `Map<name, Map<still,
+ * Map<key, rev>>>`, set by that author's last `viewed` and cleared by an `unviewed` after it;
+ * an event without `variant` marks the still's first variant. `reviewers` lists, sorted, every
+ * author with a mark that holds. `known` is `revisions(dir)`, when the caller has it already.
+ */
+export function reviewMarks(dir, known = revisions(dir)) {
+  const marks = new Map();
+  for (const e of readEvents(dir).events) {
+    if (e.type !== "viewed" && e.type !== "unviewed") continue;
+    const still = known.get(e.still);
+    if (!still) continue;
+    if (!marks.has(e.author.name)) marks.set(e.author.name, new Map());
+    const byStill = marks.get(e.author.name);
+    if (!byStill.has(e.still)) byStill.set(e.still, new Map());
+    const key = e.variant ?? still.first;
+    if (e.type === "viewed") byStill.get(e.still).set(key, e.rev);
+    else byStill.get(e.still).delete(key);
+  }
+  const reviewers = [...marks].filter(([, byStill]) => [...byStill.values()].some((m) => m.size)).map(([name]) => name);
+  return { reviewers: reviewers.sort(), marks };
+}
+
+/**
+ * The reviewed mark of every still in the manifest of `dir` as the reviewer named `by` left
+ * it, by name: the mark of its first variant, `{ rev, viewed, reviewed, changed }`, plus
+ * `variants`, the mark of each variant by key. `rev` is the variant's latest revision;
+ * `viewed` the revision `by` last marked, or null when they did not or an `unviewed` came
+ * after; `reviewed` is true when that is the latest revision; `changed` when an older one was
+ * marked, so a newer one has landed since and the mark no longer holds. Another reviewer's
+ * marks count for nothing.
+ */
+export function reviewed(dir, by) {
+  const known = revisions(dir);
+  const mine = reviewMarks(dir, known).marks.get(by) ?? new Map();
+  const out = {};
+  for (const [name, still] of known) {
+    const variants = {};
+    for (const [key, revs] of still.variants) {
+      variants[key] = markOf(Math.max(0, ...revs), mine.get(name)?.get(key) ?? null);
+    }
+    out[name] = { ...variants[still.first], variants };
+  }
   return out;
 }
 
 /**
- * The reviewed mark of every still in the manifest of `dir`, by name: `{ rev, viewed,
- * reviewed, changed }`. `rev` is the still's latest revision; `viewed` the revision the last
- * `viewed` event marked, or null when none did or an `unviewed` came after; `reviewed` is true
- * when that is the latest revision; `changed` when an older revision was marked, so a newer
- * one has landed since and the mark no longer holds.
+ * The agent's working state in the log of `dir` at `now` (ms): what it is working on, oldest
+ * first, as `{ thread, still, variant, note, author, since, at, until }`, each field the agent
+ * did not give being null; a `working` a human wrote counts for nothing. One state per
+ * thread, or per still and variant, or one with neither: a `working` starts it or keeps it on;
+ * it ends with the agent's next `reply` or `idle` on that thread (a reply ends only a state on
+ * its thread; an `idle` without a thread ends them all), or WORKING_MS after its last
+ * `working`. `since` is when it started, `at` its last `working`, `until` when it expires.
  */
-export function reviewed(dir) {
-  const marks = new Map();
+export function working(dir, now = Date.now()) {
+  const on = new Map();
+  const expiry = (at) => Date.parse(at) + WORKING_MS;
   for (const e of readEvents(dir).events) {
-    if (e.type === "viewed") marks.set(e.still, e.rev);
-    if (e.type === "unviewed") marks.delete(e.still);
+    if (e.type === "working" && e.author.kind === "agent") {
+      const key = e.thread ? `thread ${e.thread}` : `still ${e.still ?? ""} ${e.variant ?? ""}`;
+      const last = on.get(key);
+      const since = last && expiry(last.at) > Date.parse(e.at) ? last.since : e.at;
+      on.delete(key);
+      on.set(key, {
+        thread: e.thread ?? null,
+        still: e.still ?? null,
+        variant: e.variant ?? null,
+        note: e.note ?? null,
+        author: e.author,
+        since,
+        at: e.at,
+        until: new Date(expiry(e.at)).toISOString(),
+      });
+    } else if ((e.type === "reply" || e.type === "idle") && e.author.kind === "agent") {
+      if (e.thread) on.delete(`thread ${e.thread}`);
+      else on.clear();
+    }
   }
-  const out = {};
-  for (const [name, revs] of revisions(dir)) {
-    const rev = Math.max(0, ...revs);
-    out[name] = markOf(rev, marks.get(name) ?? null);
-  }
-  return out;
+  return [...on.values()].filter((w) => expiry(w.at) > now);
 }

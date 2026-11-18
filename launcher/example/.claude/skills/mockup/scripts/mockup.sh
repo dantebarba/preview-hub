@@ -8,15 +8,19 @@
 #   mockup.sh start [desc]                bring the preview up; needed once, then just save
 #   mockup.sh status
 #   mockup.sh stop                        preview stop, then delete .mockup/ (KEEP=1 keeps it)
-#   mockup.sh shot <path> <name> [WxH] [title]
-#                                         still of the live page (default 390x844), added with
-#                                         `preview stills add` as the next revision of <name>
+#   mockup.sh shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]
+#                                         still of the live page as a device, shot by the
+#                                         runtime's capture.mjs in the mockup's own container and
+#                                         added with `preview stills add` as the next revision of
+#                                         that variant of <name>. V is mobile (default), mobile-s,
+#                                         tablet, desktop/web or WxH[@dpr][+touch]; each
+#                                         --viewport is one shot. The old positional form
+#                                         `shot <path> <name> [WxH] [title]` still works.
 set -euo pipefail
 
 skill="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 root="$PWD"
 scratch="$root/.mockup"
-chrome_image="${MOCKUP_CHROME_IMAGE:-zenika/alpine-chrome:124}"
 PREVIEW_ID="mockup-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
 export PREVIEW_ID
 
@@ -37,6 +41,11 @@ state_dir() {
   local slug
   slug="$(printf '%s' "$PREVIEW_ID" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^-+//; s/-+$//')"
   printf '%s/preview-hub/%s' "$(git rev-parse --path-format=absolute --git-common-dir)" "$slug"
+}
+
+## The id of the running mockup container: the one publishing 127.0.0.1:$1 on its port 80.
+mockup_container() {
+  docker ps --format '{{.ID}} {{.Ports}}' | awk -v p="127.0.0.1:$1->80/tcp" 'index($0, p) { print $1; exit }'
 }
 
 ## Escape a string for the replacement side of a sed s|||.
@@ -65,26 +74,57 @@ case "${1:-status}" in
     if [ "${KEEP:-0}" = "1" ]; then echo "stopped; kept $scratch"; else rm -rf "$scratch"; echo "stopped and removed $scratch"; fi
     ;;
   shot)
-    [ "$#" -ge 3 ] || { echo "usage: mockup.sh shot <path> <name> [WxH] [title]" >&2; exit 2; }
-    page="$2" name="$3" size="${4:-390x844}" title="${5:-}"
+    usage="usage: mockup.sh shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]"
+    [ "$#" -ge 3 ] || { echo "$usage" >&2; exit 2; }
+    page="$2" name="$3" title="" full=() tags=() viewports=() positional=()
+    shift 3
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --viewport) [ "$#" -ge 2 ] || { echo "$usage" >&2; exit 2; }; viewports+=("$2"); shift 2 ;;
+        --viewport=*) viewports+=("${1#*=}"); shift ;;
+        --tag) [ "$#" -ge 2 ] || { echo "$usage" >&2; exit 2; }; tags+=(--tag "$2"); shift 2 ;;
+        --tag=*) tags+=(--tag "${1#*=}"); shift ;;
+        --full-page) full=(--full-page); shift ;;
+        --title) [ "$#" -ge 2 ] || { echo "$usage" >&2; exit 2; }; title="$2"; shift 2 ;;
+        --title=*) title="${1#*=}"; shift ;;
+        --) shift; positional+=("$@"); break ;;
+        -*) echo "$usage" >&2; exit 2 ;;
+        *) positional+=("$1"); shift ;;
+      esac
+    done
+    if [ "${#positional[@]}" -gt 0 ] && [[ "${positional[0]}" =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$ ]]; then
+      viewports+=("${positional[0]}")
+      positional=("${positional[@]:1}")
+    fi
+    [ "${#positional[@]}" -le 1 ] || { echo "$usage" >&2; exit 2; }
+    [ "${#positional[@]}" -eq 0 ] || [ -n "$title" ] || title="${positional[0]}"
+    [ "${#viewports[@]}" -gt 0 ] || viewports=(mobile)
     [[ "$page" == /* ]] || { echo "path must start with / (e.g. /checkout?v=b)" >&2; exit 2; }
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] \
       || { echo "name: a letter or digit, then letters, digits, '.', '_' or '-' (100 at most)" >&2; exit 2; }
-    [[ "$size" =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$ ]] || { echo "size must look like 390x844" >&2; exit 2; }
     [ -z "$title" ] || [[ "$title" =~ [^[:space:]] ]] || { echo "title must not be blank" >&2; exit 2; }
     [ -f "$(state_dir)/base" ] || { echo "not running; mockup.sh start first" >&2; exit 1; }
     port=$(( $(cat "$(state_dir)/base") + 1 ))
+    cid="$(mockup_container "$port")"
+    [ -n "$cid" ] || { echo "no mockup container on port $port; mockup.sh start first" >&2; exit 1; }
+    docker exec "$cid" test -f /srv/capture.mjs \
+      || { echo "this mockup runtime cannot shoot devices; run 'preview self-update', then mockup.sh stop and start" >&2; exit 1; }
     mkdir -p "$scratch/shots"
-    docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
-      -v "$scratch/shots:/shots" "$chrome_image" \
-      --no-sandbox --headless=new --hide-scrollbars --force-device-scale-factor=1 \
-      --window-size="${size/x/,}" --virtual-time-budget="${MOCKUP_SHOT_WAIT_MS:-5000}" \
-      --screenshot="/shots/$name.png" "http://127.0.0.1:$port$page" >/dev/null 2>&1 \
-      || { echo "chrome failed to capture http://127.0.0.1:$port$page" >&2; exit 1; }
-    [ -s "$scratch/shots/$name.png" ] || { echo "no image written for $page" >&2; exit 1; }
-    add=(stills add "$scratch/shots/$name.png" --name "$name" --source "$page" --size "$size")
-    [ -z "$title" ] || add+=("--title=$title")
-    ( cd "$scratch" && preview "${add[@]}" )
+    i=0
+    for v in "${viewports[@]}"; do
+      i=$((i + 1))
+      file="$name.$i.png"
+      rm -f "$scratch/shots/$file"
+      docker exec --user "$(id -u):$(id -g)" -e HOME=/tmp -e "MOCKUP_SHOT_WAIT_MS=${MOCKUP_SHOT_WAIT_MS:-5000}" "$cid" \
+        node /srv/capture.mjs "http://127.0.0.1:80$page" "/app/.mockup/shots/$file" \
+        --viewport "$v" ${tags[@]+"${tags[@]}"} ${full[@]+"${full[@]}"} >/dev/null \
+        || { echo "capture of $page at $v failed" >&2; exit 1; }
+      [ -s "$scratch/shots/$file" ] || { echo "no image written for $page at $v" >&2; exit 1; }
+      add=(stills add "$scratch/shots/$file" --name "$name" --source "$page" --viewport "$v")
+      add+=(${tags[@]+"${tags[@]}"} ${full[@]+"${full[@]}"})
+      [ -z "$title" ] || add+=("--title=$title")
+      ( cd "$scratch" && preview "${add[@]}" )
+    done
     ;;
-  *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [WxH] [title]" >&2; exit 2 ;;
+  *) echo "usage: mockup.sh init|start [desc]|status|stop|shot <path> <name> [--viewport V]... [--tag T]... [--full-page] [--title T]" >&2; exit 2 ;;
 esac

@@ -35,12 +35,15 @@ export function markOf(rev, viewed) {
 
 /**
  * Fold one log event into `stills`: a `viewed` sets the marked revision of its still, an
- * `unviewed` clears it. True when a mark changed, so the caller knows to draw again.
+ * `unviewed` clears it; one on a variant other than the still's first is left alone. True when
+ * a mark changed, so the caller knows to draw again.
  */
 export function applyEvent(stills, event) {
   if (event.type !== "viewed" && event.type !== "unviewed") return false;
   const still = stills.find((s) => s.name === event.still);
   if (!still) return false;
+  const first = still.variants?.[0]?.key;
+  if (event.variant !== undefined && first !== undefined && event.variant !== first) return false;
   still.mark = markOf(still.mark.rev, event.type === "viewed" ? event.rev : null);
   return true;
 }

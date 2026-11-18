@@ -46,7 +46,7 @@ const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
 const APP_REF = /\b(src|href)=(["'])\/app\//g;
 const SHOT = /\.(png|jpe?g|webp)$/i;
-const REV_IMAGE = /^\/stills\/[^/]+\/\d+\.png$/;
+const REV_IMAGE = /^\/stills\/[^/]+\/(?:[^/]+\/)?\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
@@ -143,20 +143,19 @@ export function checkManifest(scratch) {
 
 /**
  * What the viewer reads at `/_review/stills`: `{ stills, cursor }`. Each still is its manifest
- * entry, `{ name, title, source, revs }`, plus `mark`, its reviewed mark `{ rev, viewed,
- * reviewed, changed }`; entries without a name or a revision are left out. `cursor` is the
+ * entry in v2 shape, `{ name, title, source, variants }`, plus `revs`, the revisions of its
+ * first variant, and `mark`, the reviewed mark `{ rev, viewed, reviewed, changed, variants }`
+ * the reviewer named `by` left on it; stills without a revision are left out. `cursor` is the
  * log's last `seq`, read before the marks, so following the events from it misses none.
  */
-export function reviewStills(scratch) {
+export function reviewStills(scratch, by = DEFAULT_AUTHOR.name) {
   const { cursor } = readEvents(scratch);
-  const marks = reviewed(scratch);
+  const marks = reviewed(scratch, by);
   const list = [];
   for (const s of stills(scratch)) {
-    if (!s || typeof s.name !== "string" || !Array.isArray(s.revs) || !marks[s.name]) continue;
-    const revs = s.revs.filter((r) => r && Number.isInteger(r.n) && typeof r.file === "string");
-    if (!revs.length) continue;
-    const title = typeof s.title === "string" && s.title ? s.title : s.name;
-    list.push({ name: s.name, title, source: s.source ?? null, revs, mark: marks[s.name] });
+    const revs = s.variants[0]?.revs ?? [];
+    if (!revs.length || !marks[s.name]) continue;
+    list.push({ ...s, revs, mark: marks[s.name] });
   }
   return { stills: list, cursor };
 }
@@ -226,7 +225,9 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
  * Where a request goes before Vite sees it: `{ menu: true }` for the menu, `{ viewer: true }`
  * for the stills viewer at the reserved `/stills`, else the rewritten URL, or null to leave it
  * alone. `/app/<path>` becomes `/@fs<app>/<path>`, and `/<slug>` becomes `/pages/<slug>.html`
- * when that page exists.
+ * when that page exists. A revision's image named with `%2B` or `%40`, as `fileUrl` writes the
+ * `+` and `@` of a variant key, is named with the characters themselves, which is how Vite
+ * finds the file.
  */
 export function route(url, app) {
   const q = url.indexOf("?");
@@ -234,6 +235,9 @@ export function route(url, app) {
   const search = q === -1 ? "" : url.slice(q);
   if (pathname === "/" || pathname === "/index.html") return { menu: true };
   if (pathname === "/stills" || pathname === "/stills/") return { viewer: true };
+  if (REV_IMAGE.test(pathname) && /%2B|%40/i.test(pathname)) {
+    return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/g, "@")}${search}` };
+  }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
   const slug = SLUG.exec(pathname);
   if (!slug || path.extname(slug[1])) return null;
@@ -423,7 +427,8 @@ export function annotatedPng(value) {
  * without a preflight; Vite approves the preflight of a localhost origin, so a post whose
  * `Origin` is not this host is refused as well (403). A body that is not a JSON object, or an
  * event the store refuses, is a 400 with the reason. An event without an `author` is the
- * reviewer's.
+ * reviewer's. `working` and `idle` are the agent's, written by the CLI, so they are refused
+ * here (403).
  *
  * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
  * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
@@ -449,6 +454,9 @@ async function postEvent(req, res, { scratch, stream }) {
   const { annotated, ...fields } = event;
   if (body.length - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
     return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
+  }
+  if (fields.type === "working" || fields.type === "idle") {
+    return sendJson(res, 403, { error: `a ${fields.type} event is the agent's; it writes it with 'preview review'` });
   }
   let png = null;
   if (annotated !== undefined) {

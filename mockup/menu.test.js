@@ -129,24 +129,40 @@ test("route reserves /stills for the viewer, even over a page of that name", (t)
   assert.deepEqual(route("/stills", app), { viewer: true });
   assert.deepEqual(route("/stills/?x=1", app), { viewer: true });
   assert.equal(route("/stills/05-invite/1.png", app), null);
+  assert.equal(route("/stills/05-invite/mobile+dark/1.png", app), null);
+  assert.deepEqual(route("/stills/05-invite/mobile%2Bdark%2Brtl/2.png?v=1", app), {
+    url: "/stills/05-invite/mobile+dark+rtl/2.png?v=1",
+  });
+  assert.deepEqual(route("/stills/x/custom-360x740%402-touch/1.png", app), {
+    url: "/stills/x/custom-360x740@2-touch/1.png",
+  });
 });
 
-test("reviewStills lists each still with its revisions and reviewed mark, and the log's cursor", async (t) => {
+test("reviewStills lists each still with its first variant's revisions, the reviewer's mark and the cursor", async (t) => {
   const dir = scratch(t, { "shot.png": PNG });
   const file = path.join(dir, "shot.png");
   await addStill(dir, { file, name: "a", title: "First" });
   await addStill(dir, { file, name: "b" });
   await appendEvent(dir, { type: "viewed", author: HUMAN, still: "a", rev: 1 });
   await addStill(dir, { file, name: "a" });
-  const { stills, cursor } = reviewStills(dir);
+  await addStill(dir, { file, name: "a", viewport: "mobile", tags: ["dark"] });
+  const { stills, cursor } = reviewStills(dir, "dante");
   assert.equal(cursor, 1);
+  const mark = (rev, viewed) => ({ rev, viewed, reviewed: viewed === rev, changed: viewed !== null && viewed < rev });
   assert.deepEqual(
-    stills.map((s) => [s.name, s.title, s.revs.map((r) => r.file), s.mark]),
+    stills.map((s) => [s.name, s.title, s.revs.map((r) => r.file), s.variants.map((v) => v.key), s.mark]),
     [
-      ["a", "First", ["stills/a/1.png", "stills/a/2.png"], { rev: 2, viewed: 1, reviewed: false, changed: true }],
-      ["b", "b", ["stills/b/1.png"], { rev: 1, viewed: null, reviewed: false, changed: false }],
+      [
+        "a",
+        "First",
+        ["stills/a/desktop/1.png", "stills/a/desktop/2.png"],
+        ["desktop", "mobile+dark"],
+        { ...mark(2, 1), variants: { desktop: mark(2, 1), "mobile+dark": mark(1, null) } },
+      ],
+      ["b", "b", ["stills/b/desktop/1.png"], ["desktop"], { ...mark(1, null), variants: { desktop: mark(1, null) } }],
     ]
   );
+  assert.equal(reviewStills(dir).stills[0].mark.viewed, null);
   assert.deepEqual(reviewStills(scratch(t, {})), { stills: [], cursor: 0 });
 });
 
@@ -274,12 +290,13 @@ test("applyThread folds the log into the threads as the store does, and takes an
     await appendEvent(dir, { type: "viewed", author: HUMAN, still: "home", rev: 1 }),
   ];
   const folded = [];
+  const stored = () => threads(dir).map(({ variant, ...t }) => t);
   assert.deepEqual(events.map((e) => applyThread(folded, e)), [true, true, true, true, true, true, false]);
-  assert.deepEqual(folded, threads(dir));
+  assert.deepEqual(folded, stored());
   const summary = folded.map((f) => [f.status, f.replies.length, f.anchor]);
   assert.deepEqual(summary, [["open", 1, anchor], ["resolved", 0, null]]);
   assert.deepEqual(events.map((e) => applyThread(folded, e)), events.map(() => false));
-  assert.deepEqual(folded, threads(dir));
+  assert.deepEqual(folded, stored());
   const stray = { type: "reply", seq: 99, id: "x", thread: "gone", author: agent, body: "?" };
   assert.equal(applyThread(folded, stray), false);
 });
