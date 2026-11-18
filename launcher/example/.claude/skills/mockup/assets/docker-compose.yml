@@ -1,7 +1,8 @@
 # The whole mockup preview: one container running the /mockup runtime (a pinned Vite dev
 # server), bound to loopback on the engine's PREVIEW_PORT_1, which Tailscale proxies to,
 # websockets included, so hot reload reaches the phone. The frontend root is mounted
-# read-only; shots/ is the one writable mount. `preview start` exports PREVIEW_MOCKUP_IMAGE,
+# read-only; the writable mounts are shots/ and the review store, stills/ and review/, where
+# the viewer at /stills records the reviewed marks. `preview start` exports PREVIEW_MOCKUP_IMAGE,
 # the runtime image matching the launcher's release; set it yourself to try another build.
 services:
   web:
@@ -13,3 +14,5 @@ services:
     volumes:
       - ..:/app:ro
       - ./shots:/app/.mockup/shots:rw
+      - ./stills:/app/.mockup/stills:rw
+      - ./review:/app/.mockup/review:rw

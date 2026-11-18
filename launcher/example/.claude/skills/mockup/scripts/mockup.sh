@@ -43,7 +43,7 @@ sed_escape() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 
 case "${1:-status}" in
   init)
-    mkdir -p "$scratch/pages" "$scratch/shots" "$scratch/.preview"
+    mkdir -p "$scratch/pages" "$scratch/shots" "$scratch/stills" "$scratch/review" "$scratch/.preview"
     printf '*\n' > "$scratch/.gitignore"
     [ -f "$scratch/docker-compose.yml" ] || cp "$skill/assets/docker-compose.yml" "$scratch/docker-compose.yml"
     [ -f "$scratch/manifest.json" ] || printf '{ "title": "Mockup", "pages": [] }\n' > "$scratch/manifest.json"
