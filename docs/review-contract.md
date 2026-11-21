@@ -261,7 +261,7 @@ An event carries exactly the fields of its type; any other field makes the line 
 
 | Type       | Extra fields                     | Meaning |
 | ---------- | -------------------------------- | ------- |
-| `thread`   | `still`, `variant?`, `rev`, `anchor?`, `body` | Opens a thread: a remark on revision `rev` of a variant of `still`, on the area `anchor` (the whole still when absent). |
+| `thread`   | `still`, `variant?`, `rev`, `anchor?`, `body`, `target?` | Opens a thread: a remark on revision `rev` of a variant of `still`, on the area `anchor` (the whole still when absent); `target` when it was made on the live page (see [Targets](#targets)). |
 | `reply`    | `thread`, `body`                 | Answers thread `thread`. |
 | `resolve`  | `thread`                         | Marks thread `thread` resolved. |
 | `reopen`   | `thread`                         | Marks thread `thread` open again. |
@@ -274,8 +274,8 @@ An event carries exactly the fields of its type; any other field makes the line 
   `rev` one of that variant's revision numbers, at the time the event was appended.
 - `variant` absent means the still's first variant, so logs written before variants keep
   their meaning; on a `working` it means the whole still. `variant` goes only with a `still`.
-- `still: null` on a `thread` is a **general thread**, about no still: it has no `rev` and no
-  `anchor`. Reserved for chat in a later version; a reader may ignore it.
+- `still: null` on a `thread` is a **general thread**, about no still: it has no `rev`, no
+  `anchor` and no `target`. Reserved for chat in a later version; a reader may ignore it.
 - `thread` is the `id` of a `thread` event earlier in the log.
 - `body` and `note` are non-empty strings (not only whitespace) of at most 10000 characters,
   plain text, shown as written.
@@ -291,6 +291,30 @@ An anchor is the marked area, in coordinates normalized to the still: `0..1` fro
   above 0 and the box inside the image (`x + w <= 1`, `y + h <= 1`).
 
 An anchor belongs to the revision named in its thread; it is not moved onto later revisions.
+
+### Targets
+
+A remark made on the live mockup page, not on a still, carries a `target`: what was marked on
+the page. The still and the anchor of its thread are the shot the runtime took of that page
+for it (see [Live marks](#live-marks)); the target is what the reviewer pointed at.
+
+```json
+{"page":"/checkout?step=2","elements":[{"selector":"#pay > button","text":"Pay now","html":"<button class=\"primary\">Pay now</button>"}],"viewport":"390x844@3+touch","scroll":{"x":0,"y":120},"state":"reproduced"}
+```
+
+| Field       | Meaning |
+| ----------- | ------- |
+| `page`      | The page's path on the mockup, with its query: starts with one `/`, no space, at most 2000 characters. |
+| `elements`  | Up to 20 marked elements, `{selector, text, html}`: a CSS selector of the element (1 to 500 characters), its visible text (at most 200) and a cut of its HTML (at most 1000). May be empty. |
+| `truncated` | Optional: `true` when more elements were marked than `elements` keeps. |
+| `viewport`  | The viewport the page was seen at, a [preset or custom viewport](#viewports). |
+| `scroll`    | `{x, y}`: how far the page was scrolled, in CSS pixels, 0 or more. |
+| `state`     | `reproduced` when the shot shows every marked element, so the anchor is the region around them on it; `not-reproduced` when it does not (the reviewer reached them by acting on the page, such as opening a dialog, which a page loaded from scratch does not show), so the anchor is the box the reviewer drew and the elements' HTML is what is left of them. |
+
+Every other field makes the line malformed. The threads fold carries it as `target`, null on a
+thread without one; `preview review show` prints it under the thread's image and mark, and the
+`preview review watch` line of the thread says how many elements it marks (`3 elements`,
+`20+ elements` when truncated).
 
 ### Annotated stills
 
@@ -405,11 +429,57 @@ event's `author` (`kind: "human"`), whatever `author` the posted body claims:
 reviewer's marked revisions as `{reviewer: {still: {variant key: rev}}}`, `working` the
 [working](#working) fold, and `me` who is asking, `{name, via}`, `name` null for a guest.
 
+## Live marks
+
+A reviewer can mark the live mockup page instead of a still. The page shows what was marked,
+a still keeps it: the runtime shoots the page again for the remark, and the remark goes on
+that shot with the marked elements as its [target](#targets).
+
+`POST /_review/freeze` asks for that shot, a JSON body:
+
+| Field       | Meaning |
+| ----------- | ------- |
+| `path`      | The page's path, as `target.page`. |
+| `viewport`  | The viewport it was seen at, a preset or `WxH[@dpr][+touch]`. |
+| `tags`      | Optional [tags](#tags) of the variant to shoot, `dark` or `light` setting the colour scheme. |
+| `scroll`    | `{x, y}`, as `target.scroll`. |
+| `box`       | `{x, y, w, h}`: the box drawn, in CSS pixels from the top left of the viewport, `w` and `h` above 0. |
+| `elements`  | The marked `{selector, text, html}`; text and HTML are cut and the list kept to its first 20, `truncated` then true. |
+| `truncated` | Optional: `true` when the browser kept fewer elements than were marked. |
+| `author`    | A guest's `{name}`, as on an event. |
+
+It is posted as an event is: JSON only (`415`), from the page's own origin only (`403`), at
+most 64 KiB (`413`), and a guest's needs a name (`400`, `name required`; see
+[Reviewers](#reviewers)). A bad field is a `400`, a shot that failed a `500`, and a folder
+source, which has no pages, answers `404`. The runtime then shoots `path` from scratch at that
+viewport and tags in its headless browser, measuring each element's selector on the shot, and
+keeps the shot as a revision of a still, under `stills/.lock` as any still is added:
+
+1. **The still of that screen**, when there is one: the first still whose `source.path` is
+   `path`, that has the variant of that viewport and tags, and that `shots.mjs` does not shoot
+   after steps (none when `shots.mjs` cannot be read). It is shot as that variant was, whole
+   or not; one shot only at its viewport is taken only when the box, moved by the scroll, is
+   inside it. An image equal to the variant's latest revision adds none, so a new revision
+   appears only when the still was stale.
+2. **Otherwise `live-<slug>`**, made with that variant and shot whole: the slug is the path
+   with its query, lowercased, each run of characters other than letters, digits, `.` and `_`
+   one `-` (`/checkout?step=2` is `live-checkout-step-2`, `/` is `live-index`). A name a still
+   of another page already has ends with `-` and six hex characters of the SHA-256 of `path`.
+   Its title is `<path> (live)`.
+
+It answers `200` with `{still, variant, rev, anchor, state, target}`: the revision the remark
+goes on, its anchor and state, and the `target` its `thread` event carries. When every
+selector is found on the shot, the anchor is the region around their elements on it and the
+state `reproduced`; otherwise, or with no elements, the anchor is the box sent, moved by the
+scroll and cut to the shot, and the state `not-reproduced` (no anchor when that box is not on
+the shot). The reviewer then posts the remark as a `thread` on that still, variant and rev,
+with the anchor and the target, through `POST /_review/events`.
+
 ## Who writes what
 
 | File                        | Written by | Read by |
 | --------------------------- | ---------- | ------- |
-| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, `preview stills shoot`, the `/mockup` skill's `mockup.sh shot` | the viewer, `preview stills ls`, the agent |
+| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, `preview stills shoot`, the `/mockup` skill's `mockup.sh shot`, the runtime for a [live mark](#live-marks) | the viewer, `preview stills ls`, the agent |
 | `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `viewed`, `unviewed`, and for a tailnet user `resolve`, `reopen`; see [Reviewers](#reviewers)), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
 | `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
