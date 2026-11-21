@@ -6,21 +6,26 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   annotatedPng,
   authorOf,
   checkManifest,
+  freezeRequest,
+  handleReview,
   listShots,
+  placeMark,
   renderMenu,
   reviewer,
   reviewStills,
   rewriteRefs,
   route,
 } from "./menu.mjs";
-import { addStill, appendEvent, threads, working } from "./review.mjs";
+import { addStill, appendEvent, stills, threads, working } from "./review.mjs";
+import { folder } from "./source.mjs";
 import {
   ago,
   applyEvent,
@@ -668,4 +673,213 @@ test("a card's title, latest message, age, chip and unread replies", () => {
   assert.equal(unread(thread, { t1: 5 }, "agent"), 1);
   assert.equal(unread(thread, { t1: 9 }), 0);
   assert.equal(unread(thread, { constructor: 99 }, "agent"), 2);
+});
+
+/**
+ * A stand-in for `capture` that writes a PNG ending in `shot.bytes` and answers `shot.size`
+ * (`[width, height]` in pixels) and `shot.rects`, else a rect for no selector. `calls` are the
+ * options it was called with.
+ */
+function shooter() {
+  const shot = { bytes: "a", size: [1170, 2532], rects: null, calls: [], fail: null };
+  shot.shoot = async (opts) => {
+    shot.calls.push(opts);
+    if (shot.fail) throw new Error(shot.fail);
+    writeFileSync(opts.out, Buffer.concat([PNG, Buffer.from(shot.bytes)]));
+    const [width, height] = shot.size;
+    const rects = shot.rects ?? opts.measure.map(() => null);
+    return { file: opts.out, width, height, fullPage: opts.fullPage, rects };
+  };
+  return shot;
+}
+
+/**
+ * The `/_review/` routes on `dir` (a scratch dir or a folder source), served for one test with
+ * `shoot`, as `who`. Returns `{ post, fetchAt }`: `post(body, headers)` posts JSON to
+ * `/_review/freeze`.
+ */
+async function reviewServer(t, dir, { shoot, who = { name: "Dante", via: "tailnet" } }) {
+  const stream = { notify() {}, push() {} };
+  const server = createServer((req, res) => handleReview(req, res, { scratch: dir, stream, who, shoot }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body, headers = {}) =>
+    fetch(`${base}/_review/freeze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  return { base, post };
+}
+
+/** The `x`, `y`, `w` and `h` of `anchor`, each to 6 decimals. */
+function rounded(anchor) {
+  return [anchor.x, anchor.y, anchor.w, anchor.h].map((v) => Number(v.toFixed(6)));
+}
+
+const ELEMENT = { selector: "#pay", text: "Pay now", html: "<button id=pay>Pay now</button>" };
+const FREEZE = {
+  path: "/checkout",
+  viewport: "mobile",
+  scroll: { x: 0, y: 0 },
+  box: { x: 39, y: 84.4, w: 195, h: 84.4 },
+  elements: [ELEMENT],
+};
+
+test("a freeze of a page whose still did not change returns it and its latest rev, adding none", async (t) => {
+  const dir = scratch(t, { "shot.png": Buffer.concat([PNG, Buffer.from("a")]) });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "checkout", source: "/checkout", viewport: "mobile" });
+  const shot = shooter();
+  const { base, post } = await reviewServer(t, dir, shot);
+  shot.rects = [{ x: 39, y: 84.4, w: 195, h: 84.4 }];
+  const res = await post(FREEZE);
+  assert.equal(res.status, 200);
+  const frozen = await res.json();
+  assert.deepEqual(
+    { ...frozen, anchor: rounded(frozen.anchor) },
+    {
+      still: "checkout",
+      variant: "mobile",
+      rev: 1,
+      anchor: [0.1, 0.1, 0.5, 0.1],
+      state: "reproduced",
+      target: {
+        page: "/checkout",
+        elements: [ELEMENT],
+        viewport: "mobile",
+        scroll: { x: 0, y: 0 },
+        state: "reproduced",
+      },
+    }
+  );
+  assert.deepEqual(shot.calls.map((c) => [c.url, c.viewport, c.tags, c.fullPage, c.measure]), [
+    [`${base}/checkout`, "mobile", [], false, ["#pay"]],
+  ]);
+  assert.deepEqual(stills(dir).map((s) => [s.name, s.variants[0].revs.length]), [["checkout", 1]]);
+  shot.bytes = "b";
+  assert.equal((await (await post(FREEZE)).json()).rev, 2);
+  const thread = { type: "thread", author: HUMAN, still: frozen.still, variant: frozen.variant, rev: frozen.rev };
+  const stored = await appendEvent(dir, { ...thread, anchor: frozen.anchor, body: "Lower", target: frozen.target });
+  assert.deepEqual(threads(dir)[0].target, stored.target);
+});
+
+test("a freeze of a page without a still of that screen makes live-<slug>, shot whole", async (t) => {
+  const dir = scratch(t, { "shot.png": Buffer.concat([PNG, Buffer.from("a")]) });
+  const keep = (name, source, opts = {}) =>
+    addStill(dir, { file: path.join(dir, "shot.png"), name, source, viewport: "mobile", ...opts });
+  await keep("tablet-only", "/checkout", { viewport: "tablet" });
+  await keep("short", "/checkout");
+  await keep("stepped", "/checkout", { fullPage: true });
+  writeFileSync(
+    path.join(dir, "shots.mjs"),
+    'export default { shots: [{ name: "stepped", path: "/checkout", steps: async () => {} }] };\n'
+  );
+  const shot = shooter();
+  shot.size = [1170, 6000];
+  const { post } = await reviewServer(t, dir, shot);
+  const below = { ...FREEZE, scroll: { x: 0, y: 900 } };
+  const frozen = await (await post(below)).json();
+  const where = [frozen.still, frozen.variant, frozen.rev, frozen.state];
+  assert.deepEqual(where, ["live-checkout", "mobile", 1, "not-reproduced"]);
+  assert.deepEqual(rounded(frozen.anchor), [0.1, 0.4922, 0.5, 0.0422]);
+  assert.equal(shot.calls[0].fullPage, true);
+  const live = stills(dir).find((s) => s.name === "live-checkout");
+  const kept = [live.title, live.source.path, live.variants[0].viewport.fullPage];
+  assert.deepEqual(kept, ["/checkout (live)", "/checkout", true]);
+  assert.equal((await (await post(below)).json()).still, "live-checkout");
+  assert.equal(stills(dir).length, 4);
+  const query = await (await post({ ...FREEZE, path: "/Check_out/Pay?step=2&x=%20" })).json();
+  assert.equal(query.still, "live-check_out-pay-step-2-x-20");
+  writeFileSync(path.join(dir, "shots.mjs"), "export default {");
+  const unread = await (await post({ ...FREEZE, tags: ["dark"] })).json();
+  assert.deepEqual([unread.still, unread.variant], ["live-checkout", "mobile+dark"]);
+});
+
+test("a live still's name another page has already ends with a hash of the page", async (t) => {
+  const dir = scratch(t, { "shot.png": Buffer.concat([PNG, Buffer.from("a")]) });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "live-a-b", source: "/a/b", viewport: "desktop" });
+  const { post } = await reviewServer(t, dir, shooter());
+  const frozen = await (await post({ ...FREEZE, path: "/a-b" })).json();
+  assert.match(frozen.still, /^live-a-b-[0-9a-f]{6}$/);
+});
+
+test("a freeze keeps 20 elements, cut to the target's limits, and says the list was truncated", async (t) => {
+  const dir = scratch(t, {});
+  const shot = shooter();
+  const { post } = await reviewServer(t, dir, shot);
+  const many = Array.from({ length: 25 }, (_, i) => ({
+    selector: `#e${i}`,
+    text: "t".repeat(300),
+    html: "h".repeat(2000),
+  }));
+  const frozen = await (await post({ ...FREEZE, elements: many })).json();
+  assert.equal(frozen.target.truncated, true);
+  assert.equal(frozen.target.elements.length, 20);
+  assert.deepEqual([frozen.target.elements[0].text.length, frozen.target.elements[0].html.length], [200, 1000]);
+  assert.equal(shot.calls[0].measure.length, 20);
+  const none = await (await post({ ...FREEZE, elements: [] })).json();
+  assert.deepEqual([none.state, none.target.truncated], ["not-reproduced", undefined]);
+});
+
+test("a freeze follows the rules of posting an event: origin, JSON, a guest's name; a bad one is a 400", async (t) => {
+  const dir = scratch(t, {});
+  const shot = shooter();
+  const { base, post } = await reviewServer(t, dir, shot);
+  assert.equal((await post(FREEZE, { Origin: "https://evil.example" })).status, 403);
+  assert.equal((await post(FREEZE, { "Content-Type": "text/plain" })).status, 415);
+  assert.equal((await post("{")).status, 400);
+  assert.equal((await post("[]")).status, 400);
+  assert.equal((await post({ ...FREEZE, elements: Array(2000).fill(ELEMENT) })).status, 413);
+  assert.equal((await fetch(`${base}/_review/freeze`)).status, 405);
+  const bad = [
+    { ...FREEZE, path: "//evil.example/x" },
+    { ...FREEZE, path: "checkout" },
+    { ...FREEZE, viewport: "huge" },
+    { ...FREEZE, viewport: { width: 390 } },
+    { ...FREEZE, tags: ["dark", "light"] },
+    { ...FREEZE, tags: "dark" },
+    { ...FREEZE, scroll: { x: -1, y: 0 } },
+    { ...FREEZE, box: { x: 0, y: 0, w: 0, h: 10 } },
+    { ...FREEZE, elements: [{ text: "x" }] },
+    { ...FREEZE, truncated: "yes" },
+    { ...FREEZE, extra: 1 },
+  ];
+  for (const body of bad) assert.equal((await post(body)).status, 400, JSON.stringify(body));
+  assert.equal(shot.calls.length, 0);
+  shot.fail = "Chromium is gone";
+  const failed = await post(FREEZE);
+  assert.deepEqual([failed.status, (await failed.json()).error], [500, "Chromium is gone"]);
+  assert.deepEqual(stills(dir), []);
+});
+
+test("a guest freezes under a name only, and a folder source has no pages to freeze", async (t) => {
+  const dir = scratch(t, {});
+  const { post } = await reviewServer(t, dir, { ...shooter(), who: null });
+  const nameless = await post(FREEZE);
+  assert.deepEqual([nameless.status, (await nameless.json()).error], [400, "name required"]);
+  assert.equal((await post({ ...FREEZE, author: { name: "Ana" } })).status, 200);
+  const images = scratch(t, { "home.png": PNG });
+  const served = await reviewServer(t, folder(images), shooter());
+  assert.equal((await served.post(FREEZE)).status, 404);
+});
+
+test("placeMark takes the region around the marked elements, else the box sent, never off the shot", () => {
+  const size = { w: 400, h: 1000 };
+  const marked = { x: 100, y: 900, w: 200, h: 200 };
+  const rects = [{ x: 10, y: 20, w: 100, h: 50 }, { x: 200, y: 100, w: 40, h: 30 }];
+  const around = { anchor: { x: 0.025, y: 0.02, w: 0.575, h: 0.11 }, state: "reproduced" };
+  assert.deepEqual(placeMark(rects, marked, size), around);
+  const clipped = { anchor: { x: 0.25, y: 0.9, w: 0.5, h: 0.1 }, state: "not-reproduced" };
+  assert.deepEqual(placeMark([rects[0], null], marked, size), clipped);
+  assert.deepEqual(placeMark([{ x: 0, y: 1200, w: 10, h: 10 }], marked, size), clipped);
+  assert.deepEqual(placeMark([], marked, size), clipped);
+  assert.deepEqual(placeMark([], { x: 0, y: 1100, w: 10, h: 10 }, size), { anchor: null, state: "not-reproduced" });
+});
+
+test("freezeRequest cuts nothing it keeps and names the variant the freeze shoots", () => {
+  const request = freezeRequest({ ...FREEZE, viewport: "390x844@3+touch", tags: ["Dark"] });
+  const asked = [request.key, request.page, request.truncated, request.elements];
+  assert.deepEqual(asked, ["mobile+dark", "/checkout", false, [ELEMENT]]);
+  assert.equal(freezeRequest({ ...FREEZE, truncated: true }).truncated, true);
 });
