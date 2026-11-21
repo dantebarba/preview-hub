@@ -57,12 +57,18 @@ const FIELDS = {
 const OPTIONAL_FIELDS = new Set(["working", "idle"]);
 const STORED = ["seq", "id", "at"];
 const VIA = ["tailnet", "share", "cli"];
-const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
+/** The most characters a still's name may hold. */
+export const MAX_NAME_LENGTH = 100;
+
+/** The most tags a variant may have. */
+export const MAX_TAGS = 16;
+
+const NAME = new RegExp(`^[A-Za-z0-9][\\w.-]{0,${MAX_NAME_LENGTH - 1}}$`);
 const ID = /^[\w-]{1,64}$/;
 const SIZE = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/;
 const CUSTOM = /^([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(\+touch)?$/;
 const TAG = /^[a-z0-9][a-z0-9_.-]{0,31}$/;
-const KEY = /^[a-z0-9][\w.@-]{0,63}(\+[a-z0-9][\w.-]{0,31}){0,16}$/;
+const KEY = new RegExp(`^[a-z0-9][\\w.@-]{0,63}(\\+[a-z0-9][\\w.-]{0,31}){0,${MAX_TAGS}}$`);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BODY = 10000;
@@ -119,7 +125,7 @@ export function isPng(bytes) {
 }
 
 /** True for a plain object, not an array or null. */
-function isObject(v) {
+export function isObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
@@ -298,7 +304,7 @@ function elementProblem(element) {
  * Why `target`, what a remark made on the live page points at, is not a valid one, or null:
  * `{page, elements, truncated?, viewport, scroll, state}` (see the contract).
  */
-function targetProblem(target) {
+export function targetProblem(target) {
   if (!isObject(target)) return "'target' must be an object";
   const allowed = new Set(["page", "elements", "truncated", "viewport", "scroll", "state"]);
   const extra = Object.keys(target).find((k) => !allowed.has(k));
@@ -505,7 +511,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
   const vp = parseViewport(viewport, fullPage);
   const sorted = parseTags(tags);
   const key = variantKey(vp, sorted);
-  if (!KEY.test(key)) throw new Error(`variant '${key}': at most 16 tags`);
+  if (!KEY.test(key)) throw new Error(`variant '${key}': at most ${MAX_TAGS} tags`);
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {

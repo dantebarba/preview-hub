@@ -48,17 +48,19 @@ import { createReadStream, existsSync, mkdtempSync, readdirSync, readFileSync, r
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { capture, colorScheme, loadRecipe } from "./capture.mjs";
+import { capture, colorScheme, expandRecipe, loadRecipe } from "./capture.mjs";
 import { SHOTS_FILE } from "./export.mjs";
 import { aboutPage, sourceExtras, sourceFile, watchSource } from "./extras.mjs";
 import {
   addStill,
   appendEvent,
   EVENTS_FILE,
-  isPagePath,
+  isObject,
   isPng,
   MANIFEST_FILE,
   MAX_AUTHOR,
+  MAX_NAME_LENGTH,
+  MAX_TAGS,
   parseTags,
   parseViewport,
   readEvents,
@@ -69,6 +71,7 @@ import {
   storeAnnotated,
   storePaths,
   TARGET_LIMITS,
+  targetProblem,
   threads,
   variantKey,
   working,
@@ -89,7 +92,8 @@ const PING_TICKS = 20;
 const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
 const BETWEEN_WORDS = /(\?=)\s+(?==\?utf-8\?[bq]\?)/gi;
 const OWNER_ONLY = ["resolve", "reopen"];
-const MAX_FREEZE = { side: 4096, dpr: 4, waiting: 4 };
+const FREEZE_VIEWPORT = { side: 4096, dpr: 4 };
+const MAX_FREEZES_WAITING = 4;
 const VIEWER_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "stills");
 const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
 const VIEWER_ASSETS = {
@@ -550,11 +554,6 @@ export function annotatedPng(value) {
   return png;
 }
 
-/** True for a plain object, not an array or null. */
-function isObject(v) {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-
 /**
  * The JSON object a `POST` under `/_review/` carries, `{ value, size }`, `size` its bytes.
  * Throws a refusal for a post whose `Origin` is not this host (403), one that is not JSON
@@ -653,64 +652,47 @@ async function postEvent(req, res, { scratch, stream, who }) {
  * `{ page, viewport, vp, tags, key, scroll, box, elements, truncated }`. `path` is the page's
  * path; `viewport` a preset or `WxH[@dpr][+touch]`; `tags` optional, as a still's; `scroll`
  * `{x, y}` and `box` `{x, y, w, h}` in CSS pixels, the box from the top left of the viewport;
- * the viewport at most `MAX_FREEZE.side` CSS pixels a side at a pixel ratio of `MAX_FREEZE.dpr`;
- * `elements` the marked `{selector, text, html}`, each text and html cut to the target's
- * limits and the list to its first 20, `truncated` then true. Throws a 400 refusal naming the
- * first problem.
+ * the viewport at most `FREEZE_VIEWPORT.side` CSS pixels a side at a pixel ratio of
+ * `FREEZE_VIEWPORT.dpr`; `elements` the marked `{selector, text, html}`, each text and html
+ * cut to the target's limits and the list to its first 20, `truncated` then true. The rest is
+ * checked as the target its thread carries (see `targetProblem` of the store), so a problem
+ * is named by the target's field. Throws a 400 refusal naming the first problem.
  */
 export function freezeRequest(body) {
   const fields = ["path", "viewport", "tags", "scroll", "box", "elements", "truncated"];
   const extra = Object.keys(body).find((k) => !fields.includes(k));
   if (extra) throw refusal(400, `'${extra}' is not a field of a freeze`);
-  if (!isPagePath(body.path)) throw refusal(400, "'path' must be a page path starting with /");
-  let vp;
+  const { path: page, viewport, tags: given = [], scroll, box, elements, truncated = false } = body;
+  if (!Array.isArray(elements)) throw refusal(400, "'elements' must be a list of {selector, text, html}");
+  const cut = (v, most) => (typeof v === "string" ? v.slice(0, most) : v);
+  const kept = elements.slice(0, TARGET_LIMITS.elements).map((e) => {
+    if (!isObject(e)) return e;
+    const { selector, text = "", html = "" } = e;
+    return { selector, text: cut(text, TARGET_LIMITS.text), html: cut(html, TARGET_LIMITS.html) };
+  });
+  const target = { page, elements: kept, truncated: truncated || elements.length > kept.length, viewport, scroll };
+  const problem = targetProblem({ ...target, state: "reproduced" });
+  if (problem) throw refusal(400, problem);
+  const vp = parseViewport(viewport);
+  if (vp.width > FREEZE_VIEWPORT.side || vp.height > FREEZE_VIEWPORT.side || vp.dpr > FREEZE_VIEWPORT.dpr) {
+    const { side, dpr } = FREEZE_VIEWPORT;
+    throw refusal(400, `a freeze's viewport is at most ${side}x${side}@${dpr}`);
+  }
   let tags;
   try {
-    if (typeof body.viewport !== "string") throw new Error("a viewport is a preset or WxH[@dpr][+touch]");
-    vp = parseViewport(body.viewport);
-    if (body.tags !== undefined && !Array.isArray(body.tags)) throw new Error("'tags' must be a list");
-    tags = parseTags(body.tags);
-    if (tags.length > 16) throw new Error("a variant has at most 16 tags");
-    if (vp.width > MAX_FREEZE.side || vp.height > MAX_FREEZE.side || vp.dpr > MAX_FREEZE.dpr) {
-      throw new Error(`a freeze's viewport is at most ${MAX_FREEZE.side}x${MAX_FREEZE.side}@${MAX_FREEZE.dpr}`);
-    }
+    if (!Array.isArray(given)) throw new Error("'tags' must be a list");
+    tags = parseTags(given);
+    if (tags.length > MAX_TAGS) throw new Error(`a variant has at most ${MAX_TAGS} tags`);
     colorScheme(tags);
   } catch (e) {
     throw refusal(400, e.message);
   }
-  const number = (v, min) => typeof v === "number" && Number.isFinite(v) && v >= min;
-  const { scroll, box, elements, truncated = false } = body;
-  if (!isObject(scroll) || !number(scroll.x, 0) || !number(scroll.y, 0)) {
-    throw refusal(400, "'scroll' must be {x, y}, numbers of 0 or more");
-  }
-  const sides = isObject(box) && number(box.w, 0) && number(box.h, 0) && box.w > 0 && box.h > 0;
-  if (!sides || !number(box.x, -Infinity) || !number(box.y, -Infinity)) {
+  const sides = isObject(box) ? [box.x, box.y, box.w, box.h] : [];
+  if (sides.length !== 4 || !sides.every(Number.isFinite) || !(box.w > 0 && box.h > 0)) {
     throw refusal(400, "'box' must be {x, y, w, h} in CSS pixels, w and h above 0");
   }
-  if (!Array.isArray(elements)) throw refusal(400, "'elements' must be a list of {selector, text, html}");
-  if (typeof truncated !== "boolean") throw refusal(400, "'truncated' must be true or false");
-  const kept = elements.slice(0, TARGET_LIMITS.elements).map((e, i) => {
-    const { selector, text = "", html = "" } = isObject(e) ? e : {};
-    if (typeof selector !== "string" || !selector.trim() || selector.length > TARGET_LIMITS.selector) {
-      const most = TARGET_LIMITS.selector;
-      throw refusal(400, `'elements[${i}].selector' must be a CSS selector of at most ${most} characters`);
-    }
-    if (typeof text !== "string" || typeof html !== "string") {
-      throw refusal(400, `'elements[${i}]' text and html must be strings`);
-    }
-    return { selector, text: text.slice(0, TARGET_LIMITS.text), html: html.slice(0, TARGET_LIMITS.html) };
-  });
-  return {
-    page: body.path,
-    viewport: body.viewport,
-    vp,
-    tags,
-    key: variantKey(vp, tags),
-    scroll: { x: scroll.x, y: scroll.y },
-    box: { x: box.x, y: box.y, w: box.w, h: box.h },
-    elements: kept,
-    truncated: truncated || elements.length > kept.length,
-  };
+  const [x, y, w, h] = sides;
+  return { ...target, vp, tags, key: variantKey(vp, tags), scroll: { x: scroll.x, y: scroll.y }, box: { x, y, w, h } };
 }
 
 let recipeLoaded = null;
@@ -727,22 +709,15 @@ async function recipeOf(file) {
 }
 
 /**
- * What the mockup's `shots.mjs` says of its shots by name, `{ stepped, maxHeight }`: the names
- * of those that have steps, so their stills show the page after them, and the `maxHeight` a
- * shot is taken whole at where it or the recipe's defaults set one; empty without the file,
- * null when it cannot be read.
+ * The shots of the mockup's `shots.mjs`, by `<name> <variant key>` (see `expandRecipe`): with
+ * the steps that drive the page before its still is shot and the `maxHeight` it is shot whole
+ * at. Empty without the file, null when it cannot be read.
  */
 async function recipeShots(scratch) {
   const file = path.join(scratch, SHOTS_FILE);
-  if (!existsSync(file)) return { stepped: new Set(), maxHeight: new Map() };
+  if (!existsSync(file)) return new Map();
   try {
-    const { defaults, shots } = await recipeOf(file);
-    const height = (s) => s?.maxHeight ?? defaults?.maxHeight;
-    const tall = shots.filter((s) => Number.isInteger(height(s)) && height(s) >= 1);
-    return {
-      stepped: new Set(shots.filter((s) => s?.steps !== undefined).map((s) => s.name)),
-      maxHeight: new Map(tall.map((s) => [s.name, height(s)])),
-    };
+    return new Map(expandRecipe(await recipeOf(file)).map((shot) => [`${shot.name} ${shot.key}`, shot]));
   } catch {
     return null;
   }
@@ -751,20 +726,19 @@ async function recipeShots(scratch) {
 /**
  * The still of `scratch` a freeze of `page` at the variant `key` keeps its shot on, `{ still,
  * variant, maxHeight }`, or null: the first whose source is `page`, that has that variant shot,
- * and is not shot after steps in `shots.mjs` (none when the file cannot be read), `maxHeight`
- * the one `shots.mjs` shoots it whole at, if it sets one. One shot only at its viewport `vp` is
+ * and whose variant `shots.mjs` does not shoot after steps (none when the file cannot be read),
+ * `maxHeight` the one `shots.mjs` shoots it whole at, if it shoots it. One shot only at its viewport `vp` is
  * taken only when the box `marked`, in CSS pixels of the page, is inside it.
  */
 async function reusableStill(scratch, { page, key, vp, marked }) {
   const recipe = await recipeShots(scratch);
   if (!recipe) return null;
   for (const still of stills(scratch)) {
-    if (still.source.path !== page || recipe.stepped.has(still.name)) continue;
+    const shot = recipe.get(`${still.name} ${key}`);
+    if (still.source.path !== page || shot?.steps) continue;
     const variant = still.variants.find((v) => v.key === key && v.revs.length);
     const inside = marked.x + marked.w <= vp.width && marked.y + marked.h <= vp.height;
-    if (variant && (variant.viewport?.fullPage || inside)) {
-      return { still, variant, maxHeight: recipe.maxHeight.get(still.name) };
-    }
+    if (variant && (variant.viewport?.fullPage || inside)) return { still, variant, maxHeight: shot?.maxHeight };
   }
   return null;
 }
@@ -776,10 +750,10 @@ async function reusableStill(scratch, { page, key, vp, marked }) {
  */
 export function liveName(scratch, page) {
   const slug = page.slice(1).toLowerCase().replace(/[^a-z0-9._]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
-  const name = `live-${slug || "index"}`.slice(0, 100);
+  const name = `live-${slug || "index"}`.slice(0, MAX_NAME_LENGTH);
   const taken = stills(scratch).some((s) => s.name.toLowerCase() === name && s.source.path !== page);
-  if (!taken) return name;
-  return `${name.slice(0, 93)}-${createHash("sha256").update(page).digest("hex").slice(0, 6)}`;
+  const hash = createHash("sha256").update(page).digest("hex").slice(0, 6);
+  return taken ? `${name.slice(0, MAX_NAME_LENGTH - hash.length - 1)}-${hash}` : name;
 }
 
 /** The part of the rect `r` (`{x, y, w, h}`) inside an image of `size` (`{w, h}`), or null. */
@@ -861,10 +835,10 @@ let waiting = 0;
 
 /**
  * Run `fn` once every freeze before it has ended, so one Chromium shoots at a time. Throws a
- * 503 refusal when `MAX_FREEZE.waiting` freezes are queued already.
+ * 503 refusal when `MAX_FREEZES_WAITING` freezes are queued already.
  */
 function oneAtATime(fn) {
-  if (waiting >= MAX_FREEZE.waiting) throw refusal(503, "busy shooting other marks; try again shortly");
+  if (waiting >= MAX_FREEZES_WAITING) throw refusal(503, "busy shooting other marks; try again shortly");
   waiting += 1;
   const run = freezing.then(fn).finally(() => {
     waiting -= 1;
@@ -878,17 +852,17 @@ function oneAtATime(fn) {
  * `freeze`) and answer 200 with where its remark goes. It takes what `POST /_review/events`
  * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB (413),
  * and a guest's needs a name in `author` (400), since it writes a still. A bad request is a
- * 400; a shot that failed a 500; a freeze while `MAX_FREEZE.waiting` wait their turn a 503.
- * A folder source has no pages to mark (404). The page is shot
- * from this server, at `127.0.0.1` on the port the request came to.
+ * 400; a shot that failed a 500; a freeze while `MAX_FREEZES_WAITING` wait their turn a 503.
+ * A folder source has no pages to mark (404). The page is shot from this server, at
+ * `127.0.0.1` on the port the request came to.
  */
 async function postFreeze(req, res, { scratch, stream, who, shoot }) {
-  if (typeof scratch !== "string") return sendJson(res, 404, { error: "a folder has no pages to mark" });
   let request;
   try {
     const { value } = await jsonPost(req, MAX_POST_BYTES, "a freeze");
     const { author: given, ...fields } = value;
     authorOf(who, given);
+    if (typeof scratch !== "string") throw refusal(404, "a folder has no pages to mark");
     request = freezeRequest(fields);
   } catch (e) {
     return sendJson(res, e.status ?? 400, { error: e.message });

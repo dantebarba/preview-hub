@@ -304,7 +304,7 @@ for it (see [Live marks](#live-marks)); the target is what the reviewer pointed 
 
 | Field       | Meaning |
 | ----------- | ------- |
-| `page`      | The page's path on the mockup, with its query: starts with one `/` not followed by `/` or `\`, no space, at most 2000 characters. |
+| `page`      | The page's path on the mockup, with its query: starts with one `/` not followed by `/` or `\`, no space or control character, resolving on the mockup's own host, at most 2000 characters. |
 | `elements`  | Up to 20 marked elements, `{selector, text, html}`: a CSS selector of the element (1 to 500 characters), its visible text (at most 200) and a cut of its HTML (at most 1000). May be empty. |
 | `truncated` | Optional: `true` when more elements were marked than `elements` keeps. |
 | `viewport`  | The viewport the page was seen at, a [preset or custom viewport](#viewports). |
@@ -440,8 +440,8 @@ that shot with the marked elements as its [target](#targets).
 | Field       | Meaning |
 | ----------- | ------- |
 | `path`      | The page's path, as `target.page`. |
-| `viewport`  | The viewport it was seen at, a preset or `WxH[@dpr][+touch]`. |
-| `tags`      | Optional [tags](#tags) of the variant to shoot, `dark` or `light` setting the colour scheme. |
+| `viewport`  | The viewport it was seen at, a preset or `WxH[@dpr][+touch]`, at most 4096 CSS pixels a side at a pixel ratio of at most 4. |
+| `tags`      | Optional [tags](#tags) of the variant to shoot, at most 16, `dark` or `light` setting the colour scheme. |
 | `scroll`    | `{x, y}`, as `target.scroll`. |
 | `box`       | `{x, y, w, h}`: the box drawn, in CSS pixels from the top left of the viewport, `w` and `h` above 0. |
 | `elements`  | The marked `{selector, text, html}`; text and HTML are cut and the list kept to its first 20, `truncated` then true. |
@@ -450,25 +450,29 @@ that shot with the marked elements as its [target](#targets).
 
 It is posted as an event is: JSON only (`415`), from the page's own origin only (`403`), at
 most 64 KiB (`413`), and a guest's needs a name (`400`, `name required`; see
-[Reviewers](#reviewers)). A bad field is a `400`, a shot that failed a `500`, and a folder
-source, which has no pages, answers `404`. The runtime then shoots `path` from scratch at that
+[Reviewers](#reviewers)). A bad field is a `400`, named as the target's field when the target
+has it; a shot that failed a `500`; a folder source, which has no pages, a `404`. Freezes are
+shot one at a time, and one posted while four wait their turn is a `503`. The runtime then shoots `path` from scratch at that
 viewport and tags in its headless browser, measuring each element's selector on the shot, and
 keeps the shot as a revision of a still, under `stills/.lock` as any still is added:
 
 1. **The still of that screen**, when there is one: the first still whose `source.path` is
-   `path`, that has the variant of that viewport and tags, and that `shots.mjs` does not shoot
-   after steps (none when `shots.mjs` cannot be read). It is shot as that variant was, whole
-   or not; one shot only at its viewport is taken only when the box, moved by the scroll, is
-   inside it. An image equal to the variant's latest revision adds none, so a new revision
+   `path`, that has the variant of that viewport and tags, and whose variant `shots.mjs` does
+   not shoot after steps (none when `shots.mjs` cannot be read). It is shot as that variant
+   was, whole or not, and at the `maxHeight` `shots.mjs` gives it; one shot only at its
+   viewport is taken only when the box, moved by the scroll, is inside it. An image equal to the variant's latest revision adds none, so a new revision
    appears only when the still was stale.
 2. **Otherwise `live-<slug>`**, made with that variant and shot whole: the slug is the path
    with its query, lowercased, each run of characters other than letters, digits, `.` and `_`
-   one `-` (`/checkout?step=2` is `live-checkout-step-2`, `/` is `live-index`). A name a still
+   one `-`, those three trimmed from its ends, the name cut to 100 characters
+   (`/checkout?step=2` is `live-checkout-step-2`, `/` is `live-index`). A name a still
    of another page already has ends with `-` and six hex characters of the SHA-256 of `path`.
    Its title is `<path> (live)`.
 
 It answers `200` with `{still, variant, rev, anchor, state, target}`: the revision the remark
-goes on, its anchor and state, and the `target` its `thread` event carries. When every
+goes on, its anchor and state, and the `target` its `thread` event carries. A selector is
+found when it matches exactly one visible element with an area on the shot; one that matches
+none, more than one (which was meant is not known) or does not parse is not. When every
 selector is found on the shot, the anchor is the region around their elements on it and the
 state `reproduced`; otherwise, or with no elements, the anchor is the box sent, moved by the
 scroll and cut to the shot, and the state `not-reproduced` (no anchor when that box is not on

@@ -51,7 +51,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, parseTags, parseViewport, variantKey } from "./review.mjs";
+import { addStill, isObject, parseTags, parseViewport, variantKey } from "./review.mjs";
 
 const CHROMES = [
   "/usr/bin/chromium-browser",
@@ -748,11 +748,6 @@ function shotTags(tags) {
 /** True when `page` is an http(s) URL rather than a path on the mockup. */
 function isUrl(page) {
   return /^https?:\/\//.test(page);
-}
-
-/** True for a plain object, not an array or null. */
-function isObject(v) {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 /** `value` as a list of tag sets: a list of tags is one set, a list of lists is several. */
