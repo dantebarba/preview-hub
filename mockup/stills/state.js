@@ -713,6 +713,14 @@ export function elementsLabel({ elements, truncated }) {
   return `${n}${truncated ? "+" : ""} ${n === 1 && !truncated ? "element" : "elements"}`;
 }
 
+/**
+ * True when the shot of `target` does not show what was marked: it is not reproduced and
+ * something was marked, a box over no element having nothing to show.
+ */
+export function lost({ state, elements, truncated }) {
+  return state === "not-reproduced" && (elements.length > 0 || Boolean(truncated));
+}
+
 /** True when the rect `r` (`{ x, y, w, h }`) is inside the rect `box`, to half a pixel. */
 export function holds(box, r) {
   const within = (lo, size, from, room) => lo >= from - INSIDE_PX && lo + size <= from + room + INSIDE_PX;

@@ -99,6 +99,7 @@ import {
   LIVE_DRAFT_KEY,
   liveDraft,
   livePath,
+  lost,
   MAX_NAME,
   moved,
   NAME_KEY,
@@ -381,7 +382,7 @@ function drawDraft() {
   el("composer").style.setProperty("--y", `${(draft.anchor.y + (draft.anchor.h ?? 0)) * 100}%`);
   const marks = draft.target ? ` · ${elementsLabel(draft.target)}` : "";
   el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}${marks}`;
-  el("unshown").hidden = draft.target?.state !== "not-reproduced";
+  el("unshown").hidden = !draft.target || !lost(draft.target);
 }
 
 /**
@@ -453,7 +454,7 @@ function targetLine(t) {
   page.title = "Open the live page";
   page.onclick = (e) => e.stopPropagation();
   line.append("on ", page, ` · ${elementsLabel(t.target)}`);
-  if (t.target.state === "not-reproduced") line.append(" · ", node("span", "lost", "not reproduced"));
+  if (lost(t.target)) line.append(" · ", node("span", "lost", "not reproduced"));
   return [line];
 }
 

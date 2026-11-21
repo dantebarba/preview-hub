@@ -49,6 +49,7 @@ import {
   linkedKey,
   liveDraft,
   livePath,
+  lost,
   markedIn,
   markOf,
   MAX_ZOOM,
@@ -201,6 +202,12 @@ test("a device class is a viewport preset of the store, at its size, scaled down
 test("elementsLabel counts a target's elements, with a plus when it was truncated", () => {
   const of = (n, truncated) => elementsLabel({ elements: Array(n).fill({}), truncated });
   assert.deepEqual([of(0), of(1), of(3), of(20, true), of(1, true)], ["0 elements", "1 element", "3 elements", "20+ elements", "1+ elements"]);
+});
+
+test("lost is a mark the shot does not show: not reproduced, with something marked", () => {
+  const of = (state, n, truncated) => lost({ state, elements: Array(n).fill({}), truncated });
+  assert.deepEqual([of("not-reproduced", 1), of("not-reproduced", 0, true)], [true, true]);
+  assert.deepEqual([of("not-reproduced", 0), of("reproduced", 3)], [false, false]);
 });
 
 test("holds says whether a rect is inside a box, to half a pixel", () => {

@@ -193,7 +193,8 @@ function selectorOf(target) {
   const only = (selector) => fits(selector) && doc.querySelectorAll(selector).length === 1;
   let path = "";
   for (let at = target; at && at !== doc.documentElement; at = at.parentElement) {
-    const id = at.id ? `#${CSS.escape(at.id)}` : "";
+    const name = at.getAttribute("id");
+    const id = name ? `#${CSS.escape(name)}` : "";
     if (id && only(id)) {
       const selector = path ? `${id} > ${path}` : id;
       return fits(selector) ? selector : null;
@@ -230,7 +231,8 @@ function chainOf(target) {
 
 /** What a breadcrumb calls `target`: its tag with its id, else with its first class. */
 function crumbLabel(target) {
-  if (target.id) return `${target.localName}#${target.id}`;
+  const id = target.getAttribute("id");
+  if (id) return `${target.localName}#${id}`;
   return target.classList.length ? `${target.localName}.${target.classList[0]}` : target.localName;
 }
 
@@ -345,17 +347,23 @@ function hover(e) {
 }
 
 /**
- * What scrolls under the point `p` of the page's viewport: the nearest element around it that
- * scrolls its content, else the page itself.
+ * Scroll what is under the point `p` of the page's viewport by `dx` and `dy`: the nearest
+ * element around it that scrolls its content and has room left that way, else the page itself,
+ * so a list at its end or a row that only scrolls sideways hands the scroll on.
  */
-function scrollerAt(p) {
+function scrollAt(p, dx, dy) {
   const doc = pageDocument();
-  for (let at = elementAt(p); at; at = at.parentElement) {
+  const page = doc?.scrollingElement ?? null;
+  for (let at = elementAt(p); at && at !== page; at = at.parentElement) {
     const { overflowX, overflowY } = doc.defaultView.getComputedStyle(at);
-    const scrolls = /auto|scroll/.test(overflowX + overflowY);
-    if (scrolls && (at.scrollHeight > at.clientHeight || at.scrollWidth > at.clientWidth)) return at;
+    const left = /auto|scroll/.test(overflowX) ? dx : 0;
+    const top = /auto|scroll/.test(overflowY) ? dy : 0;
+    if (!left && !top) continue;
+    const { scrollLeft, scrollTop } = at;
+    at.scrollBy({ left, top, behavior: "instant" });
+    if (at.scrollLeft !== scrollLeft || at.scrollTop !== scrollTop) return;
   }
-  return doc?.scrollingElement ?? null;
+  page?.scrollBy({ left: dx, top: dy, behavior: "instant" });
 }
 
 /** The point halfway between the first two fingers on the layer. */
@@ -375,7 +383,7 @@ function startDrag(e) {
   if (e.pointerType !== "mouse") fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
   if (fingers.size > 1) {
     if (drag) clearSel();
-    if (fingers.size === 2) pan = { at: middle(), scroller: scrollerAt(toPage(pointOf(middle()))) };
+    if (fingers.size === 2) pan = { at: middle(), point: toPage(pointOf(middle())) };
     return drawSel();
   }
   if (e.button !== 0) return undefined;
@@ -404,7 +412,7 @@ function moveDrag(e) {
   if (pan) {
     if (fingers.size < 2) return;
     const at = middle();
-    pan.scroller?.scrollBy((pan.at.clientX - at.clientX) / scale, (pan.at.clientY - at.clientY) / scale);
+    scrollAt(pan.point, (pan.at.clientX - at.clientX) / scale, (pan.at.clientY - at.clientY) / scale);
     pan.at = at;
     return;
   }
@@ -451,12 +459,20 @@ function cancelDrag(e) {
 function wheel(e) {
   e.preventDefault();
   const lines = e.deltaMode === 1 ? LINE_PX : 1;
-  scrollerAt(toPage(pointOf(e)))?.scrollBy(e.deltaX * lines, e.deltaY * lines);
+  scrollAt(toPage(pointOf(e)), e.deltaX * lines, e.deltaY * lines);
 }
 
-/** The page scrolled: a mark is dropped, since what it was on moved under it. */
-function scrolled() {
-  if (!state.sel && el("hover").hidden) return;
+/**
+ * Something scrolled in the page: the highlight goes, and so does a mark that moved with it, one
+ * of the page itself or of an element that holds a marked one, or a box still being drawn. A
+ * mark stays when what scrolled is elsewhere on the page.
+ */
+function scrolled(e) {
+  el("hover").hidden = true;
+  const { sel } = state;
+  if (!sel) return;
+  const whole = e.target.nodeType === Node.DOCUMENT_NODE;
+  if (!whole && sel.elements && !sel.elements.some((marked) => e.target.contains(marked))) return;
   clearSel();
   drawSel();
 }
@@ -464,14 +480,17 @@ function scrolled() {
 /**
  * Read where the page is: its path and query, shown in the bar and kept in the shell's URL so a
  * mark uses it and a reload comes back to it. A page that left the mockup's origin cannot be
- * read or marked. A change of page drops the mark.
+ * read or marked, and one whose path no shell URL holds, such as the menu's `/`, leaves the URL
+ * as it was. A change of page drops the mark, as does a load of the same one (see `adopt`).
  */
 function track() {
   let page = null;
+  let shell = null;
   try {
     const at = frame.contentWindow.location;
     if (at.protocol === "about:") return;
     page = at.pathname + at.search;
+    shell = pageOfLive(livePath(at.pathname)) && livePath(page);
   } catch {
     page = null;
   }
@@ -479,13 +498,17 @@ function track() {
   state.page = page;
   clearSel();
   if (page === null) state.marking = false;
-  else history.replaceState(history.state, "", livePath(page));
+  if (shell) history.replaceState(history.state, "", shell);
   render();
 }
 
-/** True when a key pressed on `target` is text being typed, not a shortcut. */
-function typing(target) {
-  return /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable;
+/**
+ * True when the key event `e` is text being typed, not a shortcut: its innermost target, inside
+ * a component's shadow tree too, is a field or editable.
+ */
+function typing(e) {
+  const [target = e.target] = e.composedPath();
+  return /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || Boolean(target.isContentEditable);
 }
 
 /** Esc leaves Mark mode, or the name sheet; `m` enters or leaves it, unless it is being typed somewhere. */
@@ -496,16 +519,23 @@ function onKey(e) {
     e.preventDefault();
     return setMarking(false);
   }
-  if (e.ctrlKey || e.metaKey || e.altKey || typing(e.target) || e.key.toLowerCase() !== "m") return undefined;
+  if (e.ctrlKey || e.metaKey || e.altKey || typing(e) || e.key.toLowerCase() !== "m") return undefined;
   e.preventDefault();
   return setMarking(!state.marking);
 }
 
-/** A page loaded in the iframe: hear its keys and its scrolls, and read where it is. */
+/**
+ * A page loaded in the iframe: hear its keys and its scrolls, and read where it is. A mark made
+ * on the page that was there goes, even when the new one has the same path.
+ */
 function adopt() {
   const doc = pageDocument();
   doc?.addEventListener("keydown", onKey);
   doc?.addEventListener("scroll", scrolled, { capture: true, passive: true });
+  if (state.sel || drag) {
+    clearSel();
+    drawSel();
+  }
   track();
 }
 
@@ -554,14 +584,17 @@ async function writer() {
 /**
  * Comment on the mark: freeze the page as it was marked, then open the viewer on the still the
  * shot went on, the answer left for it in this tab's session storage. An element no selector
- * names alone is left out, the mark then truncated. The shell stays in Mark mode, with the
- * reason, when the shot fails.
+ * names alone, or that the page took out since it was marked, is left out, the mark then
+ * truncated. Nothing is shot in a browser that cannot keep the answer. The shell stays in Mark mode, with the reason, when the shot fails, and busy until
+ * the viewer opens when it does not.
  */
 async function comment() {
   const { sel } = state;
-  const view = pageDocument()?.defaultView;
+  const doc = pageDocument();
+  const view = doc?.defaultView;
   if (!sel?.elements || state.busy || !view) return;
-  const marked = sel.elements.map(describe);
+  const there = sel.elements.filter((target) => target.isConnected && target.ownerDocument === doc);
+  const marked = there.map(describe);
   const elements = marked.filter((e) => e.selector);
   const request = {
     path: state.page,
@@ -569,8 +602,14 @@ async function comment() {
     scroll: { x: Math.max(0, view.scrollX), y: Math.max(0, view.scrollY) },
     box: boxOf(sel.anchor),
     elements,
-    ...(sel.truncated || elements.length < marked.length ? { truncated: true } : {}),
+    ...(sel.truncated || elements.length < sel.elements.length ? { truncated: true } : {}),
   };
+  let leaving = false;
+  try {
+    sessionStorage.setItem(LIVE_DRAFT_KEY, "");
+  } catch {
+    return report("This browser keeps no session storage here, so the remark cannot be handed to the viewer.");
+  }
   state.busy = true;
   render();
   try {
@@ -585,11 +624,12 @@ async function comment() {
     if (!res.ok) throw new Error(frozen.error || `HTTP ${res.status}`);
     sessionStorage.setItem(LIVE_DRAFT_KEY, JSON.stringify(frozen));
     report("");
+    leaving = true;
     location.assign(`/stills#${frozen.still}@${frozen.variant}`);
   } catch (e) {
     report(`Could not shoot the page: ${e.message}`);
   } finally {
-    state.busy = false;
+    state.busy = leaving;
     render();
   }
 }
