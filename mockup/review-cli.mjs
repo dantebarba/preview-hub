@@ -142,6 +142,32 @@ function aboutText(event, variant = event.variant) {
   return event.thread ?? (event.still ? stillText(event.still, variant) : "");
 }
 
+/** How many elements a thread's `target` marks, ` 3 elements`, `20+` when it was truncated; empty without one. */
+function elementsText(target) {
+  if (!target) return "";
+  const n = target.elements.length;
+  return ` ${n}${target.truncated ? "+" : ""} ${n === 1 && !target.truncated ? "element" : "elements"}`;
+}
+
+/**
+ * The lines `review show` prints for a thread's `target`: the page, viewport, scroll and state,
+ * then each marked element's selector and text, and its HTML on one line below.
+ */
+function targetLines(target) {
+  const lines = [
+    `page    ${target.page}`,
+    `viewport ${target.viewport}`,
+    `scroll  ${target.scroll.x},${target.scroll.y}`,
+    `state   ${target.state}`,
+  ];
+  for (const e of target.elements) {
+    lines.push(`element ${e.selector}  ${quote(e.text)}`);
+    if (e.html.trim()) lines.push(`        ${e.html.trim().replace(/\s*\n\s*/g, " ")}`);
+  }
+  if (target.truncated) lines.push("element (more were inside the box; the first 20 are kept)");
+  return lines;
+}
+
 /**
  * The line `watch` prints for `event`. `first` maps a still's name to its first variant, the
  * one an event without `variant` means.
@@ -153,7 +179,7 @@ export function eventLine(event, first = new Map()) {
   switch (event.type) {
     case "thread": {
       const where = target({ rev: null, anchor: null, ...event, variant });
-      return `${head} ${event.id} ${where} ${by}: ${quote(event.body)}`;
+      return `${head} ${event.id} ${where}${elementsText(event.target)} ${by}: ${quote(event.body)}`;
     }
     case "reply":
       return `${head} ${event.thread} ${by}: ${quote(event.body)}`;
@@ -298,7 +324,10 @@ function reviewLs({ dir, io }, _args, { open, json }) {
   }
 }
 
-/** One thread in full: where it points, its body and replies, and the files to look at. */
+/**
+ * One thread in full: where it points, its body and replies, and the files to look at; for a
+ * remark made on the live page, what it marked there (see `targetLines`).
+ */
 function reviewShow({ dir, root, io }, [id], { json }) {
   const thread = findThread(dir, id);
   const rev = stills(dir)
@@ -316,6 +345,7 @@ function reviewShow({ dir, root, io }, [id], { json }) {
   if (files.image) io.out(`image   ${files.image}`);
   const notDrawn = "(none: not written yet, or the viewer could not draw it; read image at the anchor above)";
   if (files.annotated || thread.anchor) io.out(`marked  ${files.annotated ?? notDrawn}`);
+  if (thread.target) for (const line of targetLines(thread.target)) io.out(line);
   for (const e of [thread, ...thread.replies]) {
     io.out("");
     const via = e.author.via ? `, ${VIA_LABEL[e.author.via]}` : "";
