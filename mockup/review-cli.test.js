@@ -265,7 +265,7 @@ test("a remark from the live page shows its target in review show, --json and th
   assert.match(eventLine({ ...live, target: { ...one, truncated: true } }), / whole 1\+ elements dante/);
   const truncated = await appendEvent(dir, { ...remarkOn, body: "All", target: { ...target, truncated: true } });
   const more = (await cli(dir, ["review", "show", truncated.id])).out.split("\n")[10];
-  assert.equal(more, "element (more were inside the box; the first 20 are kept)");
+  assert.equal(more, "element (more were marked than are kept here)");
   const plain = (await cli(dir, ["review", "show", remark.id])).out;
   assert.doesNotMatch(plain, /^(page|viewport|scroll|state|element) /m);
   assert.equal(JSON.parse((await cli(dir, ["review", "show", remark.id, "--json"])).out).target, null);

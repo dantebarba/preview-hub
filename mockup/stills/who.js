@@ -5,7 +5,9 @@
  * wires it when it loads.
  */
 
-import { MAX_NAME, NAME_KEY, store, stored } from "./state.js";
+import { MAX_NAME, store, stored } from "./state.js";
+
+const NAME_KEY = "review.name";
 
 let done = null;
 

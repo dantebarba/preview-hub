@@ -95,7 +95,10 @@ const REV_IMAGE = /^\/stills\/[^/]+\/(?:[^/]+\/)?\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
-const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
+const ELEMENT_CHARS = TARGET_LIMITS.selector + TARGET_LIMITS.text + TARGET_LIMITS.html;
+const MAX_TARGET_BYTES = 3 * (TARGET_LIMITS.page + TARGET_LIMITS.elements * ELEMENT_CHARS);
+const MAX_UPLOAD_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
+const MAX_FREEZE_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES;
 const POLL_MS = 1000;
 const PING_TICKS = 20;
 const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
@@ -364,14 +367,19 @@ export function route(url, app) {
     return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
   }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
-  const page = (at) => {
-    const slug = SLUG.exec(at ?? "");
-    const file = slug && !path.extname(slug[1]) ? pageFile(slug[1]) : null;
-    return file && existsSync(path.join(scratchDir(app), file)) ? file : null;
-  };
-  if (page(pageOfLive(pathname))) return { live: true };
-  const file = page(pathname);
+  if (pageAt(scratchDir(app), pageOfLive(pathname))) return { live: true };
+  const file = pageAt(scratchDir(app), pathname);
   return file ? { url: `/${file}${search}` } : null;
+}
+
+/**
+ * The page of the scratch dir `scratch` that the path `at` (`/<slug>`, its query and hash left
+ * out) is served from, as `pages/<slug>.html`, or null when no page is there.
+ */
+function pageAt(scratch, at) {
+  const slug = SLUG.exec((at ?? "").split(/[?#]/)[0]);
+  const file = slug && !path.extname(slug[1]) ? pageFile(slug[1]) : null;
+  return file && existsSync(path.join(scratch, file)) ? file : null;
 }
 
 /**
@@ -617,7 +625,9 @@ async function jsonPost(req, limit, what) {
  * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
  * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
  * thread's id once it is. A PNG that could not be written leaves the remark stored without it.
- * The rest of the body is at most 64 KiB (413), as it is without the PNG.
+ * The rest of the body is at most 64 KiB (413), as it is without the PNG; a thread's `target`
+ * is not counted in it, since the store holds it to the target's limits, which are characters
+ * and so up to three bytes each.
  */
 async function postEvent(req, res, { scratch, stream, who }) {
   let event;
@@ -628,7 +638,9 @@ async function postEvent(req, res, { scratch, stream, who }) {
     return sendJson(res, e.status ?? 400, { error: e.message });
   }
   const { annotated, author: given, ...fields } = event;
-  if (size - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
+  const marked = fields.target === undefined ? 0 : Buffer.byteLength(JSON.stringify(fields.target));
+  const drawn = typeof annotated === "string" ? annotated.length : 0;
+  if (size - drawn - Math.min(marked, MAX_TARGET_BYTES) > MAX_POST_BYTES) {
     return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
   }
   if (fields.type === "working" || fields.type === "idle") {
@@ -680,9 +692,9 @@ async function postEvent(req, res, { scratch, stream, who }) {
  * `{x, y}` and `box` `{x, y, w, h}` in CSS pixels, the box from the top left of the viewport;
  * the viewport at most `FREEZE_VIEWPORT.side` CSS pixels a side at a pixel ratio of
  * `FREEZE_VIEWPORT.dpr`; `elements` the marked `{selector, text, html}`, each text and html
- * cut to the target's limits and the list to its first 20, `truncated` then true. The rest is
- * checked as the target its thread carries (see `targetProblem` of the store), so a problem
- * is named by the target's field. Throws a 400 refusal naming the first problem.
+ * cut to the target's limits and the list to its first `TARGET_LIMITS.elements`, `truncated`
+ * then true. The rest is checked as the target its thread carries (see `targetProblem` of the
+ * store), so a problem is named by the target's field. Throws a 400 refusal naming the first problem.
  */
 export function freezeRequest(body) {
   const fields = ["path", "viewport", "tags", "scroll", "box", "elements", "truncated"];
@@ -776,7 +788,7 @@ async function reusableStill(scratch, { page, key, vp, marked }) {
  */
 export function liveName(scratch, page) {
   const slug = page.slice(1).toLowerCase().replace(/[^a-z0-9._]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
-  const name = `live-${slug || "index"}`.slice(0, MAX_NAME_LENGTH);
+  const name = `live-${slug}`.slice(0, MAX_NAME_LENGTH);
   const taken = stills(scratch).some((s) => s.name.toLowerCase() === name && s.source.path !== page);
   const hash = createHash("sha256").update(page).digest("hex").slice(0, 6);
   return taken ? `${name.slice(0, MAX_NAME_LENGTH - hash.length - 1)}-${hash}` : name;
@@ -861,7 +873,7 @@ let waiting = 0;
 
 /**
  * Run `fn` once every freeze before it has ended, so one Chromium shoots at a time. Throws a
- * 503 refusal when `MAX_FREEZES_WAITING` freezes are queued already.
+ * 503 refusal when `MAX_FREEZES_WAITING` freezes are in hand already, the one shooting among them.
  */
 function oneAtATime(fn) {
   if (waiting >= MAX_FREEZES_WAITING) throw refusal(503, "busy shooting other marks; try again shortly");
@@ -876,20 +888,22 @@ function oneAtATime(fn) {
 /**
  * `POST /_review/freeze`: freeze the live mark the JSON body asks for (see `freezeRequest` and
  * `freeze`) and answer 200 with where its remark goes. It takes what `POST /_review/events`
- * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB (413),
- * and a guest's needs a name in `author` (400), since it writes a still. A bad request is a
- * 400; a shot that failed a 500; a freeze while `MAX_FREEZES_WAITING` wait their turn a 503.
- * A folder source has no pages to mark (404). The page is shot from this server, at
+ * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB besides
+ * what the target's limits let its path and elements take (413), and a guest's needs a name in
+ * `author` (400), since it writes a still. A bad request is a 400; a shot that failed a 500; a
+ * freeze while `MAX_FREEZES_WAITING` are in hand, one shooting and the rest waiting, a 503.
+ * A folder source has no pages to mark, and a path that is no page of the mockup none (404). The page is shot from this server, at
  * `127.0.0.1` on the port the request came to.
  */
 async function postFreeze(req, res, { scratch, stream, who, shoot }) {
   let request;
   try {
-    const { value } = await jsonPost(req, MAX_POST_BYTES, "a freeze");
+    const { value } = await jsonPost(req, MAX_FREEZE_BYTES, "a freeze");
     const { author: given, ...fields } = value;
     authorOf(who, given);
     if (typeof scratch !== "string") throw refusal(404, "a folder has no pages to mark");
     request = freezeRequest(fields);
+    if (!pageAt(scratch, request.page)) throw refusal(404, `no page of the mockup at ${request.page}`);
   } catch (e) {
     return sendJson(res, e.status ?? 400, { error: e.message });
   }

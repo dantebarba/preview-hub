@@ -102,9 +102,6 @@ export const READ_ONLY = "read-only folder: remarks off";
 /** How long the agent's working state lasts after its last `working` event. */
 export const WORKING_MS = 10 * 60 * 1000;
 
-/** The key a guest's name is kept under in this browser, by the viewer and the live shell. */
-export const NAME_KEY = "review.name";
-
 /** The key the live shell leaves a freeze's answer under, in the tab's session storage, for the viewer. */
 export const LIVE_DRAFT_KEY = "live.draft";
 
@@ -709,6 +706,18 @@ const SAME_AREA_PX = 1;
 const INSIDE_PX = 0.5;
 const WHOLE = { x: 0, y: 0, w: 1, h: 1 };
 
+/**
+ * True for a page path of the mockup: starts with one `/` not followed by another `/` or a `\`
+ * (which a URL parser reads as another host), no space or control character, at most
+ * `TARGET_LIMITS.page` characters, and resolves on the host it is given.
+ */
+export function isPagePath(v) {
+  if (typeof v !== "string" || v.length > TARGET_LIMITS.page) return false;
+  if (!/^\/(?![/\\])[^\s\0-\x1f\x7f]*$/.test(v)) return false;
+  const base = "http://mockup.invalid";
+  return new URL(v, base).origin === base;
+}
+
 /** The URL of the live shell on the page `page`, a path of the mockup with its query. */
 export function livePath(page) {
   return `${LIVE}${page}`;
@@ -720,7 +729,7 @@ export function livePath(page) {
  */
 export function pageOfLive(pathname, search = "") {
   const page = pathname.startsWith(`${LIVE}/`) ? pathname.slice(LIVE.length) : "";
-  return /^\/[^/\\]/.test(page) ? page + search : null;
+  return page.length > 1 && isPagePath(page) ? page + search : null;
 }
 
 /** How many elements a `target` marks: "3 elements", "1 element", "20+ elements" when it was truncated. */

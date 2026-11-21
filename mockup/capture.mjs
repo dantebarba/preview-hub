@@ -51,7 +51,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, isObject, parseTags, parseViewport, variantKey } from "./review.mjs";
+import { addStill, isObject, parseTags, parseViewport, STILL_NAME, variantKey } from "./review.mjs";
 
 const CHROMES = [
   "/usr/bin/chromium-browser",
@@ -71,7 +71,6 @@ const DEFAULT_PARALLEL = 4;
 const MAX_HEIGHT = 6000;
 const COUNTED = new Set(["XHR", "Fetch"]);
 const MODAL = "[role=dialog], [role=alertdialog], [aria-modal=true], dialog[open]";
-const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
 
 const KEYS = {
   Enter: { code: "Enter", keyCode: 13, text: "\r" },
@@ -347,15 +346,15 @@ function pageMeasure(kit, modal) {
 
 /**
  * In the page: where each of `selectors` is on the screenshot, `{x, y, w, h}` in CSS pixels
- * from its top left, for the one visible element it matches; null for a selector that matches
- * none, or more than one so which was meant is not known, does not parse, or matches only an
- * element with no area.
+ * from its top left, for the one visible element it matches, one with no opacity left hidden
+ * as the live shell holds it; null for a selector that matches none, or more than one so which
+ * was meant is not known, does not parse, or matches only an element with no area.
  */
 function pageRects(kit, selectors) {
   return selectors.map((selector) => {
     let shown;
     try {
-      shown = kit.$$(selector).filter(kit.shown);
+      shown = kit.$$(selector).filter((el) => kit.shown(el) && el.checkVisibility({ checkOpacity: true }));
     } catch {
       return null;
     }
@@ -778,7 +777,7 @@ export function expandRecipe(recipe, only) {
     const where = `shots[${i}]${isObject(shot) && typeof shot.name === "string" ? ` (${shot.name})` : ""}`;
     if (!isObject(shot)) throw new Error(`${where}: a shot is an object`);
     const { name, title, path: page, steps } = shot;
-    if (typeof name !== "string" || !NAME.test(name)) {
+    if (typeof name !== "string" || !STILL_NAME.test(name)) {
       throw new Error(`${where}: 'name' is 1-100 letters, digits, '.', '_' or '-', starting with a letter or digit`);
     }
     if (title !== undefined && (typeof title !== "string" || !title.trim())) {

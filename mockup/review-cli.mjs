@@ -142,11 +142,6 @@ function aboutText(event, variant = event.variant) {
   return event.thread ?? (event.still ? stillText(event.still, variant) : "");
 }
 
-/** How many elements a thread's `target` marks, ` 3 elements`, `20+` when it was truncated; empty without one. */
-function elementsText(target) {
-  return target ? ` ${elementsLabel(target)}` : "";
-}
-
 /**
  * The lines `review show` prints for a thread's `target`: the page, viewport, scroll and state,
  * then each marked element's selector and text, and its HTML on one line below.
@@ -162,7 +157,7 @@ function targetLines(target) {
     lines.push(`element ${e.selector}  ${quote(e.text)}`);
     if (e.html.trim()) lines.push(`        ${e.html.trim().replace(/\s*\n\s*/g, " ")}`);
   }
-  if (target.truncated) lines.push("element (more were inside the box; the first 20 are kept)");
+  if (target.truncated) lines.push("element (more were marked than are kept here)");
   return lines;
 }
 
@@ -177,7 +172,7 @@ export function eventLine(event, first = new Map()) {
   switch (event.type) {
     case "thread": {
       const where = target({ rev: null, anchor: null, ...event, variant });
-      return `${head} ${event.id} ${where}${elementsText(event.target)} ${by}: ${quote(event.body)}`;
+      return `${head} ${event.id} ${where}${event.target ? ` ${elementsLabel(event.target)}` : ""} ${by}: ${quote(event.body)}`;
     }
     case "reply":
       return `${head} ${event.thread} ${by}: ${quote(event.body)}`;

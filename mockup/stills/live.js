@@ -382,7 +382,7 @@ function middle() {
  * A press on the layer. A second finger turns the gesture into a scroll of the page, dropping a
  * box being drawn. Else, on a corner of the mark it resizes it, on the mark it moves it, and
  * elsewhere it starts a new one; `drag.tap` holds where it was pressed until the pointer leaves
- * that spot.
+ * that spot, and `drag.corner` says the press is on a corner.
  */
 function startDrag(e) {
   if (state.busy) return;
@@ -396,7 +396,7 @@ function startDrag(e) {
   const at = pointOf(e);
   const tap = { x: e.clientX, y: e.clientY };
   const corner = e.target.dataset.corner;
-  if (corner) drag = { fixed: opposite(state.sel.anchor, corner) };
+  if (corner) drag = { fixed: opposite(state.sel.anchor, corner), tap, corner: true };
   else if (e.target.closest("#draft")) drag = { from: state.sel.anchor, at, tap };
   else drag = { fixed: at, tap };
   el("hover").hidden = true;
@@ -431,8 +431,8 @@ function moveDrag(e) {
 
 /**
  * A pointer lifts. A press that never left its spot is a tap: it marks the innermost element
- * under it. A drag that ended marks the elements inside its box. A scroll ends with its last
- * finger.
+ * under it, except on a corner of the mark, which leaves the mark as it was. A drag that ended
+ * marks the elements inside its box. A scroll ends with its last finger.
  */
 function endDrag(e) {
   fingers.delete(e.pointerId);
@@ -442,7 +442,9 @@ function endDrag(e) {
   }
   if (!drag) return;
   const tapped = Boolean(drag.tap);
+  const { corner } = drag;
   drag = null;
+  if (tapped && corner) return;
   if (tapped) {
     const target = elementAt(toPage(pointOf(e)));
     if (target) pick(chainOf(target), 0);

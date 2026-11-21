@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -47,11 +47,13 @@ document.addEventListener("click", () => {
 };
 
 /**
- * The shell, the viewer, the review routes and the fixture pages over a new scratch dir, served
- * for one test as the reviewer `who`: `{ base, dir }`.
+ * The shell, the viewer, the review routes and the fixture pages over a new scratch dir, which
+ * holds them under `pages/` too, served for one test as the reviewer `who`: `{ base, dir }`.
  */
 async function serve(t, who = { name: "Dante", via: "tailnet" }) {
   const dir = mkdtempSync(path.join(tmpdir(), "live-"));
+  mkdirSync(path.join(dir, "pages"));
+  for (const [name, html] of Object.entries(PAGES)) writeFileSync(path.join(dir, "pages", `${name}.html`), html);
   const stream = eventStream(dir);
   const open = new Set();
   const server = createServer(async (req, res) => {
