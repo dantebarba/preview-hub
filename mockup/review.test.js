@@ -594,3 +594,13 @@ test("storeAnnotated keeps a thread's PNG under its id, replacing it whole and l
   assert.deepEqual(readFileSync(file), again);
   assert.deepEqual(readdirSync(path.dirname(file)), ["3f9a0c1e.png"]);
 });
+
+test("appendEvent gives an event the id it is told, and refuses one the log holds or that is no id", async (t) => {
+  const dir = scratch(t);
+  const general = { type: "thread", author: HUMAN, still: null, body: "Hello" };
+  const stored = await appendEvent(dir, general, { id: "ab12cd34" });
+  assert.deepEqual([stored.id, stored.seq], ["ab12cd34", 1]);
+  await assert.rejects(appendEvent(dir, general, { id: "ab12cd34" }), /cannot be the id of a new event/);
+  await assert.rejects(appendEvent(dir, general, { id: "not an id" }), /cannot be the id of a new event/);
+  assert.equal(readEvents(dir).events.length, 1);
+});
