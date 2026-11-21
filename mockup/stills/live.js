@@ -94,6 +94,7 @@ const TOAST_MS = 6000;
 const SYNC_MS = 5000;
 const TIMES_MS = 30000;
 const PIN_PX = 12;
+const CHANGE_MS = 80;
 const JSON_POST = { method: "POST", headers: { "Content-Type": "application/json" } };
 
 const kept = stored(DEVICE_KEY);
@@ -119,7 +120,7 @@ const threads = [];
 const cards = new Map();
 const pins = new Map();
 const lit = [];
-const watch = new MutationObserver(queuePins);
+const watch = new MutationObserver(changed);
 let scale = 1;
 let drag = null;
 let pan = null;
@@ -130,6 +131,7 @@ let shown = null;
 let hiding = null;
 let loading = null;
 let queued = 0;
+let settling = 0;
 
 /** The element with the id `id`. */
 function el(id) {
@@ -339,13 +341,19 @@ function spot(target) {
   if (!target?.isConnected) return null;
   const doc = target.ownerDocument;
   const view = doc.defaultView;
-  if (!view || (target.checkVisibility && !target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))) return null;
+  if (!view) return null;
+  const style = view.getComputedStyle(target);
+  const shows = target.checkVisibility
+    ? target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+    : style.visibility !== "hidden";
+  if (!shows) return null;
   const { width, height } = presetSize(state.device);
   let seen = cut(rectOf(target), { x: 0, y: 0, w: width, h: height });
-  const fixed = view.getComputedStyle(target).position === "fixed";
+  const fixed = style.position === "fixed";
   for (let at = target.parentElement; seen && !fixed && at && at !== doc.body; at = at.parentElement) {
-    const { overflowX, overflowY } = view.getComputedStyle(at);
+    const { overflowX, overflowY, position } = view.getComputedStyle(at);
     if (overflowX !== "visible" || overflowY !== "visible") seen = cut(seen, rectOf(at));
+    if (position === "fixed") break;
   }
   if (!seen) return null;
   const hit = doc.elementFromPoint(seen.x + seen.w / 2, seen.y + seen.h / 2);
@@ -406,6 +414,17 @@ function queuePins() {
   queued ||= requestAnimationFrame(placePins);
 }
 
+/**
+ * The page's DOM changed: draw the pins again, `CHANGE_MS` after the first change of a run at
+ * the latest, so a page that changes on every frame costs a few redraws a second.
+ */
+function changed() {
+  settling ||= setTimeout(() => {
+    settling = 0;
+    queuePins();
+  }, CHANGE_MS);
+}
+
 /** Write how long ago each time the panel shows was. */
 function drawTimes() {
   for (const time of el("cards").querySelectorAll("time")) write(time, "textContent", ago(Date.parse(time.dateTime), Date.now()));
@@ -458,7 +477,10 @@ function cardOf(thread) {
   foot.append(reply, status, link);
   card.append(head, make("p", "text", thread.body), make("div", "entries"), field, foot);
   reply.onclick = () => answer(thread, reply, field);
-  status.onclick = () => say(status, { type: thread.status === "open" ? "resolve" : "reopen", thread: thread.id });
+  status.onclick = () => {
+    const now = threads.find((one) => one.id === thread.id) ?? thread;
+    return say(status, { type: now.status === "open" ? "resolve" : "reopen", thread: thread.id });
+  };
   field.onkeydown = (e) => {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -497,7 +519,8 @@ function fill(thread, n) {
 /**
  * Draw the Remarks buttons, the panel and the pins for the page on screen: the count of its open
  * threads, its threads with the open ones first, or that it has none. A picked thread that is
- * not of this page is let go.
+ * not of this page is let go. On a small or touch screen the buttons are off in Mark mode, where
+ * the sheet would lie over the strip.
  */
 function drawThreads() {
   const mine = pageThreads();
@@ -505,6 +528,7 @@ function drawThreads() {
   if (!mine.some((thread) => thread.id === state.thread)) state.thread = null;
   for (const button of document.querySelectorAll(".lister")) {
     button.setAttribute("aria-pressed", String(state.open));
+    button.disabled = state.marking && SMALL.matches;
     write(button.querySelector(".tally"), "textContent", open.length ? String(open.length) : "");
   }
   el("side").hidden = !state.open;
@@ -532,7 +556,8 @@ function setOpen(on) {
 /**
  * Pick the thread `id` in the panel, which opens for it, its card brought into sight and its
  * elements outlined; with `reveal`, its first element is scrolled into view when the page has
- * it. Null lets go of the picked one.
+ * it, to the top of the page on a small or touch screen, where the sheet covers the bottom. Null
+ * lets go of the picked one.
  */
 function select(id, reveal) {
   state.thread = id;
@@ -541,7 +566,8 @@ function select(id, reveal) {
   const thread = threads.find((one) => one.id === state.thread);
   if (!thread) return;
   cards.get(thread.id).scrollIntoView({ block: "nearest" });
-  if (reveal) find(thread.target.elements[0]?.selector)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+  const block = SMALL.matches ? "start" : "nearest";
+  if (reveal) find(thread.target.elements[0]?.selector)?.scrollIntoView({ block, inline: "nearest", behavior: "instant" });
 }
 
 /**
@@ -579,6 +605,7 @@ async function answer(thread, button, field) {
     return field.focus();
   }
   if (!(await say(button, { type: "reply", thread: thread.id, body }))) return undefined;
+  if (field.value.trim() !== body) return undefined;
   field.value = "";
   field.hidden = true;
   return undefined;
