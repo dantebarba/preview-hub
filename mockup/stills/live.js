@@ -12,8 +12,8 @@
  * There are two modes. In **Use**, the default, the page behaves as it does alone and nothing is
  * ever selected. **Mark** is entered only from the Mark button or `m`: a transparent layer covers
  * the page, so no tap reaches it, a coloured frame goes around it, the cursor is a crosshair and
- * the bar reads "Marking: taps select, they don't act". It ends with Esc, the same button or
- * Cancel, and by itself once the remark is posted.
+ * the Mark button is pressed; no sentence says so. It ends with Esc, the same button or Cancel,
+ * and by itself once the remark is posted.
  *
  * In Mark mode a drag draws a box, which can then be moved or resized by its corners, and marks
  * the visible elements inside it (see `markedIn`); a tap marks the innermost element under it,
@@ -22,9 +22,21 @@
  * the page under the layer, which drops the mark since what it was on moved. The strip under the
  * page shows how many elements are marked, with Comment and Cancel.
  *
- * Comment asks for the remark's text and posts it with the mark and the snapshot of the page
- * (`snapshot.js`) to `POST /_review/remarks`, a guest's once they gave a name. The runtime
- * shoots the snapshot in the background and posts the thread; the page stays as it is.
+ * Comment opens the composer by the box, under it, or over it when there is no room, and over
+ * the keyboard on a phone; the box can still be moved and resized. Post takes the snapshot of the
+ * page (`snapshot.js`) at that instant and sends it with the mark and the text to `POST
+ * /_review/remarks`, a guest's once they gave a name, then closes the composer and leaves Mark
+ * mode. The page is never touched, reloaded or left.
+ *
+ * What became of the remark is said by one toast at the bottom: `Posted` with a spinner while the
+ * runtime shoots, then a link that opens the thread in the viewer, in a new tab, once the
+ * `thread` event with the remark's id comes on `/_review/events`. When the runtime refuses the
+ * remark, cannot be reached or says `remark-failed`, the toast reads `Not posted: <reason>` with
+ * Retry, which sends the same draft again: its box, elements, text and snapshot are kept in
+ * memory until it is posted or the toast is dismissed.
+ *
+ * Every text the shell shows is in the copy table of the epic (#58); what state it is in shows
+ * by styling, not by sentences.
  */
 
 import {
@@ -59,9 +71,8 @@ const LINE_PX = 16;
 const SMALL = matchMedia(SMALL_SCREEN);
 const SECTION =
   "section, article, main, nav, aside, header, footer, form, dialog, [role=dialog], [role=alertdialog], [aria-modal=true]";
-const HINT = "Drag a box, or tap an element";
-const ASK = "What is wrong here?";
-const OUTSIDE = "outside the mockup";
+const GAP_PX = 8;
+const TOAST_MS = 6000;
 
 const kept = stored(DEVICE_KEY);
 const state = {
@@ -69,26 +80,28 @@ const state = {
   device: DEVICES.includes(kept) ? kept : classOf(`custom-${innerWidth}x${innerHeight}`),
   marking: false,
   sel: null,
-  busy: false,
+  composing: false,
+  signing: false,
   me: null,
 };
 const root = document.documentElement;
 const frame = el("frame");
 const layer = el("layer");
 const fingers = new Map();
+const pending = new Map();
+const heard = new Map();
+const waiting = [];
 let scale = 1;
 let drag = null;
 let pan = null;
+let source = null;
+let flying = 0;
+let shown = null;
+let hiding = null;
 
 /** The element with the id `id`. */
 function el(id) {
   return document.getElementById(id);
-}
-
-/** Show `message` in the error line, or hide the line when it is empty. */
-function report(message) {
-  el("error").textContent = message || "";
-  el("error").hidden = !message;
 }
 
 /** The page's document, or null when the iframe left the mockup's origin. */
@@ -255,9 +268,56 @@ function layout() {
   el("size").textContent = `${size.width}×${size.height}${shrunk}`;
 }
 
-/** Draw the mark: its box, the breadcrumbs of a tapped element, the count and whether Comment can go. */
+/**
+ * Put the composer by the mark: under it, over it when there is no room under, else at the
+ * bottom of the window, and never past the window's sides. A small or touch screen has it at
+ * the bottom, over the keyboard, by its style sheet.
+ */
+function placeComposer() {
+  const box = el("composer");
+  if (box.hidden) return;
+  if (SMALL.matches) {
+    box.style.left = "";
+    box.style.top = "";
+    return;
+  }
+  const mark = el("draft").getBoundingClientRect();
+  const { offsetWidth: wide, offsetHeight: high } = box;
+  const under = mark.bottom + GAP_PX;
+  const over = mark.top - GAP_PX - high;
+  const last = innerHeight - GAP_PX - high;
+  const top = under <= last ? under : over >= GAP_PX ? over : last;
+  box.style.left = `${Math.max(GAP_PX, Math.min(mark.left, innerWidth - GAP_PX - wide))}px`;
+  box.style.top = `${Math.max(GAP_PX, top)}px`;
+}
+
+/** Draw the composer: open while a mark is being commented, Post ready once it has elements and a text. */
+function drawComposer() {
+  const { sel, composing, signing } = state;
+  el("composer").hidden = !(composing && sel);
+  el("post").disabled = !sel?.elements || signing || !el("say").value.trim();
+  placeComposer();
+}
+
+/** Open the composer on the mark, with the keyboard up. */
+function compose() {
+  if (!state.sel?.elements) return;
+  state.composing = true;
+  drawComposer();
+  el("say").focus();
+}
+
+/** Close the composer, the mark kept; with `drop`, what was typed in it goes. */
+function closeComposer(drop) {
+  state.composing = false;
+  if (drop) el("say").value = "";
+  el("say").blur();
+  drawComposer();
+}
+
+/** Draw the mark: its box, the breadcrumbs of a tapped element, the count, whether Comment can go, and the composer. */
 function drawSel() {
-  const { sel, busy } = state;
+  const { sel } = state;
   el("draft").hidden = !sel;
   if (sel) place(el("draft"), sel.anchor);
   const chain = sel?.chain ?? [];
@@ -273,27 +333,24 @@ function drawSel() {
       })
       .reverse()
   );
-  const count = sel?.elements ? elementsLabel(sel) : "…";
-  el("found").textContent = busy ? "Shooting the page…" : sel ? count : HINT;
-  el("comment").disabled = !sel?.elements || busy;
-  el("cancel").disabled = busy;
+  el("found").textContent = sel?.elements ? elementsLabel(sel) : "";
+  el("comment").disabled = !sel?.elements;
+  drawComposer();
 }
 
 /** Draw the bar and the page's frame for the mode the shell is in, then the mark. */
 function render() {
-  const { marking, busy } = state;
+  const { marking } = state;
   const outside = state.page === null;
   root.classList.toggle("marking", marking);
-  el("path").textContent = outside ? OUTSIDE : state.page;
-  document.title = `${outside ? OUTSIDE : state.page} · live`;
-  el("mode").hidden = !marking;
+  el("path").textContent = outside ? "" : state.page;
+  document.title = outside ? "live" : `${state.page} · live`;
   for (const button of document.querySelectorAll(".marker")) {
     button.setAttribute("aria-pressed", String(marking));
-    button.disabled = outside || busy;
+    button.disabled = outside;
   }
   for (const button of el("devices").children) {
     button.setAttribute("aria-pressed", String(button.dataset.device === state.device));
-    button.disabled = busy;
   }
   layer.hidden = !marking;
   el("pick").hidden = !marking;
@@ -301,9 +358,10 @@ function render() {
   drawSel();
 }
 
-/** Forget the mark and any gesture under way. */
+/** Forget the mark and any gesture under way; the composer closes, what was typed in it kept. */
 function clearSel() {
   state.sel = null;
+  state.composing = false;
   drag = null;
   el("hover").hidden = true;
 }
@@ -313,7 +371,7 @@ function clearSel() {
  * the page, so keys stop reaching it; a page outside the mockup cannot be marked.
  */
 function setMarking(on) {
-  if (state.busy || (on && state.page === null)) return;
+  if (on && state.page === null) return;
   state.marking = on;
   clearSel();
   fingers.clear();
@@ -386,7 +444,6 @@ function middle() {
  * that spot, and `drag.corner` says the press is on a corner.
  */
 function startDrag(e) {
-  if (state.busy) return;
   if (e.pointerType !== "mouse") fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
   if (fingers.size > 1) {
     if (drag) clearSel();
@@ -520,10 +577,17 @@ function typing(e) {
   return /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || Boolean(target.isContentEditable);
 }
 
-/** Esc leaves Mark mode, or the name sheet; `m` enters or leaves it, unless it is being typed somewhere. */
+/**
+ * Esc closes the name sheet, else the composer with what was typed in it, else leaves Mark mode;
+ * `m` enters or leaves it, unless it is being typed somewhere.
+ */
 function onKey(e) {
   if (e.key === "Escape" && asking()) return closeWho(false);
   if (asking()) return undefined;
+  if (e.key === "Escape" && state.composing) {
+    e.preventDefault();
+    return closeComposer(true);
+  }
   if (e.key === "Escape" && state.marking) {
     e.preventDefault();
     return setMarking(false);
@@ -548,72 +612,199 @@ function adopt() {
   track();
 }
 
+/** Draw the toast for the draft it shows: what became of it, and the link or Retry that goes with it. */
+function drawToast() {
+  el("toast").hidden = !shown;
+  if (!shown) return;
+  const failed = shown.status === "failed";
+  el("toast").classList.toggle("failed", failed);
+  el("toast-text").textContent = failed ? `Not posted: ${shown.error}` : "Posted";
+  el("spin").hidden = shown.status !== "shooting";
+  el("open").hidden = shown.status !== "posted";
+  if (shown.status === "posted") el("open").href = `/stills#thread=${encodeURIComponent(shown.id)}`;
+  el("retry").hidden = !failed;
+}
+
+/**
+ * Make `draft` the one the toast shows, null for the next that failed unseen or none. A failed
+ * draft it takes the place of waits for its turn, so its Retry is not lost; a posted one hides
+ * by itself after `TOAST_MS`.
+ */
+function show(draft) {
+  clearTimeout(hiding);
+  if (shown && shown !== draft && shown.status === "failed" && !waiting.includes(shown)) waiting.push(shown);
+  shown = draft ?? waiting.shift() ?? null;
+  if (shown?.status === "posted") hiding = setTimeout(() => show(null), TOAST_MS);
+  drawToast();
+}
+
+/** Take the toast away: a failed draft on it is given up, one still being shot goes on unseen. */
+function dismiss() {
+  shown = null;
+  show(null);
+}
+
+/** The draft `draft` was not posted, for the reason `error`: say so, now or after the failure on screen. */
+function fail(draft, error) {
+  draft.status = "failed";
+  draft.error = error;
+  pending.delete(draft.id);
+  if (shown !== draft && shown?.status === "failed") {
+    if (!waiting.includes(draft)) waiting.push(draft);
+  } else show(draft);
+}
+
+/**
+ * The stream said what became of the remark `id`: its thread is there, or with `error` it was
+ * not posted. One the shell does not wait for is not its own, or is told twice, and is left;
+ * while a remark is being sent its id is not known yet, so what is heard is kept for it.
+ */
+function settle(id, error) {
+  const draft = pending.get(id);
+  if (!draft) {
+    if (flying) heard.set(id, error);
+    return;
+  }
+  if (error !== null) return fail(draft, error);
+  pending.delete(id);
+  draft.status = "posted";
+  if (shown === draft) show(draft);
+}
+
+/** Follow the review log above the event `cursor`, once: the threads that land and the remarks that failed. */
+function follow(cursor) {
+  if (source) return;
+  source = new EventSource(`/_review/events?since=${cursor}`);
+  source.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.type === "thread") settle(event.id, null);
+  };
+  source.addEventListener("remark-failed", (message) => {
+    const failed = JSON.parse(message.data);
+    settle(failed.id, String(failed.error));
+  });
+}
+
 /**
  * What a remark says of who posts it: nothing for a tailnet user, whom the server names, and
  * `{ author: { name } }` for a guest, asked for a name when this browser keeps none; null when
- * the guest gave none. Throws when the server cannot be asked who is looking.
+ * the guest gave none. Asking the server who is looking also tells where its log is, from where
+ * the shell follows it. Throws when the server cannot be asked.
  */
 async function writer() {
-  state.me ??= (await answerOf(await fetch("/_review/stills", { cache: "no-store" }))).me;
+  if (!state.me) {
+    const { me, cursor } = await answerOf(await fetch("/_review/stills", { cache: "no-store" }));
+    follow(cursor);
+    state.me = me;
+  }
   if (state.me.via === "tailnet") return {};
   const name = keptName() || (await askName());
   return name ? { author: { name } } : null;
 }
 
 /**
- * Comment on the mark: ask what is wrong, then post the remark to `POST /_review/remarks` with
- * the snapshot of the page as it is, the marked elements stamped in it. The runtime answers at
- * once and shoots in the background, so the page is not touched and Mark mode ends. An element
- * no selector names alone, or that the page took out since it was marked, is left out of the
- * remark's elements, the mark then truncated; a page whose snapshot cannot be written is posted
- * without one, to be shot loaded again. The shell stays in Mark mode, with the reason, when the
- * remark is refused.
+ * Give `draft` its writer when it has none (see `writer`). True once it has one; false when the
+ * guest gave no name, or with `draft.error` set when the server could not be asked.
  */
-async function comment() {
-  const { sel } = state;
-  const doc = pageDocument();
-  const view = doc?.defaultView;
-  if (!sel?.elements || state.busy || !view) return;
-  const there = sel.elements.filter((target) => target.isConnected && target.ownerDocument === doc);
-  const elements = there.map(describe).filter((e) => e.selector);
-  const body = (prompt(ASK) ?? "").trim();
-  if (!body) return;
-  state.busy = true;
-  render();
+async function sign(draft) {
+  draft.error = "";
   try {
-    const who = await writer();
-    if (!who) return;
-    let shot = null;
-    try {
-      shot = snapshot(doc, there);
-    } catch {
-      shot = null;
-    }
-    const request = {
-      page: state.page,
-      viewport: state.device,
-      scroll: { x: Math.max(0, view.scrollX), y: Math.max(0, view.scrollY) },
-      box: boxOf(sel.anchor),
-      elements,
-      ...(sel.truncated || elements.length < sel.elements.length ? { truncated: true } : {}),
-      snapshot: shot,
-      body,
-    };
+    draft.who ??= await writer();
+  } catch (e) {
+    draft.error = e.message;
+  }
+  return Boolean(draft.who);
+}
+
+/**
+ * Send `draft` to `POST /_review/remarks`, the toast on it. The runtime answers with the
+ * remark's id at once and shoots in the background; the stream says what became of it (see
+ * `settle`), which may have been heard already. A remark refused, or a server not reached, fails
+ * the draft, which is kept.
+ */
+async function send(draft) {
+  draft.status = "shooting";
+  show(draft);
+  flying += 1;
+  try {
     const res = await fetch("/_review/remarks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, ...who }),
+      body: JSON.stringify({ ...draft.request, ...draft.who }),
     });
-    await answerOf(res);
-    report("");
-    state.busy = false;
-    setMarking(false);
+    draft.id = (await answerOf(res)).id;
+    pending.set(draft.id, draft);
+    if (heard.has(draft.id)) settle(draft.id, heard.get(draft.id));
   } catch (e) {
-    report(`Not posted: ${e.message}`);
+    fail(draft, e.message);
   } finally {
-    state.busy = false;
-    render();
+    flying -= 1;
+    if (!flying) heard.clear();
   }
+}
+
+/**
+ * Post the remark being composed: take the snapshot of the page as it is at this instant, the
+ * marked elements stamped in it, then close the composer, leave Mark mode and send it. An
+ * element no selector names alone, or that the page took out since it was marked, is left out of
+ * the remark's elements, the mark then truncated; a page whose snapshot cannot be written is
+ * posted without one, to be shot loaded again. A guest who gives no name stays in the composer.
+ */
+async function post() {
+  const { sel } = state;
+  const doc = pageDocument();
+  const view = doc?.defaultView;
+  const body = el("say").value.trim();
+  if (!sel?.elements || state.signing || !view || !body) return;
+  const there = sel.elements.filter((target) => target.isConnected && target.ownerDocument === doc);
+  const elements = there.map(describe).filter((e) => e.selector);
+  let shot = null;
+  try {
+    shot = snapshot(doc, there);
+  } catch {
+    shot = null;
+  }
+  const request = {
+    page: state.page,
+    viewport: state.device,
+    scroll: { x: Math.max(0, view.scrollX), y: Math.max(0, view.scrollY) },
+    box: boxOf(sel.anchor),
+    elements,
+    ...(sel.truncated || elements.length < sel.elements.length ? { truncated: true } : {}),
+    snapshot: shot,
+    body,
+  };
+  const draft = { request, who: null, id: null, status: "shooting", error: "" };
+  state.signing = true;
+  drawComposer();
+  const signed = await sign(draft);
+  state.signing = false;
+  if (!signed && !draft.error) {
+    drawComposer();
+    return el("say").focus();
+  }
+  el("say").value = "";
+  setMarking(false);
+  return signed ? send(draft) : fail(draft, draft.error);
+}
+
+/** Send the failed draft on the toast again, as it was; a guest who still gives no name leaves it failed. */
+async function retry() {
+  const draft = shown;
+  if (draft?.status !== "failed" || state.signing) return undefined;
+  const was = draft.error;
+  state.signing = true;
+  const signed = await sign(draft);
+  state.signing = false;
+  drawComposer();
+  return signed ? send(draft) : fail(draft, draft.error || was);
+}
+
+/** Tell the style sheet how much of the window the on-screen keyboard covers, and keep the composer by the mark. */
+function liftSheets() {
+  const covered = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
+  root.style.setProperty("--keyboard", `${covered}px`);
+  placeComposer();
 }
 
 el("devices").replaceChildren(
@@ -627,7 +818,20 @@ el("devices").replaceChildren(
 );
 for (const button of document.querySelectorAll(".marker")) button.onclick = () => setMarking(!state.marking);
 el("cancel").onclick = () => setMarking(false);
-el("comment").onclick = comment;
+el("comment").onclick = compose;
+el("discard").onclick = () => closeComposer(true);
+el("say").oninput = drawComposer;
+el("say").onkeydown = (e) => {
+  if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  post();
+};
+el("composer").onsubmit = (e) => {
+  e.preventDefault();
+  post();
+};
+el("retry").onclick = retry;
+el("dismiss").onclick = dismiss;
 layer.addEventListener("pointerdown", startDrag);
 layer.addEventListener("pointermove", moveDrag);
 layer.addEventListener("pointerup", endDrag);
@@ -639,15 +843,14 @@ layer.addEventListener("wheel", wheel, { passive: false });
 layer.addEventListener("contextmenu", (e) => e.preventDefault());
 frame.addEventListener("load", adopt);
 addEventListener("keydown", onKey);
-addEventListener("pageshow", (e) => {
-  if (!e.persisted) return;
-  state.busy = false;
-  setMarking(false);
-});
-new ResizeObserver(layout).observe(document.querySelector("main"));
+new ResizeObserver(() => {
+  layout();
+  placeComposer();
+}).observe(document.querySelector("main"));
+window.visualViewport?.addEventListener("resize", liftSheets);
+window.visualViewport?.addEventListener("scroll", liftSheets);
 setInterval(track, TRACK_MS);
 
 layout();
 render();
-if (state.page === null) report("No page to show: open /live/<page> from the menu.");
-else frame.src = state.page + location.hash;
+if (state.page !== null) frame.src = state.page + location.hash;
