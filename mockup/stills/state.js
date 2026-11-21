@@ -468,6 +468,7 @@ export function applyThread(threads, event) {
       variant: event.variant ?? null,
       rev: event.rev ?? null,
       anchor: event.anchor ?? null,
+      target: event.target ?? null,
       body: event.body,
       author: event.author,
       at: event.at,

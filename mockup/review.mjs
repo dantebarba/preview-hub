@@ -45,7 +45,7 @@ import { applyThread, applyWorking, markOf, reviewerOf, viewportOf, workingAt } 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
 const FIELDS = {
-  thread: ["still", "variant", "rev", "anchor", "body"],
+  thread: ["still", "variant", "rev", "anchor", "body", "target"],
   reply: ["thread", "body"],
   resolve: ["thread"],
   reopen: ["thread"],
@@ -69,6 +69,15 @@ const MAX_BODY = 10000;
 
 /** The most characters an author's name may hold. */
 export const MAX_AUTHOR = 100;
+
+/**
+ * The limits of a thread's `target`: the most elements it keeps, and the most characters of a
+ * page path, an element's selector, its text and the cut of its HTML.
+ */
+export const TARGET_LIMITS = { elements: 20, page: 2000, selector: 500, text: 200, html: 1000 };
+
+/** What a thread's `target` says of the marked elements on the shot, as `state`. */
+export const TARGET_STATES = ["reproduced", "not-reproduced"];
 
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
@@ -252,6 +261,66 @@ function anchorProblem(anchor) {
   return null;
 }
 
+/** True for a finite number of 0 or more. */
+function isOffset(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0;
+}
+
+/** True for a page path of the mockup: starts with one `/`, no space or control character. */
+export function isPagePath(v) {
+  return typeof v === "string" && v.length <= TARGET_LIMITS.page && /^\/(?!\/)[^\s\0-\x1f\x7f]*$/.test(v);
+}
+
+/** Why `element`, a marked element `{selector, text, html}`, is not a valid one, or null. */
+function elementProblem(element) {
+  if (!isObject(element) || shape(element) !== "html,selector,text") return "must be {selector, text, html}";
+  const { selector, text, html } = element;
+  if (typeof selector !== "string" || !selector.trim() || selector.length > TARGET_LIMITS.selector) {
+    return `'selector' must be a non-empty string of at most ${TARGET_LIMITS.selector} characters`;
+  }
+  if (typeof text !== "string" || text.length > TARGET_LIMITS.text) {
+    return `'text' must be a string of at most ${TARGET_LIMITS.text} characters`;
+  }
+  if (typeof html !== "string" || html.length > TARGET_LIMITS.html) {
+    return `'html' must be a string of at most ${TARGET_LIMITS.html} characters`;
+  }
+  return null;
+}
+
+/**
+ * Why `target`, what a remark made on the live page points at, is not a valid one, or null:
+ * `{page, elements, truncated?, viewport, scroll, state}` (see the contract).
+ */
+function targetProblem(target) {
+  if (!isObject(target)) return "'target' must be an object";
+  const allowed = new Set(["page", "elements", "truncated", "viewport", "scroll", "state"]);
+  const extra = Object.keys(target).find((k) => !allowed.has(k));
+  if (extra) return `'${extra}' is not a field of a target`;
+  if (!isPagePath(target.page)) return "'target.page' must be a page path starting with /";
+  if (!Array.isArray(target.elements) || target.elements.length > TARGET_LIMITS.elements) {
+    return `'target.elements' must be a list of at most ${TARGET_LIMITS.elements} elements`;
+  }
+  for (const [i, element] of target.elements.entries()) {
+    const problem = elementProblem(element);
+    if (problem) return `'target.elements[${i}]': ${problem}`;
+  }
+  if (target.truncated !== undefined && typeof target.truncated !== "boolean") {
+    return "'target.truncated' must be true or false";
+  }
+  try {
+    if (typeof target.viewport !== "string") throw new Error();
+    parseViewport(target.viewport);
+  } catch {
+    return "'target.viewport' must be a viewport, a preset or WxH[@dpr][+touch]";
+  }
+  const { scroll } = target;
+  if (!isObject(scroll) || shape(scroll) !== "x,y" || !isOffset(scroll.x) || !isOffset(scroll.y)) {
+    return "'target.scroll' must be {x, y}, numbers of 0 or more";
+  }
+  if (!TARGET_STATES.includes(target.state)) return `'target.state' must be one of ${TARGET_STATES.join(", ")}`;
+  return null;
+}
+
 /**
  * Why `event` breaks the event schema, or null when it keeps it. `stored` also requires the
  * fields `appendEvent` assigns (`seq`, `id`, `at`), as on a line read back from the log.
@@ -292,8 +361,8 @@ function eventProblem(event, stored) {
     return "'variant' must be a variant key, such as mobile+dark";
   }
   if (event.type === "thread" && event.still === null) {
-    if (event.rev !== undefined || event.anchor !== undefined || event.variant !== undefined) {
-      return "a general thread (still: null) has no 'rev', 'variant' or 'anchor'";
+    if (["rev", "variant", "anchor", "target"].some((k) => event[k] !== undefined)) {
+      return "a general thread (still: null) has no 'rev', 'variant', 'anchor' or 'target'";
     }
     return null;
   }
@@ -306,6 +375,10 @@ function eventProblem(event, stored) {
     const problem = nameProblem(event.still);
     if (problem) return `'still': ${problem}`;
     if (!isRev(event.rev)) return "'rev' must be an integer from 1";
+  }
+  if (event.target !== undefined) {
+    const problem = targetProblem(event.target);
+    if (problem) return problem;
   }
   if (event.anchor !== undefined) return anchorProblem(event.anchor);
   return null;
@@ -624,8 +697,8 @@ export async function appendEvent(dir, event) {
 
 /**
  * The threads of `dir`, folded from the log in the order they were opened. Each is
- * `{ id, still, variant, rev, anchor, body, author, at, seq, status, replies, updated }`:
- * `still`, `variant`, `rev` and `anchor` are null where the thread has none, `variant` being
+ * `{ id, still, variant, rev, anchor, target, body, author, at, seq, status, replies, updated }`:
+ * `still`, `variant`, `rev`, `anchor` and `target` are null where the thread has none, `variant` being
  * the still's first variant when the event names none; `status` is "open" or "resolved" as the
  * last resolve or reopen left it, `replies` are `{ id, author, body, at, seq }`, and `updated`
  * is the `seq` of the last event on the thread.

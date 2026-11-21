@@ -312,6 +312,50 @@ test("appendEvent rejects events that break the schema or name what does not exi
   assert.equal(general.still, null);
 });
 
+test("a thread carries a target from the live page, checked, and threads fold it; one without has null", async (t) => {
+  const dir = await withStill(t);
+  const element = { selector: "#pay > button", text: "Pay now", html: '<button class="primary">Pay now</button>' };
+  const target = {
+    page: "/checkout?step=2",
+    elements: [element],
+    viewport: "390x844",
+    scroll: { x: 0, y: 120.5 },
+    state: "reproduced",
+  };
+  const marked = await appendEvent(dir, { ...REMARK, body: "Too low", target });
+  const truncated = { ...target, elements: Array(20).fill(element), truncated: true, state: "not-reproduced" };
+  await appendEvent(dir, { ...REMARK, body: "All of these", target: truncated });
+  await appendEvent(dir, { ...REMARK, body: "Plain" });
+  assert.deepEqual(marked.target, target);
+  assert.deepEqual(threads(dir).map((th) => th.target), [target, truncated, null]);
+  const bad = [
+    [{ ...target, page: "checkout" }, /'target.page'/],
+    [{ ...target, page: "//evil.example/x" }, /'target.page'/],
+    [{ ...target, page: "/a b" }, /'target.page'/],
+    [{ ...target, elements: Array(21).fill(element) }, /at most 20 elements/],
+    [{ ...target, elements: [{ selector: "a" }] }, /'target.elements\[0\]': must be/],
+    [{ ...target, elements: [{ ...element, selector: " " }] }, /'selector'/],
+    [{ ...target, elements: [{ ...element, html: "x".repeat(1001) }] }, /'html'/],
+    [{ ...target, elements: [{ ...element, text: "x".repeat(201) }] }, /'text'/],
+    [{ ...target, truncated: "yes" }, /'target.truncated'/],
+    [{ ...target, viewport: "huge" }, /'target.viewport'/],
+    [{ ...target, scroll: { x: -1, y: 0 } }, /'target.scroll'/],
+    [{ ...target, scroll: { x: 0 } }, /'target.scroll'/],
+    [{ ...target, state: "maybe" }, /'target.state'/],
+    [{ ...target, extra: 1 }, /'extra' is not a field of a target/],
+    ["page", /'target' must be an object/],
+  ];
+  for (const [value, error] of bad) {
+    await assert.rejects(appendEvent(dir, { ...REMARK, body: "x", target: value }), error);
+  }
+  await assert.rejects(
+    appendEvent(dir, { type: "thread", author: HUMAN, still: null, body: "chat", target }),
+    /general thread/
+  );
+  const reply = { type: "reply", author: AGENT, thread: marked.id, body: "x", target };
+  await assert.rejects(appendEvent(dir, reply), /'target' is not a field/);
+});
+
 test("threads folds anchors, replies and resolve/reopen into each thread", async (t) => {
   const dir = await withStill(t);
   const box = { x: 0.1, y: 0.2, w: 0.3, h: 0.4 };
@@ -328,6 +372,7 @@ test("threads folds anchors, replies and resolve/reopen into each thread", async
     variant: "custom-390x844",
     rev: 1,
     anchor: box,
+    target: null,
     body: "too tight",
     author: HUMAN,
     at: one.at,
