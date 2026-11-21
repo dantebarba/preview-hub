@@ -30,7 +30,8 @@
  *
  * `capture` can also measure a list of CSS selectors on the shot it takes: where the one
  * visible element each one matches is on the PNG, or null for one not on the page or on it
- * more than once. The live mark's freeze (`menu.mjs`) places a remark's box by them.
+ * more than once. A remark made on the live page whose snapshot did not render is placed by
+ * them (`remark` of `menu.mjs`).
  *
  * `renderSnapshot` shoots a page from its DOM instead of its URL: the HTML `snapshot` of
  * `stills/snapshot.js` wrote in the reviewer's browser, served to the tab from memory, once,

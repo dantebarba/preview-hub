@@ -416,6 +416,32 @@ describe("the mockup server", () => {
     assert.equal(existsSync(file(bare.id)), false);
   });
 
+  test("a new still reloads no page: Vite sends no full-reload, the stream says stills and the menu follows it", async () => {
+    const ws = new WebSocket(base.replace("http", "ws"), "vite-hmr");
+    const reloads = [];
+    const connected = new Promise((resolve) => {
+      ws.addEventListener("message", (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "connected") resolve();
+        if (msg.type === "full-reload") reloads.push(msg);
+      });
+    });
+    const stream = await eventSource(`${base}/_review/events?since=999999999999999`);
+    try {
+      await connected;
+      await shoot("quiet");
+      let frame = await stream.next();
+      while (frame.event !== "stills") frame = await stream.next();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      assert.deepEqual(reloads, []);
+      const menu = await (await fetch(`${base}/`)).text();
+      assert.match(menu, /<script>new EventSource\("\/_review\/events\?since=\d+"\)\.addEventListener\("stills",\(\)=>location\.reload\(\)\)<\/script>/);
+    } finally {
+      stream.close();
+      ws.close();
+    }
+  });
+
   test("reloads the open tabs when the manifest changes", async () => {
     const ws = new WebSocket(base.replace("http", "ws"), "vite-hmr");
     const reload = new Promise((resolve, reject) => {
