@@ -246,6 +246,67 @@ function copy() {
   return { texts, titles: attrs("title"), placeholders: attrs("placeholder") };
 }
 
+/**
+ * In the shell: the Remarks panel and the pins, `{ open, tally, cards, none, pins, lit, nodes,
+ * side }`: whether the panel shows, the count on its button, each card as `{ n, by, text, time,
+ * replies, status, resolved, on, tag, field, link }`, whether it says there is none, each pin as
+ * `{ n, x, y, on }` with its centre in CSS pixels of the page's viewport, how many outlines
+ * there are, how many elements the page's document holds, and the panel's rect in the window.
+ */
+function remarks() {
+  const el = (id) => document.getElementById(id);
+  const said = (node) => node?.textContent ?? null;
+  const screen = el("screen").getBoundingClientRect();
+  const k = screen.width / el("frame").offsetWidth;
+  const tally = [...document.querySelectorAll(".lister")].find((b) => b.getClientRects().length)?.querySelector(".tally");
+  return {
+    open: !el("side").hidden,
+    tally: said(tally),
+    cards: [...el("cards").children].map((card) => ({
+      n: said(card.querySelector(".n")),
+      by: said(card.querySelector(".head .by")),
+      text: said(card.querySelector(":scope > .text")),
+      time: said(card.querySelector(".head time")),
+      replies: [...card.querySelectorAll(".entry")].map((entry) => [said(entry.querySelector(".by")), said(entry.querySelector(".text"))]),
+      status: card.querySelector(".settle").hidden ? null : said(card.querySelector(".settle")),
+      resolved: card.classList.contains("resolved"),
+      on: card.classList.contains("on"),
+      tag: said(card.querySelector(".chip")),
+      field: !card.querySelector(".answer").hidden,
+      link: [card.querySelector("a").getAttribute("href"), card.querySelector("a").target],
+    })),
+    none: el("none").hidden ? null : said(el("none")),
+    pins: [...el("pins").querySelectorAll("button")].map((pin) => {
+      const r = pin.getBoundingClientRect();
+      const at = (lo, size, from) => Math.round((lo + size / 2 - from) / k);
+      return { n: pin.textContent, x: at(r.left, r.width, screen.left), y: at(r.top, r.height, screen.top), on: pin.ariaPressed === "true" };
+    }),
+    lit: el("pins").querySelectorAll("i").length,
+    nodes: el("frame").contentDocument.querySelectorAll("*").length,
+    side: el("side").getBoundingClientRect().toJSON(),
+  };
+}
+
+/**
+ * Open a thread in the log of `dir` as a remark made on the page `page` at `viewport` would
+ * be, on the elements the selectors `selectors` name, saying `body`; with `state`, shot that
+ * way. The still it is on is made when it is not there. Resolves to the thread's id.
+ */
+async function seed(dir, page, selectors, body, { viewport = "desktop", state = "reproduced" } = {}) {
+  const name = `live-${page.replace(/\W+/g, "-").replace(/^-|-$/g, "")}`;
+  if (!stills(dir).some((still) => still.name === name)) {
+    const file = path.join(dir, "seed.png");
+    writeFileSync(file, await encodePng(blankImage(40, 30)));
+    await addStill(dir, { file, name, source: page, viewport });
+  }
+  const elements = selectors.map((selector) => ({ selector, text: "", html: "" }));
+  const target = { page, elements, viewport, scroll: { x: 0, y: 0 }, state };
+  const author = { kind: "human", name: "Dante", via: "tailnet" };
+  const anchor = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+  const stored = await appendEvent(dir, { type: "thread", author, still: name, variant: viewport, rev: 1, anchor, target, body });
+  return stored.id;
+}
+
 /** A `remarks` hook of `serve` that refuses each remark with a 500 and `error` while its `on` is true. */
 function refusing(error) {
   const hook = (req, res) => {
@@ -595,7 +656,11 @@ test("a guest is asked for a name on the first Post alone, with no paragraph; wi
     /^\/three$/,
     /^(Mobile|Tablet|Desktop)$/,
     /^\d+×\d+( · \d+%)?$/,
-    /^(Mark|Cancel|Comment|Post|Posted|Open|Retry|Continue)$/,
+    /^(Mark|Remarks|Cancel|Comment|Post|Posted|Open|Retry|Continue|Reply|Resolve|Reopen)$/,
+    /^No remarks on this page$/,
+    /^\d+$/,
+    /^(now|\d+[mhd])$/,
+    /^(Ana|Too tight)$/,
     /^\d+\+? elements?$/,
     /^[a-z][a-z0-9]*([#.][\w-]+)?$/,
     /^Not posted: .+$/,
@@ -684,4 +749,208 @@ test("on a 390×844 touch screen the composer is whole at the bottom, over the r
   assert.equal(seen.shell.marking, false);
   const [thread] = await posted(dir);
   assert.deepEqual([thread.variant, thread.body, thread.target.state], ["mobile", "Small", "reproduced"]);
+});
+
+test("a posted remark is in the panel with a pin on its element, the page not loaded again; an agent's reply shows in the open panel at once; Reply, Resolve and Reopen from the panel write to the log, and a resolved thread loses its pin and goes under the open ones", { skip }, async (t) => {
+  const { base, dir, stream } = await serve(t);
+  const seen = { copy: [] };
+  await drive(t, `${base}/live/three`, "desktop", async (page) => {
+    const note = async () => seen.copy.push(await page.evaluate(call(copy)));
+    await page.waitFor("#marking");
+    seen.before = await page.evaluate(call(remarks));
+    await page.click("#listing");
+    seen.empty = await page.evaluate(call(remarks));
+    await note();
+    await page.click("#marking");
+    await page.evaluate(call(gesture, { x: 80, y: 100 }, { x: 80, y: 100 }));
+    seen.kept = await comment(page, "First");
+    await page.waitFor("#pins button", { timeout: 60000 });
+    seen.first = await page.evaluate(call(remarks));
+    const [{ id }] = threads(dir);
+    await appendEvent(dir, { type: "reply", thread: id, author: { kind: "agent", name: "claude" }, body: "Fixed" });
+    stream.push();
+    await page.waitFor("#cards .entry", { text: "Fixed", timeout: 1000 });
+    seen.replied = await page.evaluate(call(remarks));
+    await page.click("#marking");
+    await page.evaluate(call(gesture, { x: 80, y: 160 }, { x: 80, y: 160 }));
+    await comment(page, "Second");
+    await page.waitFor("#pins button + button", { timeout: 60000 });
+    seen.two = await page.evaluate(call(remarks));
+    await note();
+    await page.click("Resolve");
+    await page.waitFor("Reopen");
+    await page.sleep(100);
+    seen.resolved = await page.evaluate(call(remarks));
+    await note();
+    await page.click("#cards .thread.resolved .send");
+    seen.field = await page.evaluate(call(remarks));
+    await page.type("#cards .thread.resolved .answer", "Thanks");
+    await page.click("#cards .thread.resolved .send");
+    await page.waitFor("#cards .entry", { text: "Thanks" });
+    seen.answered = await page.evaluate(call(remarks));
+    await page.click("Reopen");
+    await page.waitFor("#pins button + button");
+    seen.reopened = await page.evaluate(call(remarks));
+    seen.held = await page.evaluate(call(held));
+  });
+  const [first, second] = threads(dir);
+  assert.deepEqual([seen.before.open, seen.before.tally, seen.before.pins], [false, "", []]);
+  assert.deepEqual([seen.empty.open, seen.empty.none, seen.empty.cards], [true, "No remarks on this page", []]);
+  assert.deepEqual(seen.kept, { kept: "same document", marking: false, url: "/live/three" });
+  assert.deepEqual(seen.first.pins, [{ n: "1", x: 20, y: 80, on: false }]);
+  assert.deepEqual([seen.first.tally, seen.first.none, seen.first.open], ["1", null, true]);
+  assert.deepEqual(seen.first.cards, [{
+    n: "1", by: "Dante", text: "First", time: "now", replies: [], status: "Resolve", resolved: false, on: false,
+    tag: null, field: false, link: [`/stills#thread=${first.id}`, "_blank"],
+  }]);
+  assert.deepEqual(seen.replied.cards[0].replies, [["claude", "Fixed"]]);
+  assert.deepEqual(seen.two.pins, [{ n: "1", x: 20, y: 80, on: false }, { n: "2", x: 20, y: 140, on: false }]);
+  assert.deepEqual([seen.two.tally, seen.two.cards.map((card) => card.text)], ["2", ["First", "Second"]]);
+  assert.deepEqual(seen.resolved.pins, [{ n: "2", x: 20, y: 140, on: false }]);
+  assert.deepEqual(seen.resolved.cards.map((card) => [card.n, card.text, card.status, card.resolved]), [["2", "Second", "Resolve", false], ["1", "First", "Reopen", true]]);
+  assert.equal(seen.resolved.tally, "1");
+  assert.equal(seen.field.cards[1].field, true);
+  assert.deepEqual([seen.answered.cards[1].replies, seen.answered.cards[1].field], [[["claude", "Fixed"], ["Dante", "Thanks"]], false]);
+  assert.deepEqual(seen.reopened.cards.map((card) => [card.n, card.resolved]), [["1", false], ["2", false]]);
+  assert.deepEqual(seen.reopened.pins.map((pin) => pin.n), ["1", "2"]);
+  assert.equal(seen.reopened.nodes, seen.before.nodes);
+  assert.deepEqual(seen.held, { kept: "same document", page: "/three", url: "/live/three" });
+  assert.deepEqual([first.status, first.replies.map((reply) => [reply.author.name, reply.body]), second.status], ["open", [["claude", "Fixed"], ["Dante", "Thanks"]], "open"]);
+  const table = [
+    /^\/three$/,
+    /^(Mobile|Tablet|Desktop)$/,
+    /^\d+×\d+( · \d+%)?$/,
+    /^(Mark|Remarks|Cancel|Comment|Post|Posted|Open|Retry|Continue|Reply|Resolve|Reopen)$/,
+    /^No remarks on this page$/,
+    /^What's your name\?$/,
+    /^\d+$/,
+    /^(now|\d+[mhd])$/,
+    /^(Dante|claude|First|Second|Fixed)$/,
+  ];
+  const said = new Set(seen.copy.flatMap((c) => c.texts));
+  for (const text of said) assert.ok(table.some((re) => re.test(text)), `'${text}' is not in the copy table`);
+  for (const text of ["Remarks", "No remarks on this page", "Reply", "Resolve", "Reopen", "Open", "now", "claude"]) {
+    assert.ok(said.has(text), `'${text}' was never shown`);
+  }
+  assert.deepEqual(seen.copy.flatMap((c) => c.titles), []);
+});
+
+test("navigating in Use mode swaps the panel's threads and the pins for the new page's, and a thread shot from the page loaded again says not reproduced", { skip }, async (t) => {
+  const { base, dir } = await serve(t);
+  await seed(dir, "/nav", ["a"], "On nav");
+  await seed(dir, "/other?tab=2", ["#only"], "On other", { state: "not-reproduced" });
+  await seed(dir, "/other", ["#only"], "Another query");
+  const seen = {};
+  await drive(t, `${base}/live/nav`, "desktop", async (page) => {
+    await page.waitFor("#pins button");
+    await page.click("#listing");
+    seen.nav = await page.evaluate(call(remarks));
+    await page.click("#frame");
+    await page.waitFor("#path", { text: "/other?tab=2" });
+    await page.waitFor("#cards .text", { text: "On other" });
+    await page.waitFor("#pins button");
+    await page.sleep(100);
+    seen.other = await page.evaluate(call(remarks));
+  });
+  assert.deepEqual(seen.nav.cards.map((card) => [card.n, card.text, card.tag]), [["1", "On nav", null]]);
+  assert.deepEqual([seen.nav.pins.length, seen.nav.tally], [1, "1"]);
+  assert.deepEqual(seen.other.cards.map((card) => [card.n, card.text, card.tag]), [["1", "On other", "not reproduced"]]);
+  assert.deepEqual([seen.other.pins, seen.other.tally], [[{ n: "1", x: 20, y: 20, on: false }], "1"]);
+});
+
+test("a pin follows its element as the page scrolls, goes when the element is out of sight or out of the page and returns with it; a tap on it opens its thread, and a thread picked in the panel is outlined and scrolled into view; none of it adds a node to the page", { skip }, async (t) => {
+  const { base, dir } = await serve(t);
+  await seed(dir, "/three", ["#b", "#c"], "Two buttons");
+  await seed(dir, "/three", ["#gone"], "Not there");
+  const seen = {};
+  await drive(t, `${base}/live/three`, "desktop", async (page) => {
+    const inPage = (fn) => page.evaluate(`(${fn})(document.getElementById("frame").contentWindow)`);
+    const drawn = async () => {
+      await page.sleep(150);
+      return page.evaluate(call(remarks));
+    };
+    await page.waitFor("#pins button");
+    seen.start = await drawn();
+    await inPage((view) => view.scrollTo(0, 50));
+    seen.scrolled = await drawn();
+    await inPage((view) => view.scrollTo(0, 1000));
+    seen.away = await drawn();
+    await inPage((view) => view.scrollTo(0, 0));
+    await page.click("#pins button");
+    seen.tapped = await drawn();
+    seen.clicks = await inPage((view) => view.clicks);
+    await page.click("#listing");
+    seen.shut = await drawn();
+    await inPage((view) => view.scrollTo(0, 1000));
+    await page.click("#listing");
+    await page.click("Two buttons");
+    seen.picked = await drawn();
+    seen.scrollY = await inPage((view) => view.scrollY);
+    await inPage((view) => {
+      view.spare = view.document.getElementById("b");
+      view.spare.remove();
+    });
+    seen.removed = await drawn();
+    await inPage((view) => view.document.body.prepend(view.spare));
+    seen.back = await drawn();
+    await inPage((view) => {
+      view.document.getElementById("b").style.visibility = "hidden";
+    });
+    seen.hidden = await drawn();
+    await inPage((view) => {
+      view.document.getElementById("b").style.visibility = "";
+      const more = view.document.createElement("button");
+      more.id = "gone";
+      more.style.top = "200px";
+      view.document.body.append(more);
+    });
+    seen.both = await drawn();
+  });
+  assert.deepEqual([seen.start.pins, seen.start.open, seen.start.tally], [[{ n: "1", x: 20, y: 80, on: false }], false, "2"]);
+  assert.deepEqual(seen.scrolled.pins, [{ n: "1", x: 20, y: 30, on: false }]);
+  assert.deepEqual(seen.away.pins, []);
+  assert.deepEqual([seen.tapped.open, seen.tapped.pins, seen.tapped.lit], [true, [{ n: "1", x: 20, y: 80, on: true }], 2]);
+  assert.deepEqual(seen.tapped.cards.map((card) => card.on), [true, false]);
+  assert.equal(seen.clicks, 0);
+  assert.deepEqual([seen.shut.open, seen.shut.lit, seen.shut.pins[0].on], [false, 0, false]);
+  assert.ok(seen.scrollY < 100, `the page is at ${seen.scrollY}`);
+  assert.deepEqual([seen.picked.pins.length, seen.picked.lit, seen.picked.cards[0].on], [1, 2, true]);
+  assert.deepEqual([seen.removed.pins, seen.removed.lit], [[], 1]);
+  assert.deepEqual([seen.back.pins.map((pin) => pin.n), seen.back.lit], [["1"], 2]);
+  assert.deepEqual(seen.hidden.pins, []);
+  assert.deepEqual(seen.both.pins.map((pin) => [pin.n, pin.y]), [["1", seen.back.pins[0].y], ["2", 200 - seen.scrollY]]);
+  assert.equal(seen.start.nodes, seen.picked.nodes);
+});
+
+test("on a phone Remarks is in the dock and the panel is a sheet at the bottom; a guest has no Resolve and replies under the name they give", { skip }, async (t) => {
+  const { base, dir } = await serve(t, { who: null });
+  await seed(dir, "/three", ["#b"], "Small", { viewport: "mobile" });
+  const seen = {};
+  await drive(t, `${base}/live/three`, "mobile", async (page) => {
+    await page.waitFor("#pins button");
+    seen.shut = await page.evaluate(call(remarks));
+    seen.top = await page.evaluate(() => document.getElementById("listing").getClientRects().length);
+    await page.click("#sheet");
+    seen.sheet = await page.evaluate(call(remarks));
+    await page.click("#cards .send");
+    await page.type("#cards .answer", "Me too");
+    await page.click("#cards .send");
+    await page.type("#who-name", "Ana");
+    await page.click("#continue");
+    await page.waitFor("#cards .entry", { text: "Me too" });
+    await page.click("#shut");
+    seen.closed = await page.evaluate(call(remarks));
+    await page.click("#sheet");
+    await page.press("m");
+    seen.marking = await page.evaluate(call(remarks));
+  });
+  assert.deepEqual([seen.shut.open, seen.shut.tally, seen.shut.pins.length, seen.top], [false, "1", 1, 0]);
+  assert.equal(seen.sheet.open, true);
+  assert.deepEqual([seen.sheet.side.left, seen.sheet.side.right, seen.sheet.side.bottom], [0, 390, 844]);
+  assert.ok(seen.sheet.side.top >= 844 * 0.4);
+  assert.equal(seen.sheet.cards[0].status, null);
+  assert.equal(seen.closed.open, false);
+  assert.equal(seen.marking.open, false);
+  const [thread] = threads(dir);
+  assert.deepEqual(thread.replies.map((reply) => [reply.author.name, reply.author.via, reply.body]), [["Ana", "share", "Me too"]]);
 });
