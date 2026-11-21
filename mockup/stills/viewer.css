@@ -284,18 +284,18 @@ header .working { margin: 0; white-space: nowrap; }
 #crumbs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
 #crumbs button { flex: none; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
 #found { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #bbb; white-space: nowrap; }
-#composer { position: fixed; z-index: 5; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; padding: 10px; background: #1b1b1f; border: 1px solid #555; border-radius: 10px; box-shadow: 0 8px 24px #000a; }
+.live #composer { position: fixed; z-index: 5; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; padding: 10px; background: #1b1b1f; border: 1px solid #555; border-radius: 10px; box-shadow: 0 8px 24px #000a; }
 #say { display: block; resize: none; }
-#toast { position: fixed; z-index: 6; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 6px 6px 6px 16px; background: #1b1b1f; border: 1px solid #555; border-radius: 999px; box-shadow: 0 8px 24px #000a; }
-#toast.failed { border-color: #e11d48; }
-#toast-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#toast .x { flex: none; border-color: transparent; background: none; }
-#toast a, #toast button { flex: none; }
+.live #toast { z-index: 6; bottom: calc(16px + env(safe-area-inset-bottom)); gap: 10px; max-width: calc(100vw - 16px); box-sizing: border-box; background: #1b1b1f; }
+.live #toast.failed { border-color: #e11d48; }
+.live #toast-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live #toast .x { flex: none; border-color: transparent; background: none; }
+.live #toast a, .live #toast button { flex: none; }
 #spin { flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 2px solid #555; border-top-color: #eee; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 599.98px), (pointer: coarse) {
   .live #marking { display: none; }
-  .live #composer { left: 0; right: 0; bottom: var(--keyboard, 0px); width: auto; padding: 10px 12px max(10px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); border-width: 1px 0 0; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
+  .live #composer { left: 0; right: 0; top: auto; bottom: var(--keyboard, 0px); width: auto; padding: 10px 12px max(10px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); border-width: 1px 0 0; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
   .live #composer button, .live #toast button, .live #toast a { min-height: 44px; }
   .live #toast a { display: grid; place-items: center; padding: 0 6px; }
   .live #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }

@@ -95,6 +95,7 @@ let scale = 1;
 let drag = null;
 let pan = null;
 let source = null;
+let since = null;
 let flying = 0;
 let shown = null;
 let hiding = null;
@@ -358,7 +359,7 @@ function render() {
   drawSel();
 }
 
-/** Forget the mark and any gesture under way; the composer closes, what was typed in it kept. */
+/** Forget the mark and any gesture under way; the composer closes, what was typed in it kept for the next mark. */
 function clearSel() {
   state.sel = null;
   state.composing = false;
@@ -368,11 +369,13 @@ function clearSel() {
 
 /**
  * Enter Mark mode or go back to Use, with no mark either way. Entering takes the focus out of
- * the page, so keys stop reaching it; a page outside the mockup cannot be marked.
+ * the page, so keys stop reaching it; a page outside the mockup cannot be marked. Leaving drops
+ * what was typed in the composer.
  */
 function setMarking(on) {
   if (on && state.page === null) return;
   state.marking = on;
+  if (!on) el("say").value = "";
   clearSel();
   fingers.clear();
   pan = null;
@@ -668,13 +671,17 @@ function settle(id, error) {
   if (error !== null) return fail(draft, error);
   pending.delete(id);
   draft.status = "posted";
-  if (shown === draft) show(draft);
+  if (shown?.status !== "failed") show(draft);
 }
 
-/** Follow the review log above the event `cursor`, once: the threads that land and the remarks that failed. */
-function follow(cursor) {
-  if (source) return;
-  source = new EventSource(`/_review/events?since=${cursor}`);
+/**
+ * Follow the review log above the event `since`, once it is known: the threads that land and the
+ * remarks that failed. A stream the browser gave up on is opened again, from the same event, so
+ * a thread that landed meanwhile is told again.
+ */
+function follow() {
+  if (since === null || (source && source.readyState !== EventSource.CLOSED)) return;
+  source = new EventSource(`/_review/events?since=${since}`);
   source.onmessage = (message) => {
     const event = JSON.parse(message.data);
     if (event.type === "thread") settle(event.id, null);
@@ -694,7 +701,7 @@ function follow(cursor) {
 async function writer() {
   if (!state.me) {
     const { me, cursor } = await answerOf(await fetch("/_review/stills", { cache: "no-store" }));
-    follow(cursor);
+    since ??= cursor;
     state.me = me;
   }
   if (state.me.via === "tailnet") return {};
@@ -725,6 +732,7 @@ async function sign(draft) {
 async function send(draft) {
   draft.status = "shooting";
   show(draft);
+  follow();
   flying += 1;
   try {
     const res = await fetch("/_review/remarks", {
@@ -748,7 +756,9 @@ async function send(draft) {
  * marked elements stamped in it, then close the composer, leave Mark mode and send it. An
  * element no selector names alone, or that the page took out since it was marked, is left out of
  * the remark's elements, the mark then truncated; a page whose snapshot cannot be written is
- * posted without one, to be shot loaded again. A guest who gives no name stays in the composer.
+ * posted without one, to be shot loaded again. A guest who gives no name stays in the composer,
+ * and a Post whose composer was closed or whose mark changed while the writer was asked sends
+ * nothing.
  */
 async function post() {
   const { sel } = state;
@@ -779,11 +789,11 @@ async function post() {
   drawComposer();
   const signed = await sign(draft);
   state.signing = false;
+  if (state.sel !== sel || !state.composing) return drawComposer();
   if (!signed && !draft.error) {
     drawComposer();
     return el("say").focus();
   }
-  el("say").value = "";
   setMarking(false);
   return signed ? send(draft) : fail(draft, draft.error);
 }
@@ -794,6 +804,7 @@ async function retry() {
   if (draft?.status !== "failed" || state.signing) return undefined;
   const was = draft.error;
   state.signing = true;
+  drawComposer();
   const signed = await sign(draft);
   state.signing = false;
   drawComposer();
