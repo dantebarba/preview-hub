@@ -50,6 +50,14 @@
  * form following the keyboard; swiped left it uncovers Resolve or Reopen, which can be undone
  * for five seconds, and swiped right Reply.
  *
+ * A remark made on the live page (`live.js`) arrives as a draft: the shell leaves the freeze's
+ * answer in this tab's session storage and opens the viewer on the still the shot went on, where
+ * the draft's box is in place with the composer open. Its `target`, the page and the elements
+ * marked there, stays with the draft while the box is moved or drawn again, and is posted with
+ * the remark; the composer says how many elements it marks, and when the shot did not reproduce
+ * them. The card of such a remark names its page, a link back to the live shell, its elements
+ * and "not reproduced".
+ *
  * A folder of images as the source may add to that, each only when it is there:
  *
  *   - groups: a heading before each group in the strip and in the grid, the group's name by the
@@ -82,17 +90,23 @@ import {
   counts,
   cropOf,
   edge,
+  elementsLabel,
   fileUrl,
   fitted,
   keyOf,
   lastMessage,
   linkedKey,
+  LIVE_DRAFT_KEY,
+  liveDraft,
+  livePath,
   MAX_NAME,
   moved,
+  NAME_KEY,
   notesLine,
   opposite,
   pickOf,
   pin,
+  place,
   progress,
   READ_ONLY,
   region,
@@ -105,6 +119,8 @@ import {
   sizeLabel,
   sizesOf,
   step,
+  store,
+  stored,
   tagsLabel,
   tagsOf,
   title,
@@ -120,7 +136,6 @@ import { swipeable } from "./swipe.js";
 const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const LAYOUT_KEY = "stills.layout";
 const SEEN_KEY = "stills.seen";
-const NAME_KEY = "review.name";
 const SWIPE_PX = 60;
 const TAP_PX = 8;
 const DOUBLE_TAP_MS = 300;
@@ -199,30 +214,13 @@ let toastTimer = null;
 let mobile = false;
 let leaving = false;
 let aim = null;
+let arriving = false;
 let workTimer = null;
 let guestName = (stored(NAME_KEY) || "").trim().slice(0, MAX_NAME);
 
 /** The element with the id `id`. */
 function el(id) {
   return document.getElementById(id);
-}
-
-/** The value kept under `key` in this browser, or null when there is none or no storage. */
-function stored(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-/** Keep `value` under `key` in this browser, when it has storage. */
-function store(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    return;
-  }
 }
 
 /** True when the mobile layout is the one to use: the one forced on this device, else by its screen. */
@@ -360,14 +358,6 @@ function node(tag, className, text = "") {
   return made;
 }
 
-/** Put `target` on the still where `anchor` is: at a pin's point, or over a region. */
-function place(target, anchor) {
-  target.style.left = `${anchor.x * 100}%`;
-  target.style.top = `${anchor.y * 100}%`;
-  target.style.width = anchor.w === undefined ? "" : `${anchor.w * 100}%`;
-  target.style.height = anchor.h === undefined ? "" : `${anchor.h * 100}%`;
-}
-
 /**
  * The threads of the variant on screen, in the order they were opened: a thread's number is its
  * place. A thread that names no variant is on its still's first.
@@ -389,7 +379,9 @@ function drawDraft() {
   place(el("draft"), draft.anchor);
   el("composer").style.setProperty("--x", `${draft.anchor.x * 100}%`);
   el("composer").style.setProperty("--y", `${(draft.anchor.y + (draft.anchor.h ?? 0)) * 100}%`);
-  el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}`;
+  const marks = draft.target ? ` · ${elementsLabel(draft.target)}` : "";
+  el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}${marks}`;
+  el("unshown").hidden = draft.target?.state !== "not-reproduced";
 }
 
 /**
@@ -449,8 +441,26 @@ function actions(t, swiped) {
 }
 
 /**
+ * What the card of thread `t` says of a remark made on the live page, as a list to spread into
+ * it: the page, a link to the live shell on it, how many elements it marks and "not reproduced"
+ * when the shot does not show them. Empty for a remark made on the still.
+ */
+function targetLine(t) {
+  if (!t.target) return [];
+  const line = node("div", "target");
+  const page = node("a", "", t.target.page);
+  page.href = livePath(t.target.page);
+  page.title = "Open the live page";
+  page.onclick = (e) => e.stopPropagation();
+  line.append("on ", page, ` · ${elementsLabel(t.target)}`);
+  if (t.target.state === "not-reproduced") line.append(" · ", node("span", "lost", "not reproduced"));
+  return [line];
+}
+
+/**
  * The card of thread `t`, number `n`, in its slot: the number, the title and the status chip,
- * which for a remark made on an older revision is a button that goes to it; the latest message
+ * which for a remark made on an older revision is a button that goes to it; what a remark made
+ * on the live page marks (see `targetLine`); the latest message
  * with a dot when a reply is not seen yet; the agent's dots while it works on the remark; the
  * reply count with Reply and Resolve or Reopen. The selected card of the desktop layout shows
  * the whole conversation instead of the latest message. Behind the card are the two actions a
@@ -482,7 +492,7 @@ function threadCard(t, n) {
   const replies = t.replies.length;
   const count = node("span", "count", replies === 1 ? "1 reply" : `${replies} replies`);
   foot.append(count, ...actions(t, false), node("span", "chev", "›"));
-  card.append(head);
+  card.append(head, ...targetLine(t));
   if (on && !mobile) {
     const all = node("div", "entries");
     all.append(entry(t), ...t.replies.map(entry), ...dotsOf(busyOn(t.id)));
@@ -1013,11 +1023,15 @@ function jump() {
   layoutStage();
 }
 
-/** Lay the still out once its image has loaded, on the mark `jump` was waiting to show when there is one. */
+/**
+ * Lay the still out once its image has loaded, on the mark `jump` was waiting to show when there
+ * is one, and with the composer of a draft that arrived from the live page open.
+ */
 function settleStill() {
   if (aim) view = viewOn(aim, box());
   aim = null;
   layoutStage();
+  if (arriving) openComposer();
 }
 
 /** Show `text` for five seconds with an Undo button that runs `undo`. */
@@ -1321,7 +1335,8 @@ async function setReviewed(on) {
 
 /**
  * Post the draft as a thread, once whoever is looking has a name: its still, variant, revision,
- * mark and comment in one event, with the annotated still when it could be drawn, and a notice
+ * mark and comment in one event, with the `target` of a draft that came from the live page and
+ * the annotated still when it could be drawn, and a notice
  * when it could not. The new thread is then the selected one. The mark stays as it is while it
  * is being posted.
  */
@@ -1332,8 +1347,8 @@ async function postRemark() {
   el("post").disabled = true;
   try {
     const annotated = await annotate(imageUrl(shown), draft.anchor).catch(() => null);
-    const { still, variant, rev, anchor } = draft;
-    const event = { type: "thread", still, variant, rev, anchor, body };
+    const { still, variant, rev, anchor, target } = draft;
+    const event = { type: "thread", still, variant, rev, anchor, body, ...(target ? { target } : {}) };
     const thread = await send(annotated ? { ...event, annotated } : event);
     applyThread(state.threads, thread);
     if (state.draft === draft) dropDraft();
@@ -1498,9 +1513,8 @@ function moveDrag(e) {
 }
 
 /**
- * End a drag: a press that never left its spot is a pin there. The composer opens, ready to
- * type; on a phone a mark its sheet would cover goes to the top, or in the mobile layout is
- * panned clear of it.
+ * End a drag: a press that never left its spot is a pin there. The composer opens (see
+ * `openComposer`).
  */
 function endDrag() {
   if (!drag) return;
@@ -1509,18 +1523,59 @@ function endDrag() {
   if (tap) setDraft(pin(tap));
   state.armed = false;
   render();
-  if (!state.draft) return;
+  openComposer();
+}
+
+/**
+ * Bring the draft's composer up, ready to type; on a phone a mark its sheet would cover goes to
+ * the top, or in the mobile layout is panned clear of it.
+ */
+function openComposer() {
+  arriving = false;
+  if (!state.draft) return undefined;
   el("body").focus({ preventScroll: PHONE.matches || mobile });
   if (mobile) return reveal(state.draft.anchor);
   const covered = el("draft").getBoundingClientRect().bottom > el("composer").getBoundingClientRect().top;
   if (PHONE.matches && covered) el("draft").scrollIntoView({ block: "start" });
+  return undefined;
 }
 
-/** Make `anchor` the draft's mark, on the revision on screen. */
+/**
+ * Make `anchor` the draft's mark, on the revision on screen. A draft that came from the live
+ * page keeps its `target` while its mark is moved or drawn again.
+ */
 function setDraft(anchor) {
   const s = state.stills[state.at];
-  state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor };
+  const { target } = state.draft ?? {};
+  state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor, ...(target ? { target } : {}) };
   drawDraft();
+}
+
+/**
+ * Open the draft the live shell left in this tab's session storage (see `liveDraft`), once: go
+ * to the still, variant and revision its shot went on, with its box in place and the composer
+ * open, as soon as the image is there. Nothing without one, or in a read-only folder.
+ */
+function takeLiveDraft() {
+  let draft;
+  try {
+    draft = liveDraft(sessionStorage.getItem(LIVE_DRAFT_KEY));
+    sessionStorage.removeItem(LIVE_DRAFT_KEY);
+  } catch {
+    return;
+  }
+  if (!draft || state.readonly) return;
+  const at = state.stills.findIndex((s) => s.name === draft.still && s.variants.some((v) => v.key === draft.variant));
+  if (at === -1) return report("The shot of the live page is not among the stills.");
+  state.pick = draft.variant;
+  derive();
+  buildStrip();
+  show(at);
+  state.rev = draft.rev;
+  state.draft = draft;
+  arriving = true;
+  render();
+  if (loaded(el("still"))) openComposer();
 }
 
 /** Ctrl+Enter or ⌘+Enter in a form's text posts it. */
@@ -1840,4 +1895,5 @@ state.pick = hashParts().key;
 
 applyLayout();
 await load();
+takeLiveDraft();
 follow();

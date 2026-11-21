@@ -11,7 +11,9 @@
  * The plugin owns the URL space in front of Vite: `/` is the menu, rendered per request from
  * the manifest and the stills; `/<slug>` serves `pages/<slug>.html`; `/app/<path>` is the
  * project's own file at `<app>/<path>`. `/stills` is reserved for the stills viewer, served from
- * this image (`stills/` next to this file), and `/_review/` for what it reads and writes:
+ * this image (`stills/` next to this file), `/live/<slug>` for the live shell around the page
+ * `/<slug>`, where a remark is marked on the page itself (`stills/live.js`), and `/_review/` for
+ * what they read and write:
  *
  *   GET  /_review/stills               { stills: [{ name, title, source, variants, revs, mark }],
  *                                      marks, working, me, cursor }: every reviewer's marks, what
@@ -76,7 +78,7 @@ import {
   variantKey,
   working,
 } from "./review.mjs";
-import { fileUrl, MAX_ANNOTATED_BYTES, MAX_NAME, PNG_URL } from "./stills/state.js";
+import { fileUrl, livePath, MAX_ANNOTATED_BYTES, MAX_NAME, pageOfLive, PNG_URL } from "./stills/state.js";
 
 const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
@@ -96,8 +98,10 @@ const FREEZE_VIEWPORT = { side: 4096, dpr: 4 };
 const MAX_FREEZES_WAITING = 4;
 const VIEWER_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "stills");
 const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
+const LIVE_PAGE = { file: "live.html", type: "text/html; charset=utf-8" };
 const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
+  "live.js": { file: "live.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
   "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
   "swipe.js": { file: "swipe.js", type: "text/javascript; charset=utf-8" },
@@ -108,8 +112,10 @@ const STYLE =
   "body{font-family:system-ui;background:#111;color:#eee;margin:24px;max-width:960px}" +
   "h1{font-size:20px}h2{font-size:15px;margin:22px 0 8px;color:#aaa}a{color:#7dd3fc}" +
   "ul{padding-left:0;list-style:none;margin:0}" +
-  "li a{display:block;padding:12px 14px;margin:6px 0;background:#1b1b1f;border:1px solid #333;" +
+  "li{display:flex;gap:6px;margin:6px 0}" +
+  "li a{flex:1;padding:12px 14px;background:#1b1b1f;border:1px solid #333;" +
   "border-radius:10px;text-decoration:none;font-size:15px}li a:hover{background:#26262c}" +
+  "li a.live{flex:none;color:#fda4af}" +
   ".shots{display:flex;gap:16px;flex-wrap:wrap}figure{margin:0}" +
   "img{width:195px;border:1px solid #444;border-radius:12px;display:block}" +
   "figcaption{margin:6px 0;font-size:13px;color:#aaa}.err{color:#fca5a5}";
@@ -278,7 +284,8 @@ function readReview(scratch, by) {
 }
 
 /**
- * The menu's HTML: every page and variant as a link, then the stills of `review` (as
+ * The menu's HTML: every page and variant as a link, with a "Live" link beside it to the live
+ * shell on it, where a remark is marked on the page itself; then the stills of `review` (as
  * `readReview` returns them) with a link to the viewer, or, for a mockup that has none, the
  * bare `shots`.
  */
@@ -298,7 +305,8 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
     out.push(`<h2>${escapeHtml(label)}</h2><ul>`);
     for (const v of variants.filter(Boolean)) {
       const href = page.path + (v.query || "");
-      out.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(v.label || href)}</a></li>`);
+      out.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(v.label || href)}</a>`);
+      out.push(`<a class="live" href="${escapeHtml(livePath(href))}" title="Mark on the live page">Live</a></li>`);
     }
     out.push("</ul>");
   }
@@ -331,7 +339,8 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
 
 /**
  * Where a request goes before Vite sees it: `{ menu: true }` for the menu, `{ viewer: true }`
- * for the stills viewer at the reserved `/stills`, else the rewritten URL, or null to leave it
+ * for the stills viewer at the reserved `/stills`, `{ live: true }` for the live shell at
+ * `/live/<slug>` when the page `/<slug>` exists, else the rewritten URL, or null to leave it
  * alone. `/app/<path>` becomes `/@fs<app>/<path>`, and `/<slug>` becomes `/pages/<slug>.html`
  * when that page exists. A revision's image named with `%2B` or `%40`, as `fileUrl` writes the
  * `+` and `@` of a variant key, is named with the characters themselves, which is how Vite
@@ -347,10 +356,14 @@ export function route(url, app) {
     return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
   }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
-  const slug = SLUG.exec(pathname);
-  if (!slug || path.extname(slug[1])) return null;
-  const file = pageFile(slug[1]);
-  return existsSync(path.join(scratchDir(app), file)) ? { url: `/${file}${search}` } : null;
+  const page = (at) => {
+    const slug = SLUG.exec(at ?? "");
+    const file = slug && !path.extname(slug[1]) ? pageFile(slug[1]) : null;
+    return file && existsSync(path.join(scratchDir(app), file)) ? file : null;
+  };
+  if (page(pageOfLive(pathname))) return { live: true };
+  const file = page(pathname);
+  return file ? { url: `/${file}${search}` } : null;
 }
 
 /**
@@ -422,6 +435,11 @@ function sendViewerFile(req, res, { file, type }) {
 /** Answer a GET of `/stills` with the viewer's page. */
 export function sendViewerPage(req, res) {
   sendViewerFile(req, res, VIEWER_PAGE);
+}
+
+/** Answer a GET of `/live/<slug>` with the live shell's page. */
+export function sendLivePage(req, res) {
+  sendViewerFile(req, res, LIVE_PAGE);
 }
 
 /** The request's body as a Buffer, or null once it passes `limit` bytes. */
@@ -945,7 +963,7 @@ export async function handleReview(req, res, { scratch, stream, who, shoot = cap
 
 /**
  * The Vite plugin: menu at `/`, the stills viewer at `/stills` with its `/_review/` routes,
- * clean page URLs, the `/app/` prefix, no-store and reloads. `hosts` are the names the server
+ * the live shell at `/live/<slug>`, clean page URLs, the `/app/` prefix, no-store and reloads. `hosts` are the names the server
  * accepts, which tell a guest from a tailnet user (see `reviewer`).
  */
 export function menuPlugin({ app, hosts = [] }) {
@@ -967,7 +985,8 @@ export function menuPlugin({ app, hosts = [] }) {
           if (await handleReview(req, res, { scratch, stream, who })) return undefined;
           const target = route(req.url, app);
           if (!target) return next();
-          if (target.viewer) return sendViewerFile(req, res, VIEWER_PAGE);
+          if (target.viewer) return sendViewerPage(req, res);
+          if (target.live) return sendLivePage(req, res);
           if (!target.menu) {
             req.url = target.url;
             return next();

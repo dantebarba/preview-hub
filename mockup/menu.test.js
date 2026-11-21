@@ -24,7 +24,7 @@ import {
   rewriteRefs,
   route,
 } from "./menu.mjs";
-import { addStill, appendEvent, stills, threads, working } from "./review.mjs";
+import { addStill, appendEvent, parseViewport, stills, threads, working } from "./review.mjs";
 import { folder } from "./source.mjs";
 import {
   ago,
@@ -39,21 +39,30 @@ import {
   classOf,
   counts,
   cropOf,
+  DEVICES,
   edge,
+  elementsLabel,
   fitted,
+  holds,
   keyOf,
   lastMessage,
   linkedKey,
+  liveDraft,
+  livePath,
+  markedIn,
   markOf,
   MAX_ZOOM,
   moved,
   opposite,
+  pageOfLive,
   pickOf,
   pin,
+  presetSize,
   progress,
   region,
   revealed,
   sameChoice,
+  scaleToFit,
   sizeLabel,
   sizesOf,
   step,
@@ -149,6 +158,95 @@ test("route sends / to the menu, /app/ to the project and /<slug> to its page", 
   assert.equal(route("/missing", app), null);
   assert.equal(route("/pages/pay.ts", app), null);
   assert.equal(route("/@vite/client", app), null);
+});
+
+test("route sends /live/<slug> to the live shell when that page exists, and else leaves it to a page of that name", (t) => {
+  const app = scratch(t, { ".mockup/pages/pay.html": "", ".mockup/pages/nested/step.html": "", ".mockup/pages/live/tv.html": "" });
+  assert.deepEqual(route("/live/pay", app), { live: true });
+  assert.deepEqual(route("/live/pay?v=b", app), { live: true });
+  assert.deepEqual(route("/live/nested/step/", app), { live: true });
+  assert.deepEqual(route("/live/tv", app), { url: "/pages/live/tv.html" });
+  assert.deepEqual(route("/live/live/tv", app), { live: true });
+  assert.equal(route("/live/missing", app), null);
+  assert.equal(route("/live", app), null);
+  assert.equal(route("/live//pay", app), null);
+});
+
+test("renderMenu puts a Live link to the shell beside every page and variant", () => {
+  const pages = [{ title: "Pay", path: "/pay", variants: [{ label: "B", query: "?v=b&x=1" }] }, { title: "Home", path: "/home" }];
+  const html = renderMenu({ manifest: { pages }, error: null }, []);
+  assert.match(html, /<a href="\/pay\?v=b&#38;x=1">B<\/a><a class="live" href="\/live\/pay\?v=b&#38;x=1"[^>]*>Live<\/a>/);
+  assert.match(html, /<a href="\/home">Home<\/a><a class="live" href="\/live\/home"[^>]*>Live<\/a>/);
+});
+
+test("livePath and pageOfLive turn a page into its shell's URL and back", () => {
+  assert.equal(livePath("/checkout?step=2"), "/live/checkout?step=2");
+  assert.equal(pageOfLive("/live/checkout", "?step=2"), "/checkout?step=2");
+  assert.equal(pageOfLive("/live/a/b"), "/a/b");
+  for (const not of ["/live", "/live/", "/live//host", "/live/\\host", "/stills", "/lively/x"]) assert.equal(pageOfLive(not), null, not);
+});
+
+test("a device class is a viewport preset of the store, at its size, scaled down only to fit a room", () => {
+  assert.deepEqual(DEVICES, ["mobile", "tablet", "desktop"]);
+  for (const name of [...DEVICES, "mobile-s"]) {
+    const { width, height } = parseViewport(name);
+    assert.deepEqual(presetSize(name), { width, height }, name);
+  }
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 1000, h: 900 }), 1);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 195, h: 900 }), 0.5);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 1000, h: 211 }), 0.25);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: -24, h: 500 }), 0);
+});
+
+test("elementsLabel counts a target's elements, with a plus when it was truncated", () => {
+  const of = (n, truncated) => elementsLabel({ elements: Array(n).fill({}), truncated });
+  assert.deepEqual([of(0), of(1), of(3), of(20, true), of(1, true)], ["0 elements", "1 element", "3 elements", "20+ elements", "1+ elements"]);
+});
+
+test("holds says whether a rect is inside a box, to half a pixel", () => {
+  const box = { x: 10, y: 10, w: 100, h: 50 };
+  assert.equal(holds(box, { x: 10, y: 10, w: 100, h: 50 }), true);
+  assert.equal(holds(box, { x: 9.6, y: 20, w: 100.8, h: 10 }), true);
+  assert.equal(holds(box, { x: 9, y: 20, w: 20, h: 10 }), false);
+  assert.equal(holds(box, { x: 20, y: 20, w: 20, h: 41 }), false);
+});
+
+test("markedIn keeps the elements inside a box but a wrapper of the same area, outermost first, at most 20", () => {
+  const rect = (x, y, w, h) => ({ x, y, w, h });
+  const three = [0, 1, 2].map((i) => ({ rect: rect(i * 50, 0, 40, 20), parent: -1 }));
+  assert.deepEqual(markedIn(three), { picked: [0, 1, 2], truncated: false });
+  const wrapped = [
+    { rect: rect(0, 0, 100, 40), parent: -1 },
+    { rect: rect(0, 0, 100, 40.6), parent: 0 },
+    { rect: rect(0, 0, 100, 40), parent: 1 },
+    { rect: rect(10, 10, 20, 20), parent: 2 },
+    { rect: rect(200, 0, 50, 50), parent: -1 },
+  ];
+  assert.deepEqual(markedIn(wrapped), { picked: [4, 2, 3], truncated: false });
+  const nested = [
+    { rect: rect(0, 0, 300, 300), parent: -1 },
+    { rect: rect(0, 0, 100, 100), parent: 0 },
+    { rect: rect(0, 0, 50, 50), parent: 1 },
+    { rect: rect(150, 0, 100, 100), parent: 0 },
+  ];
+  assert.deepEqual(markedIn(nested).picked, [0, 1, 3, 2]);
+  const many = Array.from({ length: 25 }, (_, i) => ({ rect: rect(i * 10, 0, 8, 8), parent: -1 }));
+  const cut = markedIn(many);
+  assert.deepEqual([cut.picked.length, cut.picked[19], cut.truncated], [20, 19, true]);
+  assert.deepEqual(markedIn(many, 2), { picked: [0, 1], truncated: true });
+  assert.deepEqual(markedIn([]), { picked: [], truncated: false });
+});
+
+test("liveDraft reads the draft a freeze's answer opens, on the whole still when it placed no anchor", () => {
+  const target = { page: "/pay", elements: [], viewport: "mobile", scroll: { x: 0, y: 0 }, state: "not-reproduced" };
+  const anchor = { x: 0.1, y: 0.2, w: 0.3, h: 0.4 };
+  const frozen = { still: "live-pay", variant: "mobile", rev: 2, anchor, state: "not-reproduced", target };
+  assert.deepEqual(liveDraft(JSON.stringify(frozen)), { still: "live-pay", variant: "mobile", rev: 2, anchor, target });
+  const whole = liveDraft(JSON.stringify({ ...frozen, anchor: null }));
+  assert.deepEqual(whole.anchor, { x: 0, y: 0, w: 1, h: 1 });
+  const bad = [null, "", "{", "null", "[]", JSON.stringify({ ...frozen, rev: "2" }), JSON.stringify({ ...frozen, target: null })];
+  for (const text of bad) assert.equal(liveDraft(text), null, String(text));
+  assert.equal(liveDraft(JSON.stringify({ ...frozen, target: { page: "/pay" } })), null);
 });
 
 test("route reserves /stills for the viewer, even over a page of that name", (t) => {
