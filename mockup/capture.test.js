@@ -23,6 +23,7 @@ import {
   runBatch,
   userAgent,
 } from "./capture.mjs";
+import { freeze, freezeRequest } from "./menu.mjs";
 import { appendEvent, parseViewport, reviewed, stills } from "./review.mjs";
 
 const CHROME = findChrome();
@@ -206,6 +207,22 @@ test("measure gives each selector's rect on the PNG in CSS pixels, null for one 
   assert.deepEqual([phone.width, phone.rects], [1170, [a]]);
   const plain = await capture({ url, out: path.join(dir, "p.png"), viewport: "desktop" });
   assert.equal(plain.rects, undefined);
+});
+
+test("a freeze over two elements is reproduced on a live still shot whole, anchored around them", { skip }, async (t) => {
+  const { base } = await fixture(t);
+  const dir = outDir(t);
+  const element = (selector) => ({ selector, text: "", html: `<div id="${selector.slice(1)}"></div>` });
+  const asked = { path: "/marks", viewport: "desktop", scroll: { x: 0, y: 0 }, box: { x: 0, y: 0, w: 300, h: 1600 } };
+  const frozen = await freeze(dir, freezeRequest({ ...asked, elements: [element("#a"), element("#b")] }), { base });
+  const where = [frozen.still, frozen.variant, frozen.rev, frozen.state];
+  assert.deepEqual(where, ["live-marks", "desktop", 1, "reproduced"]);
+  assert.deepEqual(frozen.anchor, { x: 10 / 1440, y: 20 / 2000, w: 230 / 1440, h: 1510 / 2000 });
+  const gone = freezeRequest({ ...asked, elements: [element("#a"), element("#nope")] });
+  const missing = await freeze(dir, gone, { base });
+  assert.deepEqual([missing.rev, missing.state], [1, "not-reproduced"]);
+  assert.deepEqual(missing.anchor, { x: 0, y: 0, w: 300 / 1440, h: 1600 / 2000 });
+  assert.equal(stills(dir)[0].variants[0].revs.length, 1);
 });
 
 test("a page that keeps an EventSource open is shot without waiting for it", { skip }, async (t) => {
