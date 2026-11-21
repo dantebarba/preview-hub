@@ -235,7 +235,8 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   `GET /_review/threads` is `{threads}`;
   `GET /_review/events?since=<seq>` is a server-sent event stream of the log's events above
   `since` (or above `Last-Event-ID` on a reconnect), each with its `seq` as the SSE id, then
-  every new one within about a second, plus an event named `stills` when the stills change;
+  every new one within about a second, plus an event named `stills` when the stills change
+  and one named `remark-failed` when a remark made on the live page could not be posted;
   `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
   one (415 unless `application/json`, 403 from another origin, 400 for an event the store
   refuses, 413 for an event over 64 KiB, not counting its `target`). The server sets `author`
@@ -246,9 +247,12 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   `review/annotated/<id>.png` and not stored in the event.
 - `/live/<slug>`: the live shell around the page `/<slug>`, when that page exists: the page
   in a frame with a bar outside it, where a reviewer marks what a remark is about on the page
-  itself, in a Mark mode whose taps select and never act. Comment posts the mark to
-  `POST /_review/freeze` and opens the viewer on the still the shot went on, where the remark
-  is posted with its `target` (see the [review contract](review-contract.md#live-marks)).
+  itself, in a Mark mode whose taps select and never act. Comment posts the remark, with a
+  snapshot of the page as it is, to `POST /_review/remarks`, which answers `202 {id}` at once;
+  the runtime shoots the snapshot in the background and posts the thread `id` with its
+  `target`, or says `remark-failed` on the event stream (see the
+  [review contract](review-contract.md#live-marks)). `/stills#thread=<id>` opens that thread
+  in the viewer.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;

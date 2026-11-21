@@ -1,20 +1,22 @@
 /**
  * Tests for the live shell (`stills/live.js`) in a real Chromium, driven through `capture`'s
  * steps: the shell, the viewer and the `/_review/` routes are served for each test over a
- * scratch dir with fixture pages, and a freeze shoots them with a Chromium of its own. They need
+ * scratch dir with fixture pages, and a remark's shot is taken by a Chromium of its own. They need
  * a Chromium: `$CHROME_BIN`, or one where `findChrome` looks; without one they are skipped. Run
  * with `npm test` from mockup/.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { capture, findChrome } from "./capture.mjs";
 import { eventStream, handleReview, sendLivePage, sendViewerPage } from "./menu.mjs";
-import { stills, storePaths, threads } from "./review.mjs";
+import { blankImage, decodePng, encodePng, pixelAt } from "./png.mjs";
+import { addStill, appendEvent, stills, storePaths, threads } from "./review.mjs";
 
 const CHROME = findChrome();
 const skip = CHROME ? false : "no Chromium: set CHROME_BIN";
@@ -48,7 +50,8 @@ document.addEventListener("click", () => {
 
 /**
  * The shell, the viewer, the review routes and the fixture pages over a new scratch dir, which
- * holds them under `pages/` too, served for one test as the reviewer `who`: `{ base, dir }`.
+ * holds them under `pages/` too, served for one test as the reviewer `who`: `{ base, dir,
+ * stream }`, `stream` the event stream its routes write to.
  */
 async function serve(t, who = { name: "Dante", via: "tailnet" }) {
   const dir = mkdtempSync(path.join(tmpdir(), "live-"));
@@ -79,7 +82,7 @@ async function serve(t, who = { name: "Dante", via: "tailnet" }) {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { base: `http://127.0.0.1:${server.address().port}`, dir };
+  return { base: `http://127.0.0.1:${server.address().port}`, dir, stream };
 }
 
 /** Run `steps(page)` on `url` in a Chromium at `viewport`. */
@@ -158,24 +161,44 @@ function shell() {
   };
 }
 
-/** In the viewer: the draft a live mark opened, `{ hash, where, unshown, composer, draft }`. */
-function viewer() {
-  const el = (id) => document.getElementById(id);
+/**
+ * In the viewer: the thread a link opened, `{ hash, id, said, target, error }`: the card that is
+ * unfolded, what its conversation says and what it says of its target, and the error line.
+ */
+function opened() {
+  const on = document.querySelector(".thread.on");
   return {
     hash: location.hash,
-    where: el("where").textContent,
-    unshown: !el("unshown").hidden,
-    composer: !el("composer").hidden,
-    draft: el("draft").hidden ? "" : el("draft").className,
+    id: on?.closest(".slot").dataset.id ?? null,
+    said: on?.querySelector(".entries")?.textContent ?? "",
+    target: on?.querySelector(".target")?.textContent ?? "",
+    error: document.getElementById("error").textContent,
   };
 }
 
-/** In the viewer: write `body` in the composer of the draft and post it, then wait for its card. */
-async function post(page, body) {
-  await page.waitFor("#composer");
-  await page.type("#body", body);
-  await page.click("#post");
-  await page.waitFor(".thread .target");
+/**
+ * In the shell: answer Comment's question with `body` and press it, then wait for the remark to
+ * be taken, which ends Mark mode. Resolves to what the page still holds: `{ kept, marking, url }`.
+ */
+async function comment(page, body) {
+  const before = (text) => {
+    window.prompt = () => text;
+    document.getElementById("frame").contentWindow.kept = "same document";
+  };
+  await page.evaluate(call(before, body));
+  await page.click("#comment");
+  await page.waitFor("#layer", { gone: true });
+  return page.evaluate(() => ({
+    kept: document.getElementById("frame").contentWindow.kept,
+    marking: !document.getElementById("layer").hidden,
+    url: location.pathname + location.search,
+  }));
+}
+
+/** The threads of `dir` once it has `n` of them, which a remark's shot takes a while to make. */
+async function posted(dir, n = 1) {
+  for (let i = 0; i < 600 && threads(dir).length < n; i += 1) await sleep(100);
+  return threads(dir);
 }
 
 test("Use mode acts and selects nothing; Mark mode selects and does not act, and Esc and m switch", { skip }, async (t) => {
@@ -209,7 +232,7 @@ test("Use mode acts and selects nothing; Mark mode selects and does not act, and
   assert.equal(seen.cancelled.marking, false);
 });
 
-test("a box over three elements counts them, a tap and a step up the breadcrumb marks the parent, and Comment opens the viewer on the shot with the target", { skip }, async (t) => {
+test("a box over three elements counts them, a tap and a step up the breadcrumb marks the parent, and Comment posts the remark in place, shot from the page as it is", { skip }, async (t) => {
   const { base, dir } = await serve(t);
   const seen = {};
   await drive(t, `${base}/live/three`, "desktop", async (page) => {
@@ -222,10 +245,7 @@ test("a box over three elements counts them, a tap and a step up the breadcrumb 
     seen.parent = await page.evaluate(call(shell));
     await page.evaluate(call(gesture, { x: 10, y: 10 }, { x: 160, y: 190 }));
     seen.three = await page.evaluate(call(shell));
-    await page.click("#comment");
-    await page.waitFor("#composer");
-    seen.viewer = await page.evaluate(call(viewer));
-    await post(page, "Too tight");
+    seen.after = await comment(page, "Too tight");
   });
   assert.deepEqual(seen.empty.crumbs, []);
   assert.deepEqual([seen.empty.found, seen.empty.box], ["1 element", [20, 300, 300, 120]]);
@@ -233,8 +253,8 @@ test("a box over three elements counts them, a tap and a step up the breadcrumb 
   assert.equal(seen.word.found, "1 element");
   assert.deepEqual([seen.parent.found, seen.parent.box], ["1 element", [30, 310, 280, 30]]);
   assert.deepEqual([seen.three.found, seen.three.crumbs], ["3 elements", []]);
-  assert.deepEqual(seen.viewer, { hash: "#live-three@desktop", where: "box on rev 1 · 3 elements", unshown: false, composer: true, draft: "box" });
-  const [thread] = threads(dir);
+  assert.deepEqual(seen.after, { kept: "same document", marking: false, url: "/live/three" });
+  const [thread] = await posted(dir);
   assert.deepEqual([thread.still, thread.variant, thread.rev, thread.body], ["live-three", "desktop", 1, "Too tight"]);
   assert.deepEqual(thread.target.elements.map((e) => [e.selector, e.text]), [["#a", "One"], ["#b", "Two"], ["#c", "Three"]]);
   assert.match(thread.target.elements[0].html, /^<button id="a"/);
@@ -242,12 +262,17 @@ test("a box over three elements counts them, a tap and a step up the breadcrumb 
   const { x, y, w, h } = thread.anchor;
   const [shot] = stills(dir)[0].variants[0].revs;
   assert.ok(shot);
-  assert.deepEqual([x, w].map((v) => Math.round(v * 1440)), [20, 120]);
-  assert.ok(y > 0 && h > 0 && y + h < 0.2);
+  assert.deepEqual([x, y, w, h].map((v, i) => Math.round(v * (i % 2 ? 900 : 1440))), [20, 20, 120, 160]);
   assert.ok(existsSync(path.join(storePaths(dir).annotated, `${thread.id}.png`)));
+  await drive(t, `${base}/stills#thread=${thread.id}`, "desktop", async (page) => {
+    await page.waitFor(".thread.on");
+    seen.link = await page.evaluate(call(opened));
+  });
+  assert.deepEqual([seen.link.hash, seen.link.id, seen.link.target], ["#live-three@desktop", thread.id, "on /three · 3 elements"]);
+  assert.match(seen.link.said, /Too tight/);
 });
 
-test("marking inside a dialog a click opened posts a thread that is not reproduced, with the element's HTML", { skip }, async (t) => {
+test("marking inside a dialog a click opened posts a thread whose shot shows the dialog, reproduced", { skip }, async (t) => {
   const { base, dir } = await serve(t);
   const seen = {};
   await drive(t, `${base}/live/modal`, "desktop", async (page) => {
@@ -256,19 +281,46 @@ test("marking inside a dialog a click opened posts a thread that is not reproduc
     await page.press("m");
     await page.evaluate(call(gesture, { x: 100, y: 180 }, { x: 100, y: 180 }));
     seen.shell = await page.evaluate(call(shell));
-    await page.click("#comment");
-    await page.waitFor("#composer");
-    seen.viewer = await page.evaluate(call(viewer));
-    await post(page, "Wrong label");
-    seen.card = await page.evaluate(() => document.querySelector(".thread .target").textContent);
+    await comment(page, "Wrong label");
   });
   assert.deepEqual([seen.shell.found, seen.shell.crumbs], ["1 element", ["div", "button#send"]]);
-  assert.deepEqual([seen.viewer.unshown, seen.viewer.draft], [true, "box"]);
-  assert.equal(seen.card, "on /modal · 1 element · not reproduced");
-  const [thread] = threads(dir);
-  assert.equal(thread.target.state, "not-reproduced");
+  const [thread] = await posted(dir);
+  assert.equal(thread.target.state, "reproduced");
   assert.deepEqual(thread.target.elements, [{ selector: "#send", text: "Send invitation", html: '<button id="send" style="top:60px">Send invitation</button>' }]);
   assert.deepEqual([thread.anchor.x, thread.anchor.w].map((v) => Math.round(v * 1440)), [61, 120]);
+  const marked = await decodePng(readFileSync(path.join(storePaths(dir).annotated, `${thread.id}.png`)));
+  assert.deepEqual([marked.width, marked.height], [1440, 900]);
+  assert.deepEqual([pixelAt(marked, 40, 240), pixelAt(marked, 20, 240)], [[0, 0, 0], [255, 255, 255]]);
+});
+
+test("a link to a thread that is not there yet opens it when the stream brings it, and says so when it was not posted", { skip }, async (t) => {
+  const { base, dir, stream } = await serve(t);
+  const seen = {};
+  const file = path.join(dir, "shot.png");
+  writeFileSync(file, await encodePng(blankImage(1440, 900)));
+  await drive(t, `${base}/stills#thread=aaaa0001`, "desktop", async (page) => {
+    await page.waitFor("#empty");
+    seen.waiting = await page.evaluate(call(opened));
+    await addStill(dir, { file, name: "live-three", source: "/three", viewport: "desktop" });
+    const author = { kind: "human", name: "Dante", via: "tailnet" };
+    const anchor = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+    const thread = { type: "thread", author, still: "live-three", variant: "desktop", rev: 1, anchor, body: "Late" };
+    await appendEvent(dir, thread, { id: "aaaa0001" });
+    stream.notify("stills");
+    stream.push();
+    await page.waitFor(".thread.on");
+    seen.landed = await page.evaluate(call(opened));
+  });
+  assert.deepEqual([seen.waiting.id, seen.waiting.hash], [null, "#thread=aaaa0001"]);
+  assert.deepEqual([seen.landed.id, seen.landed.hash], ["aaaa0001", "#live-three@desktop"]);
+  assert.match(seen.landed.said, /Late/);
+  await drive(t, `${base}/stills#thread=bbbb0002`, "desktop", async (page) => {
+    await page.waitFor("#still");
+    stream.publish({ type: "remark-failed", id: "bbbb0002", error: "no room" });
+    await page.waitFor("#error", { text: "no room" });
+    seen.failed = await page.evaluate(call(opened));
+  });
+  assert.deepEqual([seen.failed.id, seen.failed.error], [null, "The remark was not posted: no room"]);
 });
 
 test("after navigating in Use mode the bar, the shell's URL and the mark use the new path", { skip }, async (t) => {
@@ -282,12 +334,11 @@ test("after navigating in Use mode the bar, the shell's URL and the mark use the
     seen.after = await page.evaluate(call(shell));
     await page.click("#marking");
     await page.evaluate(call(gesture, { x: 10, y: 10 }, { x: 200, y: 100 }));
-    await page.click("#comment");
-    await post(page, "Here");
+    await comment(page, "Here");
   });
   assert.deepEqual([seen.before.path, seen.before.url], ["/nav", "/live/nav"]);
   assert.deepEqual([seen.after.path, seen.after.url, seen.after.marking], ["/other?tab=2", "/live/other?tab=2", false]);
-  const [thread] = threads(dir);
+  const [thread] = await posted(dir);
   assert.deepEqual([thread.still, thread.target.page, thread.target.elements[0].selector], ["live-other-tab-2", "/other?tab=2", "#only"]);
 });
 

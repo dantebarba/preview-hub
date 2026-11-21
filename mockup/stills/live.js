@@ -13,7 +13,7 @@
  * ever selected. **Mark** is entered only from the Mark button or `m`: a transparent layer covers
  * the page, so no tap reaches it, a coloured frame goes around it, the cursor is a crosshair and
  * the bar reads "Marking: taps select, they don't act". It ends with Esc, the same button or
- * Cancel, and by itself once the remark is handed to the viewer.
+ * Cancel, and by itself once the remark is posted.
  *
  * In Mark mode a drag draws a box, which can then be moved or resized by its corners, and marks
  * the visible elements inside it (see `markedIn`); a tap marks the innermost element under it,
@@ -22,9 +22,9 @@
  * the page under the layer, which drops the mark since what it was on moved. The strip under the
  * page shows how many elements are marked, with Comment and Cancel.
  *
- * Comment posts the mark to `POST /_review/freeze`, a guest's once they gave a name, which shoots
- * the page and keeps the shot as a still. The answer is left in this tab's session storage and
- * the viewer opens on that still, where the remark is written and posted with its `target`.
+ * Comment asks for the remark's text and posts it with the mark and the snapshot of the page
+ * (`snapshot.js`) to `POST /_review/remarks`, a guest's once they gave a name. The runtime
+ * shoots the snapshot in the background and posts the thread; the page stays as it is.
  */
 
 import {
@@ -34,7 +34,6 @@ import {
   answerOf,
   elementsLabel,
   holds,
-  LIVE_DRAFT_KEY,
   livePath,
   markedIn,
   moved,
@@ -50,6 +49,7 @@ import {
   TAP_PX,
   TARGET_LIMITS,
 } from "./state.js";
+import { snapshot } from "./snapshot.js";
 import { asking, askName, closeWho, keptName } from "./who.js";
 
 const DEVICE_KEY = "live.device";
@@ -60,6 +60,7 @@ const SMALL = matchMedia(SMALL_SCREEN);
 const SECTION =
   "section, article, main, nav, aside, header, footer, form, dialog, [role=dialog], [role=alertdialog], [aria-modal=true]";
 const HINT = "Drag a box, or tap an element";
+const ASK = "What is wrong here?";
 const OUTSIDE = "outside the mockup";
 
 const kept = stored(DEVICE_KEY);
@@ -123,7 +124,7 @@ function anchorOf(r) {
   return region({ x: r.x / width, y: r.y / height }, { x: (r.x + r.w) / width, y: (r.y + r.h) / height });
 }
 
-/** The marked box in CSS pixels of the page's viewport, as a freeze takes it. */
+/** The marked box in CSS pixels of the page's viewport, as a remark takes it. */
 function boxOf(anchor) {
   const { width, height } = presetSize(state.device);
   return { x: anchor.x * width, y: anchor.y * height, w: anchor.w * width, h: anchor.h * height };
@@ -186,7 +187,7 @@ function stepOf(target) {
 }
 
 /**
- * A CSS selector that matches `target` and nothing else on its page, as a freeze needs it: the
+ * A CSS selector that matches `target` and nothing else on its page, as a target names it: the
  * shortest path of child steps from an ancestor that is unique, or from the nearest ancestor
  * with an id of its own. Null when none fits a target's selector.
  */
@@ -548,7 +549,7 @@ function adopt() {
 }
 
 /**
- * What a freeze says of who asks for it: nothing for a tailnet user, whom the server names, and
+ * What a remark says of who posts it: nothing for a tailnet user, whom the server names, and
  * `{ author: { name } }` for a guest, asked for a name when this browser keeps none; null when
  * the guest gave none. Throws when the server cannot be asked who is looking.
  */
@@ -560,11 +561,13 @@ async function writer() {
 }
 
 /**
- * Comment on the mark: freeze the page as it was marked, then open the viewer on the still the
- * shot went on, the answer left for it in this tab's session storage. An element no selector
- * names alone, or that the page took out since it was marked, is left out, the mark then
- * truncated. Nothing is shot in a browser that cannot keep the answer. The shell stays in Mark
- * mode, with the reason, when the shot fails, and busy until the viewer opens when it does not.
+ * Comment on the mark: ask what is wrong, then post the remark to `POST /_review/remarks` with
+ * the snapshot of the page as it is, the marked elements stamped in it. The runtime answers at
+ * once and shoots in the background, so the page is not touched and Mark mode ends. An element
+ * no selector names alone, or that the page took out since it was marked, is left out of the
+ * remark's elements, the mark then truncated; a page whose snapshot cannot be written is posted
+ * without one, to be shot loaded again. The shell stays in Mark mode, with the reason, when the
+ * remark is refused.
  */
 async function comment() {
   const { sel } = state;
@@ -572,41 +575,43 @@ async function comment() {
   const view = doc?.defaultView;
   if (!sel?.elements || state.busy || !view) return;
   const there = sel.elements.filter((target) => target.isConnected && target.ownerDocument === doc);
-  const marked = there.map(describe);
-  const elements = marked.filter((e) => e.selector);
-  const request = {
-    path: state.page,
-    viewport: state.device,
-    scroll: { x: Math.max(0, view.scrollX), y: Math.max(0, view.scrollY) },
-    box: boxOf(sel.anchor),
-    elements,
-    ...(sel.truncated || elements.length < sel.elements.length ? { truncated: true } : {}),
-  };
-  let leaving = false;
-  try {
-    sessionStorage.setItem(LIVE_DRAFT_KEY, "");
-  } catch {
-    return report("This browser keeps no session storage here, so the remark cannot be handed to the viewer.");
-  }
+  const elements = there.map(describe).filter((e) => e.selector);
+  const body = (prompt(ASK) ?? "").trim();
+  if (!body) return;
   state.busy = true;
   render();
   try {
     const who = await writer();
     if (!who) return;
-    const res = await fetch("/_review/freeze", {
+    let shot = null;
+    try {
+      shot = snapshot(doc, there);
+    } catch {
+      shot = null;
+    }
+    const request = {
+      page: state.page,
+      viewport: state.device,
+      scroll: { x: Math.max(0, view.scrollX), y: Math.max(0, view.scrollY) },
+      box: boxOf(sel.anchor),
+      elements,
+      ...(sel.truncated || elements.length < sel.elements.length ? { truncated: true } : {}),
+      snapshot: shot,
+      body,
+    };
+    const res = await fetch("/_review/remarks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...request, ...who }),
     });
-    const frozen = await answerOf(res);
-    sessionStorage.setItem(LIVE_DRAFT_KEY, JSON.stringify(frozen));
+    await answerOf(res);
     report("");
-    leaving = true;
-    location.assign(`/stills#${frozen.still}@${frozen.variant}`);
+    state.busy = false;
+    setMarking(false);
   } catch (e) {
-    report(`Could not shoot the page: ${e.message}`);
+    report(`Not posted: ${e.message}`);
   } finally {
-    state.busy = leaving;
+    state.busy = false;
     render();
   }
 }

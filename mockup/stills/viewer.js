@@ -5,7 +5,8 @@
  * log over `GET /_review/events` (server-sent events) and writes the reviewed mark with
  * `POST /_review/events`. ←/→, Home/End, a swipe and the thumbnail strip step through the
  * stills, skipping the reviewed ones unless "show reviewed" is on; `v` toggles the reviewed
- * mark and `b` flips between a revision and the one before it. The hash keeps the position.
+ * mark and `b` flips between a revision and the one before it. The hash keeps the position,
+ * and `#thread=<id>` opens a remark.
  *
  * A still has variants, a viewport with tags. A viewport is of a device class, Mobile, Tablet or
  * Desktop: a switcher of the classes and a row of tags show when the stills have more than one
@@ -50,13 +51,11 @@
  * form following the keyboard; swiped left it uncovers Resolve or Reopen, which can be undone
  * for five seconds, and swiped right Reply.
  *
- * A remark made on the live page (`live.js`) arrives as a draft: the shell leaves the freeze's
- * answer in this tab's session storage and opens the viewer on the still the shot went on, where
- * the draft's box is in place with the composer open. Its `target`, the page and the elements
- * marked there, stays with the draft while the box is moved or resized, and is posted with
- * the remark; the composer says how many elements it marks, and when the shot did not reproduce
- * them. The card of such a remark names its page, a link back to the live shell, its elements
- * and "not reproduced".
+ * A remark made on the live page (`live.js`) is posted there, and the runtime shoots the page
+ * for it. Its card names its page, a link back to the live shell, its elements and, when the
+ * shot is of the page loaded again, "not reproduced". `/stills#thread=<id>` opens a thread: its
+ * still, on the revision it was made on, with the conversation unfolded. A thread that is not
+ * there yet, as one whose shot is still being taken, is opened when the stream brings it.
  *
  * A folder of images as the source may add to that, each only when it is there:
  *
@@ -97,8 +96,6 @@ import {
   keyOf,
   lastMessage,
   linkedKey,
-  LIVE_DRAFT_KEY,
-  liveDraft,
   livePath,
   moved,
   notesLine,
@@ -126,7 +123,6 @@ import {
   TAP_PX,
   title,
   unread,
-  unshownNote,
   viewOn,
   viewportOf,
   workingAt,
@@ -139,6 +135,7 @@ import { asking, askName as askForName, closeWho, keptName } from "./who.js";
 const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const LAYOUT_KEY = "stills.layout";
 const SEEN_KEY = "stills.seen";
+const THREAD_HASH = /^#thread=([\w-]{1,64})$/;
 const SWIPE_PX = 60;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_PX = 30;
@@ -215,7 +212,7 @@ let toastTimer = null;
 let mobile = false;
 let leaving = false;
 let aim = null;
-let arriving = false;
+let awaited = null;
 let workTimer = null;
 let guestName = keptName();
 
@@ -380,10 +377,7 @@ function drawDraft() {
   place(el("draft"), draft.anchor);
   el("composer").style.setProperty("--x", `${draft.anchor.x * 100}%`);
   el("composer").style.setProperty("--y", `${(draft.anchor.y + (draft.anchor.h ?? 0)) * 100}%`);
-  const marks = draft.target ? ` · ${elementsLabel(draft.target)}` : "";
-  el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}${marks}`;
-  el("unshown").textContent = draft.target ? unshownNote(draft.target) : "";
-  el("unshown").hidden = !el("unshown").textContent;
+  el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}`;
 }
 
 /**
@@ -1027,13 +1021,12 @@ function jump() {
 
 /**
  * Lay the still out once its image has loaded, on the mark `jump` was waiting to show when there
- * is one, and with the composer of a draft that arrived from the live page open.
+ * is one.
  */
 function settleStill() {
   if (aim) view = viewOn(aim, box());
   aim = null;
   layoutStage();
-  if (arriving) openComposer();
 }
 
 /** Show `text` for five seconds with an Undo button that runs `undo`. */
@@ -1184,9 +1177,14 @@ async function refresh(turn) {
     if (state.stills.length) show(at);
     else render();
   }
+  openAwaited();
 }
 
-/** Follow the review log: fold each new event into the marks and the threads, and reload when the stills change. */
+/**
+ * Follow the review log: fold each new event into the marks and the threads, reload when the
+ * stills change, open the thread a link asked for once it lands, and say so when the runtime
+ * could not post it.
+ */
 function follow() {
   let opened = false;
   source = new EventSource(`/_review/events?since=${state.applied}`);
@@ -1196,8 +1194,15 @@ function follow() {
     state.applied = event.seq;
     if (settled < loads) state.late.push(event);
     if (apply(event)) render();
+    openAwaited();
   };
   source.addEventListener("stills", load);
+  source.addEventListener("remark-failed", (message) => {
+    const failed = JSON.parse(message.data);
+    if (failed.id !== awaited) return;
+    awaited = null;
+    report(`The remark was not posted: ${failed.error}`);
+  });
   source.onopen = () => {
     if (opened) load();
     opened = true;
@@ -1315,8 +1320,7 @@ async function setReviewed(on) {
 
 /**
  * Post the draft as a thread, once whoever is looking has a name: its still, variant, revision,
- * mark and comment in one event, with the `target` of a draft that came from the live page and
- * the annotated still when it could be drawn, and a notice
+ * mark and comment in one event, with the annotated still when it could be drawn, and a notice
  * when it could not. The new thread is then the selected one. The mark stays as it is while it
  * is being posted.
  */
@@ -1327,8 +1331,7 @@ async function postRemark() {
   el("post").disabled = true;
   try {
     const annotated = await annotate(imageUrl(shown), draft.anchor).catch(() => null);
-    const { still, variant, rev, anchor, target } = draft;
-    const event = { type: "thread", still, variant, rev, anchor, body, ...(target ? { target } : {}) };
+    const event = { type: "thread", ...draft, body };
     const thread = await send(annotated ? { ...event, annotated } : event);
     applyThread(state.threads, thread);
     if (state.draft === draft) dropDraft();
@@ -1468,7 +1471,7 @@ function pointOf(e) {
  * A press on the still starts a drag: on a corner of the draft it resizes it, on the draft it
  * moves it, elsewhere it draws a new mark, which a finger or a pen does only while "＋ Remark"
  * is on, and never a second finger, which zooms. `drag.tap` holds where a new mark was pressed
- * until the pointer leaves that spot, and `drag.fresh` says the mark is a new one.
+ * until the pointer leaves that spot.
  */
 function startDrag(e) {
   if (e.button !== 0 || fingers.size || el("post").disabled || e.target.closest("#composer, .mark")) return;
@@ -1477,7 +1480,7 @@ function startDrag(e) {
   const corner = e.target.dataset.corner;
   if (corner) drag = { fixed: opposite(state.draft.anchor, corner) };
   else if (e.target.closest("#draft")) drag = { from: state.draft.anchor, at };
-  else if (e.pointerType === "mouse" || state.armed) drag = { fixed: at, tap: { x: e.clientX, y: e.clientY }, fresh: true };
+  else if (e.pointerType === "mouse" || state.armed) drag = { fixed: at, tap: { x: e.clientX, y: e.clientY } };
   else return;
   el("stage").setPointerCapture(e.pointerId);
   e.preventDefault();
@@ -1489,7 +1492,7 @@ function moveDrag(e) {
   if (drag.tap && Math.hypot(e.clientX - drag.tap.x, e.clientY - drag.tap.y) < TAP_PX) return;
   drag.tap = null;
   const at = pointOf(e);
-  setDraft(drag.from ? moved(drag.from, at.x - drag.at.x, at.y - drag.at.y) : region(drag.fixed, at), drag.fresh);
+  setDraft(drag.from ? moved(drag.from, at.x - drag.at.x, at.y - drag.at.y) : region(drag.fixed, at));
 }
 
 /**
@@ -1500,7 +1503,7 @@ function endDrag() {
   if (!drag) return;
   const tap = drag.tap && drag.fixed;
   drag = null;
-  if (tap) setDraft(pin(tap), true);
+  if (tap) setDraft(pin(tap));
   state.armed = false;
   render();
   openComposer();
@@ -1511,7 +1514,6 @@ function endDrag() {
  * the top, or in the mobile layout is panned clear of it.
  */
 function openComposer() {
-  arriving = false;
   if (!state.draft) return undefined;
   el("body").focus({ preventScroll: PHONE.matches || mobile });
   if (mobile) return reveal(state.draft.anchor);
@@ -1520,45 +1522,45 @@ function openComposer() {
   return undefined;
 }
 
-/**
- * Make `anchor` the draft's mark, on the revision on screen. A draft that came from the live
- * page keeps its `target` while its mark is moved or resized; a `fresh` mark, drawn anew
- * somewhere on the still, is a remark on the still alone and lets go of it.
- */
-function setDraft(anchor, fresh = false) {
+/** Make `anchor` the draft's mark, on the revision on screen. */
+function setDraft(anchor) {
   const s = state.stills[state.at];
-  const { target } = (!fresh && state.draft) || {};
-  state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor, ...(target ? { target } : {}) };
+  state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor };
   drawDraft();
 }
 
+/** The thread the hash asks for, `#thread=<id>`, or null when it names a still or nothing. */
+function hashThread() {
+  return THREAD_HASH.exec(location.hash)?.[1] ?? null;
+}
+
 /**
- * Open the draft the live shell left in this tab's session storage (see `liveDraft`), once: go
- * to the still, variant and revision its shot went on, with its box in place and the composer
- * open, as soon as the image is there. Nothing without one, or in a read-only folder; with no
- * stills read, as when they could not be, the draft stays for a reload to open.
+ * Open the thread a `#thread=<id>` link asked for: go to its still, on its variant and the
+ * revision it was made on, with its conversation unfolded, full screen in the mobile layout.
+ * Until the thread is among the threads and its revision among the stills it stays awaited,
+ * and this is called again as the stream brings them; a thread on no still is let go of. A
+ * conversation open full screen gives its step of the history to the one that opens.
  */
-function takeLiveDraft() {
-  if (!state.stills.length) return;
-  let draft;
-  try {
-    draft = liveDraft(sessionStorage.getItem(LIVE_DRAFT_KEY));
-    sessionStorage.removeItem(LIVE_DRAFT_KEY);
-  } catch {
+function openAwaited() {
+  const t = awaited && state.threads.find((thread) => thread.id === awaited);
+  if (!t) return;
+  if (t.still === null) {
+    awaited = null;
     return;
   }
-  if (!draft || state.readonly) return;
-  const at = state.stills.findIndex((s) => s.name === draft.still && s.variants.some((v) => v.key === draft.variant));
-  if (at === -1) return report("The shot of the live page is not among the stills.");
-  state.pick = draft.variant;
+  const at = state.stills.findIndex((s) => s.name === t.still);
+  const key = t.variant ?? state.stills[at]?.variants[0].key;
+  const variant = state.stills[at]?.variants.find((v) => v.key === key);
+  if (!variant?.revs.some((r) => r.n === t.rev)) return;
+  awaited = null;
+  if (mobile) state.talk = null;
+  state.pick = key;
   derive();
   buildStrip();
   show(at);
-  state.rev = draft.rev;
-  state.draft = draft;
-  arriving = true;
-  render();
-  if (loaded(el("still"))) openComposer();
+  state.rev = t.rev;
+  if (mobile) openTalk(t.id);
+  else select(t.id);
 }
 
 /** Ctrl+Enter or ⌘+Enter in a form's text posts it. */
@@ -1855,6 +1857,11 @@ onSwipe(
 );
 
 addEventListener("hashchange", () => {
+  const asked = hashThread();
+  if (asked) {
+    awaited = asked;
+    return openAwaited();
+  }
   const i = hashIndex();
   const { key } = hashParts();
   const pick = key && linkedKey(state.stills, key);
@@ -1862,9 +1869,9 @@ addEventListener("hashchange", () => {
   if (i !== -1 && i !== state.at) show(i);
 });
 
-state.pick = hashParts().key;
+awaited = hashThread();
+state.pick = awaited ? null : hashParts().key;
 
 applyLayout();
 await load();
-takeLiveDraft();
 follow();

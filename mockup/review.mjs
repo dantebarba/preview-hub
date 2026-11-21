@@ -9,7 +9,8 @@
  *   stills/<name>/<key>/<n>.png one file per revision of a variant, immutable; a v1 revision
  *                               stays at stills/<name>/<n>.png
  *   review/events.jsonl         append-only event log, one JSON event per line
- *   review/annotated/<id>.png   a thread's still with its mark drawn, written by the viewer
+ *   review/annotated/<id>.png   a thread's still with its mark drawn, written by the viewer, or
+ *                               by the runtime for a remark made on the live page
  *
  * The runtime and the `preview` CLI both write here, so every write takes a lock file next to
  * what it changes (`stills/.lock`, `review/.lock`). `docs/review-contract.md` is the contract:
@@ -137,6 +138,11 @@ export function isObject(v) {
 /** The sorted field names of `o`, comma-joined, to compare an object's shape. */
 function shape(o) {
   return Object.keys(o).sort().join(",");
+}
+
+/** An id for an event, eight hex digits; whoever takes it checks that it is new. */
+export function newId() {
+  return randomBytes(4).toString("hex");
 }
 
 /** A fresh name next to `file` with the suffix `ext`, private to this writer. */
@@ -332,7 +338,7 @@ export function targetProblem(target) {
  * Why `event` breaks the event schema, or null when it keeps it. `stored` also requires the
  * fields `appendEvent` assigns (`seq`, `id`, `at`), as on a line read back from the log.
  */
-function eventProblem(event, stored) {
+export function eventProblem(event, stored = false) {
   if (!isObject(event)) return "an event must be an object";
   if (!EVENT_TYPES.includes(event.type)) return `'type' must be one of ${EVENT_TYPES.join(", ")}`;
   const allowed = new Set(["type", "author", ...FIELDS[event.type], ...(stored ? STORED : [])]);
@@ -663,9 +669,10 @@ export function revisions(dir) {
  * (one past the log's last), `id` and `at`; and appends it as one line with a single write on
  * an `O_APPEND` descriptor, under the log's lock. Returns the stored event; throws on an
  * invalid one. A folder source first keeps the revisions of its images, the first write
- * creating its `.review/`.
+ * creating its `.review/`. With `id`, the event gets that id, which whoever asks has told
+ * someone already, and is refused when the log holds it.
  */
-export async function appendEvent(dir, event) {
+export async function appendEvent(dir, event, { id: given } = {}) {
   const problem = eventProblem(event, false);
   if (problem) throw new Error(problem);
   if (typeof dir !== "string") await dir.keep();
@@ -683,9 +690,11 @@ export async function appendEvent(dir, event) {
       if (event.rev !== undefined && !revs.has(event.rev)) throw new Error(`no ${where} at rev ${event.rev}`);
     }
     const ids = new Set(events.map((e) => e.id));
-    let id;
-    do id = randomBytes(4).toString("hex");
-    while (ids.has(id));
+    if (given !== undefined && (typeof given !== "string" || !ID.test(given) || ids.has(given))) {
+      throw new Error(`'${given}' cannot be the id of a new event`);
+    }
+    let id = given ?? newId();
+    while (ids.has(id)) id = newId();
     const stored = {
       seq: (events.at(-1)?.seq ?? 0) + 1,
       id,

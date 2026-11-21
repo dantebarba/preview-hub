@@ -23,8 +23,8 @@ import {
   runBatch,
   userAgent,
 } from "./capture.mjs";
-import { freeze, freezeRequest } from "./menu.mjs";
-import { appendEvent, parseViewport, reviewed, stills } from "./review.mjs";
+import { remark, remarkRequest } from "./menu.mjs";
+import { appendEvent, parseViewport, reviewed, stills, storePaths } from "./review.mjs";
 
 const CHROME = findChrome();
 const skip = CHROME ? false : "no Chromium: set CHROME_BIN";
@@ -211,21 +211,30 @@ test("measure gives each selector's rect on the PNG in CSS pixels, null for one 
   assert.equal(plain.rects, undefined);
 });
 
-test("a freeze over two elements is reproduced on a live still shot whole, anchored around them", { skip }, async (t) => {
+test("a remark is shot from its snapshot at the reviewer's scroll, anchored on the stamped element; without one, from the page loaded again", { skip }, async (t) => {
   const { base } = await fixture(t);
   const dir = outDir(t);
+  const author = { kind: "human", name: "dante" };
   const element = (selector) => ({ selector, text: "", html: `<div id="${selector.slice(1)}"></div>` });
-  const box = { x: 0, y: 0, w: 300, h: 1600 };
-  const asked = { path: "/marks", viewport: "desktop", scroll: { x: 0, y: 0 }, box };
-  const frozen = await freeze(dir, freezeRequest({ ...asked, elements: [element("#a"), element("#b")] }), { base });
-  const where = [frozen.still, frozen.variant, frozen.rev, frozen.state];
-  assert.deepEqual(where, ["live-marks", "desktop", 1, "reproduced"]);
-  assert.deepEqual(frozen.anchor, { x: 10 / 1440, y: 20 / 2000, w: 230 / 1440, h: 1510 / 2000 });
-  const gone = freezeRequest({ ...asked, elements: [element("#a"), element("#nope")] });
-  const missing = await freeze(dir, gone, { base });
-  assert.deepEqual([missing.rev, missing.state], [1, "not-reproduced"]);
-  assert.deepEqual(missing.anchor, { x: 0, y: 0, w: 300 / 1440, h: 1600 / 2000 });
-  assert.equal(stills(dir)[0].variants[0].revs.length, 1);
+  const box = { x: 0, y: 0, w: 300, h: 600 };
+  const asked = { page: "/marks", viewport: "desktop", scroll: { x: 0, y: 1000 }, box, elements: [element("#b")], body: "Here" };
+  const snapshot = { html: MARKS.replace('id="b"', 'id="b" data-pv-mark="0"'), scrollers: 0 };
+  const posted = await remark(dir, remarkRequest({ ...asked, snapshot }, author), { id: "aaaa0001", author, base });
+  const { event } = posted;
+  assert.deepEqual([event.id, event.still, event.variant, event.rev, posted.added], ["aaaa0001", "live-marks", "desktop", 1, true]);
+  assert.equal(event.target.state, "reproduced");
+  assert.deepEqual(event.anchor, { x: 200 / 1440, y: 500 / 900, w: 40 / 1440, h: 30 / 900 });
+  const marked = pngSize(readFileSync(path.join(storePaths(dir).annotated, "aaaa0001.png")));
+  assert.deepEqual(marked, { width: 1440, height: 900 });
+  const again = await remark(dir, remarkRequest({ ...asked, snapshot }, author), { id: "aaaa0002", author, base });
+  assert.deepEqual([again.event.rev, again.added], [1, false]);
+  const loaded = await remark(dir, remarkRequest(asked, author), { id: "aaaa0003", author, base });
+  assert.deepEqual([loaded.event.rev, loaded.event.target.state], [2, "not-reproduced"]);
+  assert.deepEqual(loaded.event.anchor, { x: 200 / 1440, y: 1500 / 2000, w: 40 / 1440, h: 30 / 2000 });
+  const gone = await remark(dir, remarkRequest({ ...asked, elements: [element("#nope")] }, author), { id: "aaaa0004", author, base });
+  assert.deepEqual([gone.event.rev, gone.event.target.state], [2, "not-reproduced"]);
+  assert.deepEqual(gone.event.anchor, { x: 0, y: 1000 / 2000, w: 300 / 1440, h: 600 / 2000 });
+  assert.equal(stills(dir)[0].variants[0].revs.length, 2);
 });
 
 test("a page that keeps an EventSource open is shot without waiting for it", { skip }, async (t) => {

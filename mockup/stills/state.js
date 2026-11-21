@@ -30,9 +30,8 @@
  *
  * The live shell (`live.js`) marks on the mockup page itself and shares from here: the size of
  * a device class's preset and the scale that fits it in a room, the page a `/live/<slug>` URL
- * shows, which of the elements inside a drawn box are the marked ones (`markedIn`), the limits
- * of a remark's `target`, and the draft it hands the viewer through this tab's session storage
- * (`liveDraft`).
+ * shows, which of the elements inside a drawn box are the marked ones (`markedIn`) and the
+ * limits of a remark's `target`.
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -101,9 +100,6 @@ export const READ_ONLY = "read-only folder: remarks off";
 
 /** How long the agent's working state lasts after its last `working` event. */
 export const WORKING_MS = 10 * 60 * 1000;
-
-/** The key the live shell leaves a freeze's answer under, in the tab's session storage, for the viewer. */
-export const LIVE_DRAFT_KEY = "live.draft";
 
 /**
  * The limits of a thread's `target`: the most elements it keeps, and the most characters of a
@@ -704,7 +700,6 @@ export function unread(thread, seen, kind) {
 const LIVE = "/live";
 const SAME_AREA_PX = 1;
 const INSIDE_PX = 0.5;
-const WHOLE = { x: 0, y: 0, w: 1, h: 1 };
 
 /**
  * True for a page path of the mockup: starts with one `/` not followed by another `/` or a `\`
@@ -738,18 +733,6 @@ export function elementsLabel({ elements, truncated }) {
   return `${n}${truncated ? "+" : ""} ${n === 1 && !truncated ? "element" : "elements"}`;
 }
 
-/**
- * What the composer says beside the draft of a remark whose `target` the shot did not
- * reproduce, empty when it did: that the shot lacks the state the page was marked in, or, for a
- * box that held no element, that there was nothing to find on it.
- */
-export function unshownNote({ state, elements, truncated }) {
-  if (state !== "not-reproduced") return "";
-  return elements.length || truncated
-    ? "Not reproduced: the shot is the page as it loads, without the state you marked it in. The remark keeps the elements you marked."
-    : "Not reproduced: no element was inside the box, so the remark goes by the box alone.";
-}
-
 /** True when the rect `r` (`{ x, y, w, h }`) is inside the rect `box`, to half a pixel. */
 export function holds(box, r) {
   const within = (lo, size, from, room) => lo >= from - INSIDE_PX && lo + size <= from + room + INSIDE_PX;
@@ -778,23 +761,4 @@ export function markedIn(nodes, most = TARGET_LIMITS.elements) {
   const kept = nodes.map((_, i) => i).filter((i) => !wrappers.has(i));
   kept.sort((a, b) => depth[a] - depth[b] || a - b);
   return { picked: kept.slice(0, most), truncated: kept.length > most };
-}
-
-/**
- * The draft the viewer opens for a live mark, from what the shell kept of the freeze's answer
- * (`text`, the JSON of `{ still, variant, rev, anchor, state, target }`): `{ still, variant,
- * rev, anchor, target }`, the anchor the whole still when the freeze placed none. Null when
- * `text` is not such an answer.
- */
-export function liveDraft(text) {
-  let frozen;
-  try {
-    frozen = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  const { still, variant, rev, anchor, target } = frozen ?? {};
-  const named = typeof still === "string" && typeof variant === "string" && Number.isInteger(rev);
-  if (!named || !target || typeof target !== "object" || !Array.isArray(target.elements)) return null;
-  return { still, variant, rev, anchor: anchor ?? WHOLE, target };
 }
