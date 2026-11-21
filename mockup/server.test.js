@@ -214,13 +214,23 @@ describe("the mockup server", () => {
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.match(res.headers.get("content-type"), /^text\/html/);
     assert.match(await res.text(), /src="\/_review\/viewer\.js"/);
-    const scripts = ["viewer.js", "state.js", "annotate.js", "swipe.js"].map((file) => [file, /javascript/]);
+    const scripts = ["viewer.js", "live.js", "state.js", "who.js", "annotate.js", "swipe.js"].map((file) => [file, /javascript/]);
     for (const [file, type] of [...scripts, ["viewer.css", /css/]]) {
       const asset = await fetch(`${base}/_review/${file}`);
       assert.equal(asset.status, 200, file);
       assert.match(asset.headers.get("content-type"), type);
     }
     assert.equal((await fetch(`${base}/_review/nope`)).status, 404);
+  });
+
+  test("serves the live shell at /live/<slug> for a page that exists, and links it from the menu", async () => {
+    const res = await fetch(`${base}/live/pay?v=b`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.match(res.headers.get("content-type"), /^text\/html/);
+    assert.match(await res.text(), /src="\/_review\/live\.js"/);
+    assert.equal((await fetch(`${base}/live/missing`)).status, 404);
+    assert.match(await (await fetch(`${base}/`)).text(), /<a class="live" href="\/live\/pay/);
   });
 
   test("two shots of one name are rev 2: listed, served and linked from the menu", async () => {

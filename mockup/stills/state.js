@@ -1,5 +1,6 @@
 /**
- * The state of the stills viewer, free of the DOM so the runtime's tests can import it.
+ * The state of the stills viewer, which the runtime's tests import: nothing here needs a page
+ * to load, and only `stored`, `store`, `place` and `answerOf` touch one when called.
  *
  * A still is an entry of `GET /_review/stills`, `{ name, title, source, variants }`, each variant
  * `{ key, viewport, tags, revs }`. `choose` gives every still the variant the reviewer's pick
@@ -26,6 +27,12 @@
  * A variant has a device class, `classOf` its key: Mobile, Tablet or Desktop, a preset by its
  * name and a custom size by its width. The switcher lists the classes and a pick is sticky by
  * class and tags (see `variantFor`); the sizes of a class are a detail of a still, `sizesOf`.
+ *
+ * The live shell (`live.js`) marks on the mockup page itself and shares from here: the size of
+ * a device class's preset and the scale that fits it in a room, the page a `/live/<slug>` URL
+ * shows, which of the elements inside a drawn box are the marked ones (`markedIn`), the limits
+ * of a remark's `target`, and the draft it hands the viewer through this tab's session storage
+ * (`liveDraft`).
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -39,9 +46,51 @@ export function fileUrl(rel) {
   return `/${String(rel).split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The value kept under `key` in this browser, or null when there is none or no storage. */
+export function stored(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Keep `value` under `key` in this browser, when it has storage. */
+export function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    return;
+  }
+}
+
+/** Put the element `target` where `anchor` is on what it lies over: at a pin's point, or over a region. */
+export function place(target, anchor) {
+  target.style.left = `${anchor.x * 100}%`;
+  target.style.top = `${anchor.y * 100}%`;
+  target.style.width = anchor.w === undefined ? "" : `${anchor.w * 100}%`;
+  target.style.height = anchor.h === undefined ? "" : `${anchor.h * 100}%`;
+}
+
 /** The reviewed mark of a still whose latest revision is `rev` and whose marked one is `viewed`. */
 export function markOf(rev, viewed) {
   return { rev, viewed, reviewed: viewed !== null && viewed === rev, changed: viewed !== null && viewed < rev };
+}
+
+/** How far a pointer may move from where it pressed, in pixels, and still be a tap. */
+export const TAP_PX = 8;
+
+/** The media query of a small or touch screen, which gets the phone's layout of the viewer and the live shell. */
+export const SMALL_SCREEN = "(max-width: 599.98px), (pointer: coarse)";
+
+/**
+ * The JSON the fetch response `res` carries; throws with the server's reason, its `error`, when
+ * it is not a 2xx.
+ */
+export async function answerOf(res) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
 /** The most characters a guest's name may hold. */
@@ -53,11 +102,20 @@ export const READ_ONLY = "read-only folder: remarks off";
 /** How long the agent's working state lasts after its last `working` event. */
 export const WORKING_MS = 10 * 60 * 1000;
 
+/** The key the live shell leaves a freeze's answer under, in the tab's session storage, for the viewer. */
+export const LIVE_DRAFT_KEY = "live.draft";
+
+/**
+ * The limits of a thread's `target`: the most elements it keeps, and the most characters of a
+ * page path, an element's selector, its text and the cut of its HTML.
+ */
+export const TARGET_LIMITS = { elements: 20, page: 2000, selector: 500, text: 200, html: 1000 };
+
 const PRESETS = {
-  mobile: { label: "Mobile", device: "mobile" },
-  "mobile-s": { label: "Mobile S", device: "mobile" },
-  tablet: { label: "Tablet", device: "tablet" },
-  desktop: { label: "Desktop", device: "desktop" },
+  mobile: { label: "Mobile", device: "mobile", width: 390, height: 844 },
+  "mobile-s": { label: "Mobile S", device: "mobile", width: 375, height: 812 },
+  tablet: { label: "Tablet", device: "tablet", width: 820, height: 1180 },
+  desktop: { label: "Desktop", device: "desktop", width: 1440, height: 900 },
 };
 const CLASSES = { mobile: "Mobile", tablet: "Tablet", desktop: "Desktop" };
 const TABLET_FROM = 600;
@@ -130,6 +188,23 @@ export function classOf(key) {
 /** What a switcher calls the device class `name`. */
 export function classLabel(name) {
   return CLASSES[name];
+}
+
+/** The device classes, in the order a switcher lists them. */
+export const DEVICES = Object.keys(CLASSES);
+
+/** The CSS size `{ width, height }` of the viewport preset `name`, which a device class's own name is. */
+export function presetSize(name) {
+  const { width, height } = PRESETS[name];
+  return { width, height };
+}
+
+/**
+ * The scale that fits something of `size` in a room of size `room`, both `{ width, height }`: 1
+ * when it fits as it is, never above it.
+ */
+export function scaleToFit(size, room) {
+  return Math.max(0, Math.min(1, room.width / size.width, room.height / size.height));
 }
 
 /** True when the variant keys `a` and `b` are the same choice of a switcher: one device class, the same tags. */
@@ -468,6 +543,7 @@ export function applyThread(threads, event) {
       variant: event.variant ?? null,
       rev: event.rev ?? null,
       anchor: event.anchor ?? null,
+      target: event.target ?? null,
       body: event.body,
       author: event.author,
       at: event.at,
@@ -623,4 +699,102 @@ export function chip(thread, rev) {
 export function unread(thread, seen, kind) {
   const last = Object.hasOwn(seen, thread.id) ? seen[thread.id] : 0;
   return thread.replies.filter((r) => r.seq > last && (!kind || r.author.kind === kind)).length;
+}
+
+const LIVE = "/live";
+const SAME_AREA_PX = 1;
+const INSIDE_PX = 0.5;
+const WHOLE = { x: 0, y: 0, w: 1, h: 1 };
+
+/**
+ * True for a page path of the mockup: starts with one `/` not followed by another `/` or a `\`
+ * (which a URL parser reads as another host), no space or control character, at most
+ * `TARGET_LIMITS.page` characters, and resolves on the host it is given.
+ */
+export function isPagePath(v) {
+  if (typeof v !== "string" || v.length > TARGET_LIMITS.page) return false;
+  if (!/^\/(?![/\\])[^\s\0-\x1f\x7f]*$/.test(v)) return false;
+  const base = "http://mockup.invalid";
+  return new URL(v, base).origin === base;
+}
+
+/** The URL of the live shell on the page `page`, a path of the mockup with its query. */
+export function livePath(page) {
+  return `${LIVE}${page}`;
+}
+
+/**
+ * The page a live shell at `pathname` with the query `search` shows, `/checkout?step=2` for
+ * `/live/checkout?step=2`; null when the URL is not a shell's.
+ */
+export function pageOfLive(pathname, search = "") {
+  const page = pathname.startsWith(`${LIVE}/`) ? pathname.slice(LIVE.length) : "";
+  return page.length > 1 && isPagePath(page) ? page + search : null;
+}
+
+/** How many elements a `target` marks: "3 elements", "1 element", "20+ elements" when it was truncated. */
+export function elementsLabel({ elements, truncated }) {
+  const n = elements.length;
+  return `${n}${truncated ? "+" : ""} ${n === 1 && !truncated ? "element" : "elements"}`;
+}
+
+/**
+ * What the composer says beside the draft of a remark whose `target` the shot did not
+ * reproduce, empty when it did: that the shot lacks the state the page was marked in, or, for a
+ * box that held no element, that there was nothing to find on it.
+ */
+export function unshownNote({ state, elements, truncated }) {
+  if (state !== "not-reproduced") return "";
+  return elements.length || truncated
+    ? "Not reproduced: the shot is the page as it loads, without the state you marked it in. The remark keeps the elements you marked."
+    : "Not reproduced: no element was inside the box, so the remark goes by the box alone.";
+}
+
+/** True when the rect `r` (`{ x, y, w, h }`) is inside the rect `box`, to half a pixel. */
+export function holds(box, r) {
+  const within = (lo, size, from, room) => lo >= from - INSIDE_PX && lo + size <= from + room + INSIDE_PX;
+  return within(r.x, r.w, box.x, box.w) && within(r.y, r.h, box.y, box.h);
+}
+
+/**
+ * Which of `nodes`, the visible elements inside a drawn box in document order, are the marked
+ * ones: `{ picked, truncated }`, `picked` their indexes. A node is `{ rect, parent }`, its rect
+ * and the index of its nearest ancestor among the nodes, -1 without one. An ancestor that
+ * covers the same area as a node below it, to a pixel, is left out, so a wrapper never stands
+ * beside what it wraps. The outermost come first, then document order, and past `most` of them
+ * the rest are dropped, `truncated` then true.
+ */
+export function markedIn(nodes, most = TARGET_LIMITS.elements) {
+  const near = (a, b) => Math.abs(a - b) <= SAME_AREA_PX;
+  const same = (a, b) => near(a.x, b.x) && near(a.y, b.y) && near(a.w, b.w) && near(a.h, b.h);
+  const wrappers = new Set();
+  const depth = nodes.map(() => 0);
+  nodes.forEach((node, i) => {
+    for (let p = node.parent; p !== -1; p = nodes[p].parent) {
+      depth[i] += 1;
+      if (same(nodes[p].rect, node.rect)) wrappers.add(p);
+    }
+  });
+  const kept = nodes.map((_, i) => i).filter((i) => !wrappers.has(i));
+  kept.sort((a, b) => depth[a] - depth[b] || a - b);
+  return { picked: kept.slice(0, most), truncated: kept.length > most };
+}
+
+/**
+ * The draft the viewer opens for a live mark, from what the shell kept of the freeze's answer
+ * (`text`, the JSON of `{ still, variant, rev, anchor, state, target }`): `{ still, variant,
+ * rev, anchor, target }`, the anchor the whole still when the freeze placed none. Null when
+ * `text` is not such an answer.
+ */
+export function liveDraft(text) {
+  let frozen;
+  try {
+    frozen = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const { still, variant, rev, anchor, target } = frozen ?? {};
+  const named = typeof still === "string" && typeof variant === "string" && Number.isInteger(rev);
+  if (!named || !target || typeof target !== "object" || !Array.isArray(target.elements)) return null;
+  return { still, variant, rev, anchor: anchor ?? WHOLE, target };
 }

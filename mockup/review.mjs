@@ -40,12 +40,22 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { applyThread, applyWorking, markOf, reviewerOf, viewportOf, workingAt } from "./stills/state.js";
+import {
+  applyThread,
+  applyWorking,
+  isPagePath,
+  markOf,
+  presetSize,
+  reviewerOf,
+  TARGET_LIMITS,
+  viewportOf,
+  workingAt,
+} from "./stills/state.js";
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
 const FIELDS = {
-  thread: ["still", "variant", "rev", "anchor", "body"],
+  thread: ["still", "variant", "rev", "anchor", "body", "target"],
   reply: ["thread", "body"],
   resolve: ["thread"],
   reopen: ["thread"],
@@ -57,18 +67,28 @@ const FIELDS = {
 const OPTIONAL_FIELDS = new Set(["working", "idle"]);
 const STORED = ["seq", "id", "at"];
 const VIA = ["tailnet", "share", "cli"];
-const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
+/** The most characters a still's name may hold. */
+export const MAX_NAME_LENGTH = 100;
+
+/** The most tags a variant may have. */
+export const MAX_TAGS = 16;
+
+/** A still's name: a letter or digit, then letters, digits, `_`, `.` or `-`. */
+export const STILL_NAME = new RegExp(`^[A-Za-z0-9][\\w.-]{0,${MAX_NAME_LENGTH - 1}}$`);
 const ID = /^[\w-]{1,64}$/;
 const SIZE = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/;
 const CUSTOM = /^([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(\+touch)?$/;
 const TAG = /^[a-z0-9][a-z0-9_.-]{0,31}$/;
-const KEY = /^[a-z0-9][\w.@-]{0,63}(\+[a-z0-9][\w.-]{0,31}){0,16}$/;
+const KEY = new RegExp(`^[a-z0-9][\\w.@-]{0,63}(\\+[a-z0-9][\\w.-]{0,31}){0,${MAX_TAGS}}$`);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BODY = 10000;
 
 /** The most characters an author's name may hold. */
 export const MAX_AUTHOR = 100;
+
+/** What a thread's `target` says of the marked elements on the shot, as `state`. */
+export const TARGET_STATES = ["reproduced", "not-reproduced"];
 
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 10000;
@@ -78,10 +98,10 @@ const LOCK_STALE_MS = 10000;
  * `mobile`, which means touch, a mobile user agent and a phone's viewport handling.
  */
 const VIEWPORTS = {
-  mobile: { width: 390, height: 844, dpr: 3, mobile: true },
-  "mobile-s": { width: 375, height: 812, dpr: 3, mobile: true },
-  tablet: { width: 820, height: 1180, dpr: 2, mobile: true },
-  desktop: { width: 1440, height: 900, dpr: 1, mobile: false },
+  mobile: { ...presetSize("mobile"), dpr: 3, mobile: true },
+  "mobile-s": { ...presetSize("mobile-s"), dpr: 3, mobile: true },
+  tablet: { ...presetSize("tablet"), dpr: 2, mobile: true },
+  desktop: { ...presetSize("desktop"), dpr: 1, mobile: false },
 };
 
 const ALIASES = { web: "desktop" };
@@ -110,7 +130,7 @@ export function isPng(bytes) {
 }
 
 /** True for a plain object, not an array or null. */
-function isObject(v) {
+export function isObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
@@ -136,7 +156,7 @@ function isRev(v) {
 
 /** Why `name` is not a valid still name, or null when it is. */
 function nameProblem(name) {
-  if (typeof name !== "string" || !NAME.test(name)) {
+  if (typeof name !== "string" || !STILL_NAME.test(name)) {
     return "a still name is 1-100 letters, digits, '.', '_' or '-', starting with a letter or digit";
   }
   return null;
@@ -252,6 +272,62 @@ function anchorProblem(anchor) {
   return null;
 }
 
+/** True for a finite number of 0 or more. */
+function isOffset(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0;
+}
+
+
+/** Why `element`, a marked element `{selector, text, html}`, is not a valid one, or null. */
+function elementProblem(element) {
+  if (!isObject(element) || shape(element) !== "html,selector,text") return "must be {selector, text, html}";
+  const { selector, text, html } = element;
+  if (typeof selector !== "string" || !selector.trim() || selector.length > TARGET_LIMITS.selector) {
+    return `'selector' must be a non-empty string of at most ${TARGET_LIMITS.selector} characters`;
+  }
+  if (typeof text !== "string" || text.length > TARGET_LIMITS.text) {
+    return `'text' must be a string of at most ${TARGET_LIMITS.text} characters`;
+  }
+  if (typeof html !== "string" || html.length > TARGET_LIMITS.html) {
+    return `'html' must be a string of at most ${TARGET_LIMITS.html} characters`;
+  }
+  return null;
+}
+
+/**
+ * Why `target`, what a remark made on the live page points at, is not a valid one, or null:
+ * `{page, elements, truncated?, viewport, scroll, state}` (see the contract).
+ */
+export function targetProblem(target) {
+  if (!isObject(target)) return "'target' must be an object";
+  const allowed = new Set(["page", "elements", "truncated", "viewport", "scroll", "state"]);
+  const extra = Object.keys(target).find((k) => !allowed.has(k));
+  if (extra) return `'${extra}' is not a field of a target`;
+  if (!isPagePath(target.page)) return "'target.page' must be a page path starting with /";
+  if (!Array.isArray(target.elements) || target.elements.length > TARGET_LIMITS.elements) {
+    return `'target.elements' must be a list of at most ${TARGET_LIMITS.elements} elements`;
+  }
+  for (const [i, element] of target.elements.entries()) {
+    const problem = elementProblem(element);
+    if (problem) return `'target.elements[${i}]': ${problem}`;
+  }
+  if (target.truncated !== undefined && typeof target.truncated !== "boolean") {
+    return "'target.truncated' must be true or false";
+  }
+  try {
+    if (typeof target.viewport !== "string") throw new Error();
+    parseViewport(target.viewport);
+  } catch {
+    return "'target.viewport' must be a viewport, a preset or WxH[@dpr][+touch]";
+  }
+  const { scroll } = target;
+  if (!isObject(scroll) || shape(scroll) !== "x,y" || !isOffset(scroll.x) || !isOffset(scroll.y)) {
+    return "'target.scroll' must be {x, y}, numbers of 0 or more";
+  }
+  if (!TARGET_STATES.includes(target.state)) return `'target.state' must be one of ${TARGET_STATES.join(", ")}`;
+  return null;
+}
+
 /**
  * Why `event` breaks the event schema, or null when it keeps it. `stored` also requires the
  * fields `appendEvent` assigns (`seq`, `id`, `at`), as on a line read back from the log.
@@ -292,8 +368,8 @@ function eventProblem(event, stored) {
     return "'variant' must be a variant key, such as mobile+dark";
   }
   if (event.type === "thread" && event.still === null) {
-    if (event.rev !== undefined || event.anchor !== undefined || event.variant !== undefined) {
-      return "a general thread (still: null) has no 'rev', 'variant' or 'anchor'";
+    if (["rev", "variant", "anchor", "target"].some((k) => event[k] !== undefined)) {
+      return "a general thread (still: null) has no 'rev', 'variant', 'anchor' or 'target'";
     }
     return null;
   }
@@ -306,6 +382,10 @@ function eventProblem(event, stored) {
     const problem = nameProblem(event.still);
     if (problem) return `'still': ${problem}`;
     if (!isRev(event.rev)) return "'rev' must be an integer from 1";
+  }
+  if (event.target !== undefined) {
+    const problem = targetProblem(event.target);
+    if (problem) return problem;
   }
   if (event.anchor !== undefined) return anchorProblem(event.anchor);
   return null;
@@ -409,7 +489,8 @@ export function stills(dir) {
  * `stills/<name>/<key>/<n>.png`, n one past the variant's last revision (1 for a new one), and
  * recorded in the manifest, written to a temp file and renamed over it; the still's entry is
  * written in v2 shape, the others as they were. A PNG whose bytes equal the variant's latest
- * revision adds no revision, so the reviewed marks on it hold. `title` and `source` (the page
+ * revision adds no revision, so the reviewed marks on it hold, and leaves the manifest
+ * untouched when nothing else of the entry changed either. `title` and `source` (the page
  * path shot) update the entry when given, `fullPage` the variant's viewport. Returns `{ entry,
  * variant, rev, unchanged }`, the still's entry, the variant, the revision added (or the latest
  * one, when `unchanged`) and whether the image was the same as that one.
@@ -424,7 +505,7 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
   const vp = parseViewport(viewport, fullPage);
   const sorted = parseTags(tags);
   const key = variantKey(vp, sorted);
-  if (!KEY.test(key)) throw new Error(`variant '${key}': at most 16 tags`);
+  if (!KEY.test(key)) throw new Error(`variant '${key}': at most ${MAX_TAGS} tags`);
   const head = Buffer.alloc(PNG.length);
   const fd = openSync(file, "r");
   try {
@@ -466,13 +547,16 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
       rev = { n, file: rel, at: new Date().toISOString() };
       variant.revs.push(rev);
     }
-    const tmp = sideFile(manifestFile, "tmp");
-    try {
-      writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
-      renameSync(tmp, manifestFile);
-    } catch (e) {
-      rmSync(tmp, { force: true });
-      throw e;
+    const text = `${JSON.stringify(manifest, null, 2)}\n`;
+    if (!unchanged || !existsSync(manifestFile) || readFileSync(manifestFile, "utf8") !== text) {
+      const tmp = sideFile(manifestFile, "tmp");
+      try {
+        writeFileSync(tmp, text);
+        renameSync(tmp, manifestFile);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        throw e;
+      }
     }
     return { entry, variant, rev, unchanged };
   });
@@ -624,8 +708,8 @@ export async function appendEvent(dir, event) {
 
 /**
  * The threads of `dir`, folded from the log in the order they were opened. Each is
- * `{ id, still, variant, rev, anchor, body, author, at, seq, status, replies, updated }`:
- * `still`, `variant`, `rev` and `anchor` are null where the thread has none, `variant` being
+ * `{ id, still, variant, rev, anchor, target, body, author, at, seq, status, replies, updated }`:
+ * `still`, `variant`, `rev`, `anchor` and `target` are null where the thread has none, `variant` being
  * the still's first variant when the event names none; `status` is "open" or "resolved" as the
  * last resolve or reopen left it, `replies` are `{ id, author, body, at, seq }`, and `updated`
  * is the `seq` of the last event on the thread.

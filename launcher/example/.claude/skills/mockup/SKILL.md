@@ -111,17 +111,23 @@ and no shooter scripts outside the project.
 
 ## 6. Report, listen, answer
 
-Report the root URL, one line per variant on what to try, the stills at `<url>/stills` (the
+Report the root URL, one line per variant on what to try, that **Live** beside a page on the
+menu is where to mark a remark on the page itself, the stills at `<url>/stills` (the
 card's **Review**), that it is on the hub under "<project> mockup" and stops in 6h or on
 `/mockup stop`. Never ask the reviewer to type a path. Then ask which option to build, if
 that was the question.
 
-With stills out, start `preview review watch` under Monitor before reporting, so no remark is
-missed. Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05-invite
+With a mockup live, start `preview review watch` under Monitor before reporting, stills or
+not, so no remark is missed: one marked on a live page makes its own still (`live-<slug>`). Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05-invite
 [mobile+dark] r1 box ... Ana (guest): "..."`); skip the rest. Resolving is the human's.
 
 For each: `preview review working <id> --note "<what>"` first, so the reviewer sees you on it;
-`preview review show <id>` and Read its `marked` PNG (else `image`); fix the page; re-shoot
+`preview review show <id>` and Read its `marked` PNG (else `image`); when it prints a `page`,
+the remark was marked on the live page (`<url>/live/<slug>`, the menu's **Live** links): its
+`element` lines are what was marked, each a selector, its text and its HTML, so find those
+elements in the page's source and fix them, not what the box happens to cover; with `state
+not-reproduced` the PNG shows the page as it loads, without the state the reviewer marked it
+in (an open dialog), so go by the elements' HTML and get to that state yourself; fix the page; re-shoot
 that still, same name, same variant (`mobile+dark` is `--viewport mobile --tag dark`,
 `custom-390x700` is `--viewport 390x700`; `source.path`, `viewport.fullPage` and `tags` are in
 `preview stills ls --json`), so the viewer flags it "changed since reviewed"; then `preview
