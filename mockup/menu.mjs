@@ -72,13 +72,20 @@ import {
   stills,
   storeAnnotated,
   storePaths,
-  TARGET_LIMITS,
   targetProblem,
   threads,
   variantKey,
   working,
 } from "./review.mjs";
-import { fileUrl, livePath, MAX_ANNOTATED_BYTES, MAX_NAME, pageOfLive, PNG_URL } from "./stills/state.js";
+import {
+  fileUrl,
+  livePath,
+  MAX_ANNOTATED_BYTES,
+  MAX_NAME,
+  pageOfLive,
+  PNG_URL,
+  TARGET_LIMITS,
+} from "./stills/state.js";
 
 const SLUG = /^\/([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)*)\/?$/;
 const RELATIVE_REF = /\b(src|href)=(["'])\.\/([^"'?#]+)([^"']*)\2/g;
@@ -103,6 +110,7 @@ const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
   "live.js": { file: "live.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
+  "who.js": { file: "who.js", type: "text/javascript; charset=utf-8" },
   "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
   "swipe.js": { file: "swipe.js", type: "text/javascript; charset=utf-8" },
   "viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
@@ -963,8 +971,9 @@ export async function handleReview(req, res, { scratch, stream, who, shoot = cap
 
 /**
  * The Vite plugin: menu at `/`, the stills viewer at `/stills` with its `/_review/` routes,
- * the live shell at `/live/<slug>`, clean page URLs, the `/app/` prefix, no-store and reloads. `hosts` are the names the server
- * accepts, which tell a guest from a tailnet user (see `reviewer`).
+ * the live shell at `/live/<slug>`, clean page URLs, the `/app/` prefix, no-store and reloads.
+ * `hosts` are the names the server accepts, which tell a guest from a tailnet user (see
+ * `reviewer`).
  */
 export function menuPlugin({ app, hosts = [] }) {
   const scratch = scratchDir(app);

@@ -1,6 +1,6 @@
 /**
  * The state of the stills viewer, which the runtime's tests import: nothing here needs a page
- * to load, and only `stored`, `store` and `place` touch one when called.
+ * to load, and only `stored`, `store`, `place` and `answerOf` touch one when called.
  *
  * A still is an entry of `GET /_review/stills`, `{ name, title, source, variants }`, each variant
  * `{ key, viewport, tags, revs }`. `choose` gives every still the variant the reviewer's pick
@@ -75,6 +75,22 @@ export function place(target, anchor) {
 /** The reviewed mark of a still whose latest revision is `rev` and whose marked one is `viewed`. */
 export function markOf(rev, viewed) {
   return { rev, viewed, reviewed: viewed !== null && viewed === rev, changed: viewed !== null && viewed < rev };
+}
+
+/** How far a pointer may move from where it pressed, in pixels, and still be a tap. */
+export const TAP_PX = 8;
+
+/** The media query of a small or touch screen, which gets the phone's layout of the viewer and the live shell. */
+export const SMALL_SCREEN = "(max-width: 599.98px), (pointer: coarse)";
+
+/**
+ * The JSON the fetch response `res` carries; throws with the server's reason, its `error`, when
+ * it is not a 2xx.
+ */
+export async function answerOf(res) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
 /** The most characters a guest's name may hold. */
@@ -187,11 +203,11 @@ export function presetSize(name) {
 }
 
 /**
- * The scale that fits something of `size` (`{ width, height }`) in a room `room.w` by `room.h`:
- * 1 when it fits as it is, never above it.
+ * The scale that fits something of `size` in a room of size `room`, both `{ width, height }`: 1
+ * when it fits as it is, never above it.
  */
 export function scaleToFit(size, room) {
-  return Math.max(0, Math.min(1, room.w / size.width, room.h / size.height));
+  return Math.max(0, Math.min(1, room.width / size.width, room.height / size.height));
 }
 
 /** True when the variant keys `a` and `b` are the same choice of a switcher: one device class, the same tags. */
@@ -714,11 +730,15 @@ export function elementsLabel({ elements, truncated }) {
 }
 
 /**
- * True when the shot of `target` does not show what was marked: it is not reproduced and
- * something was marked, a box over no element having nothing to show.
+ * What the composer says beside the draft of a remark whose `target` the shot did not
+ * reproduce, empty when it did: that the shot lacks the state the page was marked in, or, for a
+ * box that held no element, that there was nothing to find on it.
  */
-export function lost({ state, elements, truncated }) {
-  return state === "not-reproduced" && (elements.length > 0 || Boolean(truncated));
+export function unshownNote({ state, elements, truncated }) {
+  if (state !== "not-reproduced") return "";
+  return elements.length || truncated
+    ? "Not reproduced: the shot is the page as it loads, without the state you marked it in. The remark keeps the elements you marked."
+    : "Not reproduced: no element was inside the box, so the remark goes by the box alone.";
 }
 
 /** True when the rect `r` (`{ x, y, w, h }`) is inside the rect `box`, to half a pixel. */

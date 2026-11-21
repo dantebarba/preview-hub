@@ -31,31 +31,32 @@ import {
   classLabel,
   classOf,
   DEVICES,
+  answerOf,
   elementsLabel,
   holds,
   LIVE_DRAFT_KEY,
   livePath,
   markedIn,
-  MAX_NAME,
   moved,
-  NAME_KEY,
   opposite,
   pageOfLive,
   place,
   presetSize,
   region,
   scaleToFit,
+  SMALL_SCREEN,
   store,
   stored,
+  TAP_PX,
   TARGET_LIMITS,
 } from "./state.js";
+import { asking, askName, closeWho, keptName } from "./who.js";
 
 const DEVICE_KEY = "live.device";
-const TAP_PX = 8;
 const ROOM_PAD_PX = 12;
 const TRACK_MS = 400;
 const LINE_PX = 16;
-const SMALL = matchMedia("(max-width: 599.98px), (pointer: coarse)");
+const SMALL = matchMedia(SMALL_SCREEN);
 const SECTION =
   "section, article, main, nav, aside, header, footer, form, dialog, [role=dialog], [role=alertdialog], [aria-modal=true]";
 const HINT = "Drag a box, or tap an element";
@@ -69,7 +70,6 @@ const state = {
   sel: null,
   busy: false,
   me: null,
-  asking: null,
 };
 const root = document.documentElement;
 const frame = el("frame");
@@ -175,7 +175,10 @@ function elementsIn(box) {
   return { elements: picked.map((i) => found[i]), truncated };
 }
 
-/** One step of a selector's path: the tag of `target`, with its place among its siblings of that tag when it has any. */
+/**
+ * One step of a selector's path: the tag of `target`, with its place among its siblings of that
+ * tag when it has any.
+ */
 function stepOf(target) {
   const tag = CSS.escape(target.localName);
   const twins = [...target.parentElement.children].filter((c) => c.localName === target.localName);
@@ -240,7 +243,7 @@ function crumbLabel(target) {
 function layout() {
   const size = presetSize(state.device);
   const room = document.querySelector("main");
-  const free = { w: room.clientWidth - 2 * ROOM_PAD_PX, h: room.clientHeight - 2 * ROOM_PAD_PX };
+  const free = { width: room.clientWidth - 2 * ROOM_PAD_PX, height: room.clientHeight - 2 * ROOM_PAD_PX };
   scale = scaleToFit(size, free) || 1;
   el("screen").style.width = `${size.width * scale}px`;
   el("screen").style.height = `${size.height * scale}px`;
@@ -318,7 +321,10 @@ function setMarking(on) {
   if (on) (SMALL.matches ? el("arm") : el("marking")).focus();
 }
 
-/** Show the page as the device class `name`, remembered on this device; the mark goes, since the page lays out again. */
+/**
+ * Show the page as the device class `name`, remembered on this device; the mark goes, since the
+ * page lays out again.
+ */
 function setDevice(name) {
   state.device = name;
   store(DEVICE_KEY, name);
@@ -441,7 +447,7 @@ function endDrag(e) {
     const target = elementAt(toPage(pointOf(e)));
     if (target) pick(chainOf(target), 0);
   } else if (state.sel) {
-    state.sel = { ...state.sel, ...elementsIn(boxOf(state.sel.anchor)) };
+    state.sel = { ...state.sel, chain: null, ...elementsIn(boxOf(state.sel.anchor)) };
     drawSel();
   }
 }
@@ -513,8 +519,8 @@ function typing(e) {
 
 /** Esc leaves Mark mode, or the name sheet; `m` enters or leaves it, unless it is being typed somewhere. */
 function onKey(e) {
-  if (e.key === "Escape" && state.asking) return closeWho(false);
-  if (state.asking) return undefined;
+  if (e.key === "Escape" && asking()) return closeWho(false);
+  if (asking()) return undefined;
   if (e.key === "Escape" && state.marking) {
     e.preventDefault();
     return setMarking(false);
@@ -540,44 +546,14 @@ function adopt() {
 }
 
 /**
- * Open the name sheet on the name this browser keeps. Resolves to the name when it is
- * continued, which keeps it, and to null when it is cancelled.
- */
-function askName() {
-  el("who-name").value = (stored(NAME_KEY) || "").trim().slice(0, MAX_NAME);
-  el("continue").disabled = !el("who-name").value;
-  el("who").hidden = false;
-  el("who-name").focus();
-  return new Promise((resolve) => {
-    state.asking = resolve;
-  });
-}
-
-/** Close the name sheet: with `ok`, keeping the name typed in it, which it then needs; else as cancelled. */
-function closeWho(ok) {
-  const done = state.asking;
-  const name = el("who-name").value.trim().slice(0, MAX_NAME);
-  if (!done || (ok && !name)) return;
-  state.asking = null;
-  el("who").hidden = true;
-  if (ok) store(NAME_KEY, name);
-  done(ok ? name : null);
-}
-
-/**
  * What a freeze says of who asks for it: nothing for a tailnet user, whom the server names, and
  * `{ author: { name } }` for a guest, asked for a name when this browser keeps none; null when
  * the guest gave none. Throws when the server cannot be asked who is looking.
  */
 async function writer() {
-  if (!state.me) {
-    const res = await fetch("/_review/stills", { cache: "no-store" });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    state.me = data.me;
-  }
+  state.me ??= (await answerOf(await fetch("/_review/stills", { cache: "no-store" }))).me;
   if (state.me.via === "tailnet") return {};
-  const name = (stored(NAME_KEY) || "").trim().slice(0, MAX_NAME) || (await askName());
+  const name = keptName() || (await askName());
   return name ? { author: { name } } : null;
 }
 
@@ -585,8 +561,8 @@ async function writer() {
  * Comment on the mark: freeze the page as it was marked, then open the viewer on the still the
  * shot went on, the answer left for it in this tab's session storage. An element no selector
  * names alone, or that the page took out since it was marked, is left out, the mark then
- * truncated. Nothing is shot in a browser that cannot keep the answer. The shell stays in Mark mode, with the reason, when the shot fails, and busy until
- * the viewer opens when it does not.
+ * truncated. Nothing is shot in a browser that cannot keep the answer. The shell stays in Mark
+ * mode, with the reason, when the shot fails, and busy until the viewer opens when it does not.
  */
 async function comment() {
   const { sel } = state;
@@ -620,8 +596,7 @@ async function comment() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...request, ...who }),
     });
-    const frozen = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(frozen.error || `HTTP ${res.status}`);
+    const frozen = await answerOf(res);
     sessionStorage.setItem(LIVE_DRAFT_KEY, JSON.stringify(frozen));
     report("");
     leaving = true;
@@ -646,18 +621,6 @@ el("devices").replaceChildren(
 for (const button of document.querySelectorAll(".marker")) button.onclick = () => setMarking(!state.marking);
 el("cancel").onclick = () => setMarking(false);
 el("comment").onclick = comment;
-el("who-name").maxLength = MAX_NAME;
-el("who-form").onsubmit = (e) => {
-  e.preventDefault();
-  closeWho(true);
-};
-el("who-name").oninput = () => {
-  el("continue").disabled = !el("who-name").value.trim();
-};
-el("who-close").onclick = () => closeWho(false);
-el("who").onclick = (e) => {
-  if (e.target === el("who")) closeWho(false);
-};
 layer.addEventListener("pointerdown", startDrag);
 layer.addEventListener("pointermove", moveDrag);
 layer.addEventListener("pointerup", endDrag);

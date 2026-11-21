@@ -49,7 +49,6 @@ import {
   linkedKey,
   liveDraft,
   livePath,
-  lost,
   markedIn,
   markOf,
   MAX_ZOOM,
@@ -71,6 +70,7 @@ import {
   tagsOf,
   title,
   unread,
+  unshownNote,
   variantFor,
   viewOn,
   viewportLabel,
@@ -193,10 +193,10 @@ test("a device class is a viewport preset of the store, at its size, scaled down
     const { width, height } = parseViewport(name);
     assert.deepEqual(presetSize(name), { width, height }, name);
   }
-  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 1000, h: 900 }), 1);
-  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 195, h: 900 }), 0.5);
-  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: 1000, h: 211 }), 0.25);
-  assert.equal(scaleToFit({ width: 390, height: 844 }, { w: -24, h: 500 }), 0);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { width: 1000, height: 900 }), 1);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { width: 195, height: 900 }), 0.5);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { width: 1000, height: 211 }), 0.25);
+  assert.equal(scaleToFit({ width: 390, height: 844 }, { width: -24, height: 500 }), 0);
 });
 
 test("elementsLabel counts a target's elements, with a plus when it was truncated", () => {
@@ -204,10 +204,12 @@ test("elementsLabel counts a target's elements, with a plus when it was truncate
   assert.deepEqual([of(0), of(1), of(3), of(20, true), of(1, true)], ["0 elements", "1 element", "3 elements", "20+ elements", "1+ elements"]);
 });
 
-test("lost is a mark the shot does not show: not reproduced, with something marked", () => {
-  const of = (state, n, truncated) => lost({ state, elements: Array(n).fill({}), truncated });
-  assert.deepEqual([of("not-reproduced", 1), of("not-reproduced", 0, true)], [true, true]);
-  assert.deepEqual([of("not-reproduced", 0), of("reproduced", 3)], [false, false]);
+test("unshownNote says a shot did not reproduce a mark, and why when the box held no element", () => {
+  const of = (state, n, truncated) => unshownNote({ state, elements: Array(n).fill({}), truncated });
+  assert.equal(of("reproduced", 3), "");
+  assert.match(of("not-reproduced", 1), /^Not reproduced: .*without the state you marked/);
+  assert.equal(of("not-reproduced", 0, true), of("not-reproduced", 1));
+  assert.match(of("not-reproduced", 0), /^Not reproduced: no element was inside the box/);
 });
 
 test("holds says whether a rect is inside a box, to half a pixel", () => {

@@ -53,7 +53,7 @@
  * A remark made on the live page (`live.js`) arrives as a draft: the shell leaves the freeze's
  * answer in this tab's session storage and opens the viewer on the still the shot went on, where
  * the draft's box is in place with the composer open. Its `target`, the page and the elements
- * marked there, stays with the draft while the box is moved or drawn again, and is posted with
+ * marked there, stays with the draft while the box is moved or resized, and is posted with
  * the remark; the composer says how many elements it marks, and when the shot did not reproduce
  * them. The card of such a remark names its page, a link back to the live shell, its elements
  * and "not reproduced".
@@ -78,6 +78,7 @@
 import { annotate } from "./annotate.js";
 import {
   ago,
+  answerOf,
   applyEvent,
   applyThread,
   applyWorking,
@@ -99,10 +100,7 @@ import {
   LIVE_DRAFT_KEY,
   liveDraft,
   livePath,
-  lost,
-  MAX_NAME,
   moved,
-  NAME_KEY,
   notesLine,
   opposite,
   pickOf,
@@ -119,13 +117,16 @@ import {
   sectionStart,
   sizeLabel,
   sizesOf,
+  SMALL_SCREEN,
   step,
   store,
   stored,
   tagsLabel,
   tagsOf,
+  TAP_PX,
   title,
   unread,
+  unshownNote,
   viewOn,
   viewportOf,
   workingAt,
@@ -133,12 +134,12 @@ import {
   zoomed,
 } from "./state.js";
 import { swipeable } from "./swipe.js";
+import { asking, askName as askForName, closeWho, keptName } from "./who.js";
 
 const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const LAYOUT_KEY = "stills.layout";
 const SEEN_KEY = "stills.seen";
 const SWIPE_PX = 60;
-const TAP_PX = 8;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_PX = 30;
 const DOUBLE_TAP_ZOOM = 2.5;
@@ -153,7 +154,7 @@ const FIT = { z: 1, x: 0, y: 0 };
 const NO_REMARKS = "No remarks on this still yet. Mark an area of it to start one.";
 const REMARK_TITLE = "Mark an area of the still and comment on it (c)";
 const PHONE = matchMedia("(max-width: 760px)");
-const SMALL = matchMedia("(max-width: 599.98px), (pointer: coarse)");
+const SMALL = matchMedia(SMALL_SCREEN);
 const WHEN = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
 
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -164,7 +165,6 @@ const state = {
   me: { name: null, via: "share" },
   working: new Map(),
   pick: null,
-  asking: null,
   at: -1,
   rev: null,
   compare: false,
@@ -217,7 +217,7 @@ let leaving = false;
 let aim = null;
 let arriving = false;
 let workTimer = null;
-let guestName = (stored(NAME_KEY) || "").trim().slice(0, MAX_NAME);
+let guestName = keptName();
 
 /** The element with the id `id`. */
 function el(id) {
@@ -382,7 +382,8 @@ function drawDraft() {
   el("composer").style.setProperty("--y", `${(draft.anchor.y + (draft.anchor.h ?? 0)) * 100}%`);
   const marks = draft.target ? ` · ${elementsLabel(draft.target)}` : "";
   el("where").textContent = `${box ? "box" : "pin"} on rev ${draft.rev}${marks}`;
-  el("unshown").hidden = !draft.target || !lost(draft.target);
+  el("unshown").textContent = draft.target ? unshownNote(draft.target) : "";
+  el("unshown").hidden = !el("unshown").textContent;
 }
 
 /**
@@ -454,7 +455,7 @@ function targetLine(t) {
   page.title = "Open the live page";
   page.onclick = (e) => e.stopPropagation();
   line.append("on ", page, ` · ${elementsLabel(t.target)}`);
-  if (lost(t.target)) line.append(" · ", node("span", "lost", "not reproduced"));
+  if (t.target.state === "not-reproduced") line.append(" · ", node("span", "lost", "not reproduced"));
   return [line];
 }
 
@@ -1100,10 +1101,7 @@ function move(delta) {
 
 /** The JSON `url` answers; throws with the server's reason when it is not a 2xx. */
 async function getJson(url) {
-  const res = await fetch(url, { cache: "no-store" });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  return answerOf(await fetch(url, { cache: "no-store" }));
 }
 
 /** Fold one log event into the marks, the agent's working states and the threads. True when any changed. */
@@ -1267,35 +1265,17 @@ function named() {
 }
 
 /**
- * Open the name sheet on the name this browser keeps, with the keyboard up. Resolves to true
- * when it is continued, which keeps the name, and to false when it is cancelled.
+ * Ask a guest for a name with the name sheet (see `who.js`). Resolves to true when it is
+ * continued, the name then the one whoever is looking writes under, and to false when it is
+ * cancelled.
  */
-function askName() {
-  closeWho(false);
-  el("who-name").value = guestName;
-  el("continue").disabled = !guestName;
-  el("who").hidden = false;
-  el("who-name").focus();
-  return new Promise((resolve) => {
-    state.asking = resolve;
-  });
-}
-
-/** Close the name sheet: with `ok`, keeping the name typed in it, which it then needs; else as cancelled. */
-function closeWho(ok) {
-  const done = state.asking;
-  const name = el("who-name").value.trim().slice(0, MAX_NAME);
-  if (!done || (ok && !name)) return;
-  state.asking = null;
-  el("who").hidden = true;
-  el("who-name").blur();
-  if (ok) {
-    guestName = name;
-    store(NAME_KEY, name);
-    derive();
-    render();
-  }
-  done(ok);
+async function askName() {
+  const name = await askForName();
+  if (!name) return false;
+  guestName = name;
+  derive();
+  render();
+  return true;
 }
 
 /**
@@ -1310,8 +1290,7 @@ async function send(event) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(name ? { ...event, author: { name } } : event),
   });
-  const answer = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  const answer = await answerOf(res);
   report("");
   if (source?.readyState !== EventSource.OPEN) await load();
   return answer;
@@ -1489,7 +1468,7 @@ function pointOf(e) {
  * A press on the still starts a drag: on a corner of the draft it resizes it, on the draft it
  * moves it, elsewhere it draws a new mark, which a finger or a pen does only while "＋ Remark"
  * is on, and never a second finger, which zooms. `drag.tap` holds where a new mark was pressed
- * until the pointer leaves that spot.
+ * until the pointer leaves that spot, and `drag.fresh` says the mark is a new one.
  */
 function startDrag(e) {
   if (e.button !== 0 || fingers.size || el("post").disabled || e.target.closest("#composer, .mark")) return;
@@ -1498,7 +1477,7 @@ function startDrag(e) {
   const corner = e.target.dataset.corner;
   if (corner) drag = { fixed: opposite(state.draft.anchor, corner) };
   else if (e.target.closest("#draft")) drag = { from: state.draft.anchor, at };
-  else if (e.pointerType === "mouse" || state.armed) drag = { fixed: at, tap: { x: e.clientX, y: e.clientY } };
+  else if (e.pointerType === "mouse" || state.armed) drag = { fixed: at, tap: { x: e.clientX, y: e.clientY }, fresh: true };
   else return;
   el("stage").setPointerCapture(e.pointerId);
   e.preventDefault();
@@ -1510,7 +1489,7 @@ function moveDrag(e) {
   if (drag.tap && Math.hypot(e.clientX - drag.tap.x, e.clientY - drag.tap.y) < TAP_PX) return;
   drag.tap = null;
   const at = pointOf(e);
-  setDraft(drag.from ? moved(drag.from, at.x - drag.at.x, at.y - drag.at.y) : region(drag.fixed, at));
+  setDraft(drag.from ? moved(drag.from, at.x - drag.at.x, at.y - drag.at.y) : region(drag.fixed, at), drag.fresh);
 }
 
 /**
@@ -1521,7 +1500,7 @@ function endDrag() {
   if (!drag) return;
   const tap = drag.tap && drag.fixed;
   drag = null;
-  if (tap) setDraft(pin(tap));
+  if (tap) setDraft(pin(tap), true);
   state.armed = false;
   render();
   openComposer();
@@ -1543,11 +1522,12 @@ function openComposer() {
 
 /**
  * Make `anchor` the draft's mark, on the revision on screen. A draft that came from the live
- * page keeps its `target` while its mark is moved or drawn again.
+ * page keeps its `target` while its mark is moved or resized; a `fresh` mark, drawn anew
+ * somewhere on the still, is a remark on the still alone and lets go of it.
  */
-function setDraft(anchor) {
+function setDraft(anchor, fresh = false) {
   const s = state.stills[state.at];
-  const { target } = state.draft ?? {};
+  const { target } = (!fresh && state.draft) || {};
   state.draft = { still: s.name, variant: s.variant.key, rev: shown.n, anchor, ...(target ? { target } : {}) };
   drawDraft();
 }
@@ -1735,18 +1715,6 @@ el("notes-close").onclick = () => {
   render();
 };
 el("variant").onclick = () => toggleSheet("more");
-el("who-name").maxLength = MAX_NAME;
-el("who-form").onsubmit = (e) => {
-  e.preventDefault();
-  closeWho(true);
-};
-el("who-name").oninput = () => {
-  el("continue").disabled = !el("who-name").value.trim();
-};
-el("who-close").onclick = () => closeWho(false);
-el("who").onclick = (e) => {
-  if (e.target === el("who")) closeWho(false);
-};
 for (const button of document.querySelectorAll(".as")) button.onclick = askName;
 el("talk-back").onclick = closeTalk;
 el("talk-status").onclick = () => setStatus(state.talk);
@@ -1815,8 +1783,8 @@ el("all").onchange = (e) => {
 };
 
 addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && state.asking) return closeWho(false);
-  if (state.asking) return;
+  if (e.key === "Escape" && asking()) return closeWho(false);
+  if (asking()) return;
   if (e.key === "Escape" && state.reading) return closeAbout();
   if (state.reading) return;
   if (e.key === "Escape" && (state.draft || state.armed)) return cancelDraft();

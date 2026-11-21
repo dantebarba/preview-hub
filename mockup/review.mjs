@@ -50,7 +50,6 @@ import {
   workingAt,
 } from "./stills/state.js";
 
-export { TARGET_LIMITS };
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
