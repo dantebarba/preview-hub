@@ -159,7 +159,8 @@ function within(promise, ms, what) {
 }
 
 /**
- * Start headless Chromium on a fresh profile with its DevTools on a free port. Resolves to `{
+ * Start headless Chromium on a fresh profile with its DevTools on a free port, its config and
+ * cache dirs inside the profile so it starts under a HOME it cannot write. Resolves to `{
  * ws, close }`: the browser's DevTools WebSocket URL and a function that stops it and removes
  * the profile.
  */
@@ -180,7 +181,11 @@ async function launch(chrome) {
       `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    { stdio: ["ignore", "ignore", "pipe"], detached: true }
+    {
+      stdio: ["ignore", "ignore", "pipe"],
+      detached: true,
+      env: { ...process.env, XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: profile },
+    }
   );
   const exited = new Promise((resolve) => proc.once("exit", resolve));
   const close = async () => {
