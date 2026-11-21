@@ -28,6 +28,10 @@
  * With a dialog open (`[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`,
  * `dialog[open]`) the viewport is shot as is and the still is not a full page.
  *
+ * `capture` can also measure a list of CSS selectors on the shot it takes: where the first
+ * visible element each one matches is on the PNG, or null for one not on the page. The live
+ * mark's freeze (`menu.mjs`) places a remark's box by them.
+ *
  * A batch runs the shots of a recipe (see `loadRecipe`) in one Chromium, `--parallel` tabs at
  * a time (default 4), each in a browser context of its own so cookies and storage never leak
  * between shots, each shot once per viewport and tag set. A shot's `steps(page, { viewport,
@@ -341,6 +345,24 @@ function pageMeasure(kit, modal) {
   return { modal: open, document: Math.max(root.scrollHeight, document.body?.scrollHeight ?? 0), hidden };
 }
 
+/**
+ * In the page: where each of `selectors` is on the screenshot, `{x, y, w, h}` in CSS pixels
+ * from its top left, for the first visible element it matches; null for a selector that
+ * matches none, does not parse, or matches only an element with no area.
+ */
+function pageRects(kit, selectors) {
+  return selectors.map((selector) => {
+    let el;
+    try {
+      el = kit.$$(selector).find(kit.shown);
+    } catch {
+      return null;
+    }
+    const r = el?.getBoundingClientRect();
+    return r && r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
+  });
+}
+
 /** The expression that runs the in-page function `fn` with the kit and `args`. */
 function inPage(fn, args) {
   return `(${fn})((${pageKit})(), ${JSON.stringify(args)})`;
@@ -584,7 +606,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
     },
   };
 
-  async function shoot({ fullPage = false, maxHeight = MAX_HEIGHT } = {}) {
+  async function shoot({ fullPage = false, maxHeight = MAX_HEIGHT, measure } = {}) {
     let height = vp.height;
     let whole = fullPage;
     if (fullPage) {
@@ -616,7 +638,8 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
     }
     const { data } = await send("Page.captureScreenshot", { format: "png" });
     const png = Buffer.from(data, "base64");
-    return { png, fullPage: whole, ...pngSize(png) };
+    const rects = measure ? { rects: await run(inPage(pageRects, measure)) } : {};
+    return { png, fullPage: whole, ...pngSize(png), ...rects };
   }
 
   return {
@@ -660,7 +683,7 @@ function waitCap(waitMs) {
  * fullPage, exceptions, consoleErrors }`; rejects when the page cannot be loaded or a step
  * fails, the error carrying the page problems seen so far as `problems`.
  */
-async function shootOne(browser, { url, vp, tags, fullPage, maxHeight, steps, wait, ignore }) {
+async function shootOne(browser, { url, vp, tags, fullPage, maxHeight, measure, steps, wait, ignore }) {
   const tab = await openTab(browser.cdp, browser.product, { vp, scheme: colorScheme(tags), wait, ignore });
   try {
     await tab.goto(url);
@@ -672,7 +695,7 @@ async function shootOne(browser, { url, vp, tags, fullPage, maxHeight, steps, wa
       }
       await tab.settle();
     }
-    const shot = await tab.shoot({ fullPage, maxHeight });
+    const shot = await tab.shoot({ fullPage, maxHeight, measure });
     return { ...shot, ...tab.problems() };
   } catch (e) {
     e.problems = tab.problems();
@@ -687,6 +710,9 @@ async function shootOne(browser, { url, vp, tags, fullPage, maxHeight, steps, wa
  * `steps(page)` when given, the whole page with `fullPage` (at most `maxHeight` CSS px), and
  * write the PNG to `out`. Waits as the module says, each wait capped at `waitMs`. Resolves to
  * `{ file, width, height, fullPage }`, in pixels, `fullPage` false when a dialog was open.
+ * With `measure`, a list of CSS selectors, it also has `rects`: where each one is on the PNG,
+ * `{x, y, w, h}` in CSS pixels (a pixel of the PNG is one over the pixel ratio), or null for
+ * a selector that is not on the page (see `pageRects`).
  */
 export async function capture({
   url,
@@ -695,6 +721,7 @@ export async function capture({
   tags = [],
   fullPage = false,
   maxHeight = MAX_HEIGHT,
+  measure,
   steps,
   waitMs,
   chrome,
@@ -703,9 +730,10 @@ export async function capture({
   const sorted = shotTags(tags);
   const wait = waitCap(waitMs);
   return withBrowser(chrome, async (browser) => {
-    const shot = await shootOne(browser, { url, vp, tags: sorted, fullPage, maxHeight, steps, wait });
+    const shot = await shootOne(browser, { url, vp, tags: sorted, fullPage, maxHeight, measure, steps, wait });
     writeFileSync(out, shot.png);
-    return { file: out, width: shot.width, height: shot.height, fullPage: shot.fullPage };
+    const rects = measure ? { rects: shot.rects } : {};
+    return { file: out, width: shot.width, height: shot.height, fullPage: shot.fullPage, ...rects };
   });
 }
 
