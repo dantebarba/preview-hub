@@ -244,6 +244,11 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   only the agent's CLI writes. A `thread` on a still may carry `annotated`, the
   still with its mark drawn as a `data:image/png;base64,` URL of at most 8 MiB, kept as
   `review/annotated/<id>.png` and not stored in the event.
+- `/live/<slug>`: the live shell around the page `/<slug>`, when that page exists: the page
+  in a frame with a bar outside it, where a reviewer marks what a remark is about on the page
+  itself, in a Mark mode whose taps select and never act. Comment posts the mark to
+  `POST /_review/freeze` and opens the viewer on the still the shot went on, where the remark
+  is posted with its `target` (see the [review contract](review-contract.md#live-marks)).
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;

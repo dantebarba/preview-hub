@@ -359,7 +359,7 @@ preview stills add .mockup/shots/05-invite-user.png --name 05-invite-user \
 preview stills shoot --only '^05-'   # shoot .mockup/shots.mjs as a batch; an unchanged image adds nothing
 preview stills ls --as Dante          # each variant's latest rev, reviewed by Dante or not, open threads
 preview review ls --open              # one line per thread; --json for the full fold
-preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still and the marked PNG
+preview review show 3f9a0c1e          # body, anchor, variant, rev, replies, the still, the marked PNG, and the page and elements of a remark made on the live page
 preview review working 3f9a0c1e --note "re-shooting mobile+dark"   # tells the reviewer the agent is on it
 preview review reply 3f9a0c1e "Wrapped the label; see rev 2"      # also ends working
 preview review idle                   # or idle <thread>; working also expires after 10 minutes
@@ -409,6 +409,42 @@ agent's**: the viewer hides them from a guest and the server refuses them with `
 reviewer has their own reviewed marks, a tailnet user's under their Tailscale display name and
 a guest's under `Ana (guest)`, so a guest's marks hide nothing from the owner; `--as` takes
 that name, and without it `stills ls` says whose marks hold.
+
+**Marking on the live page.** A remark can also be made on the mockup page itself, with no
+still to find first. Every page on the menu has a **Live** link, `/live/<slug>`: the page in
+a frame, with a bar outside it that shows the page's path (it follows the page as it
+navigates), a device picker (Mobile · Tablet · Desktop, the presets above, scaled down when
+the window is smaller) and the **Mark** button. It has two modes, and the bar always says
+which:
+
+| Mode | What a tap does | How it shows |
+| ---- | --------------- | ------------ |
+| **Use** (default) | navigates or acts, as on the page alone; nothing is ever selected | the plain bar |
+| **Mark** | selects, and never reaches the page | a red frame around the page, a crosshair, and the bar reads "Marking: taps select, they don't act" |
+
+Mark mode is entered only from the Mark button, or <kbd>M</kbd> on a desktop; it ends with
+<kbd>Esc</kbd>, the same button or Cancel, and by itself once the remark is commented. On a
+phone the Mark button sits in a dock under the page, in the thumb zone; there one finger
+draws and two fingers scroll the page (the wheel does on a desktop). Two gestures mark, and
+both end in a box:
+
+- **Drag** draws a box, which can be moved or resized by its corners. It marks the visible
+  elements whose box is inside it, leaving out a wrapper that covers the same area as what
+  it wraps, at most 20 (`20+ elements` beyond).
+- **Tap** marks the innermost element under it, and a breadcrumb row (`section#card ›
+  p.lead › b`) widens the mark to a parent, up to the section it is in. With a mouse the
+  element under the pointer is highlighted.
+
+The strip under the page shows the count ("3 elements") with **Comment** and Cancel. Comment
+shoots the page from scratch at that device and opens the stills viewer on the shot, with the
+box in place and the composer open; posting it is posting any remark. The shot goes on the
+still of that page and viewport when there is one (an unchanged page adds no revision), else
+on a new still `live-<slug>`. The agent gets the marked PNG as for any remark, plus what was
+marked: `preview review show` prints the page, the viewport and scroll, and each element's
+selector, text and a cut of its HTML, and the `watch` line says `3 elements`. When the
+elements were reached by acting on the page (a dialog opened by a click), a page loaded from
+scratch does not show them: the composer and the remark's card say **not reproduced**, the
+box stays where it was drawn and the elements' HTML is what the agent goes by.
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows

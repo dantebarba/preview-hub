@@ -431,9 +431,12 @@ reviewer's marked revisions as `{reviewer: {still: {variant key: rev}}}`, `worki
 
 ## Live marks
 
-A reviewer can mark the live mockup page instead of a still. The page shows what was marked,
-a still keeps it: the runtime shoots the page again for the remark, and the remark goes on
-that shot with the marked elements as its [target](#targets).
+A reviewer can mark the live mockup page instead of a still, in the live shell the runtime
+serves at `/live/<slug>` for the page `/<slug>`. The page shows what was marked, a still
+keeps it: the runtime shoots the page again for the remark, and the remark goes on that shot
+with the marked elements as its [target](#targets). The shell sends the device class the page
+was shown at as the viewport (`mobile`, `tablet` or `desktop`), a selector for each element
+that matches it alone on the page, and the elements in a drawn box outermost first.
 
 `POST /_review/freeze` asks for that shot, a JSON body:
 
