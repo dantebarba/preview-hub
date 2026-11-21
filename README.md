@@ -414,16 +414,17 @@ that name, and without it `stills ls` says whose marks hold.
 still to find first. Every page on the menu has a **Live** link, `/live/<slug>`: the page in
 a frame, with a bar outside it that shows the page's path (it follows the page as it
 navigates), a device picker (Mobile · Tablet · Desktop, the presets above, scaled down when
-the window is smaller) and the **Mark** button. It has two modes, and the bar always says
-which:
+the window is smaller), the **Mark** button and the **Remarks** button with the count of the
+page's open remarks. Nothing a reviewer does there ever reloads the page or leaves it. It has
+two modes, told apart by how the page is framed, not by a sentence:
 
 | Mode | What a tap does | How it shows |
 | ---- | --------------- | ------------ |
 | **Use** (default) | navigates or acts, as on the page alone; nothing is ever selected | the plain bar |
-| **Mark** | selects, and never reaches the page | a red frame around the page, a crosshair, and the bar reads "Marking: taps select, they don't act" |
+| **Mark** | selects, and never reaches the page | a red frame around the page, a crosshair, the Mark button pressed |
 
 Mark mode is entered only from the Mark button, or <kbd>M</kbd> on a desktop; it ends with
-<kbd>Esc</kbd>, the same button or Cancel, and by itself once the remark is commented. On a
+<kbd>Esc</kbd>, the same button or Cancel, and by itself once the remark is posted. On a
 phone the Mark button sits in a dock under the page, in the thumb zone; there one finger
 draws and two fingers scroll the page (the wheel does on a desktop). Two gestures mark, and
 both end in a box:
@@ -436,15 +437,33 @@ both end in a box:
   element under the pointer is highlighted.
 
 The strip under the page shows the count ("3 elements") with **Comment** and Cancel. Comment
-shoots the page from scratch at that device and opens the stills viewer on the shot, with the
-box in place and the composer open; posting it is posting any remark. The shot goes on the
-still of that page and viewport when there is one (an unchanged page adds no revision), else
-on a new still `live-<slug>`. The agent gets the marked PNG as for any remark, plus what was
-marked: `preview review show` prints the page, the viewport and scroll, and each element's
-selector, text and a cut of its HTML, and the `watch` line says `3 elements`. When the
-elements were reached by acting on the page (a dialog opened by a click), a page loaded from
-scratch does not show them: the composer and the remark's card say **not reproduced**, the
-box stays where it was drawn and the elements' HTML is what the agent goes by.
+opens a composer by the box (over the keyboard on a phone); **Post**, or
+<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd>, sends the remark with a snapshot of the page's
+DOM as it is at that instant: the tab it is on, what was toggled and typed, an open dialog,
+the scroll of every list. The runtime renders that snapshot in the background at the
+reviewer's device and scroll and shoots it, so the shot is what the reviewer saw; it goes on
+the still `live-<slug>`, one variant per device, and an image equal to the last adds no
+revision. A guest is asked for a name on the first Post.
+
+A toast says what became of it: **Posted**, with a spinner while the runtime shoots, then an
+**Open** link to the thread in the stills viewer, in a new tab (`/stills#thread=<id>`); or
+**Not posted: \<reason\>** with **Retry**, which sends the same remark again, snapshot
+included, so a server that was down loses nothing.
+
+The conversation stays on the page. **Remarks** opens a panel beside the page, a sheet at the
+bottom on a phone, with the threads made on the page on screen, the open ones first: number,
+author, body, time and replies, with **Reply**, **Resolve** / **Reopen** (not for a guest)
+and **Open**. It follows the review log, so the agent's reply shows without a reload, and it
+swaps with the page as the reviewer navigates. Each open thread has a numbered pin on its
+first marked element, which follows the element as the page scrolls and changes and is gone
+while the element is; a tap on a pin opens its thread, and a thread picked in the panel has
+its elements outlined and scrolled into view. Pins and outlines are drawn over the page,
+never put in it.
+
+The agent gets the marked PNG as for any remark, plus what was marked: `preview review show`
+prints the page, the viewport and scroll, the `state` of the shot (see the
+[review contract](docs/review-contract.md#live-marks)) and each element's selector, text and
+a cut of its HTML, and the `watch` line says `3 elements`.
 
 **Working.** `preview review working <thread> --note "<what>"` (or `<still> [--variant K]`
 for work on a still with no remark) tells the reviewer the agent is on it: the viewer shows
