@@ -81,6 +81,7 @@ const MARKS = `<!doctype html><html><body style="margin:0"><div style="height:20
 <div id="a" style="position:absolute;left:10px;top:20px;width:100px;height:50px"></div>
 <div id="b" style="position:absolute;left:200px;top:1500px;width:40px;height:30px"></div>
 <div id="hidden" style="display:none;width:10px;height:10px"></div><span id="empty"></span>
+<div style="position:absolute;top:0;opacity:0"><div id="faded" style="width:10px;height:10px"></div></div>
 <i class="dup" style="position:absolute;top:0">x</i><i class="dup" style="position:absolute;top:0">y</i></body></html>`;
 
 const DONE = `<!doctype html><html><head><title>Done</title></head><body><h1>Done</h1></body></html>`;
@@ -199,11 +200,11 @@ test("measure gives each selector's rect on the PNG in CSS pixels, null for one 
   const { base } = await fixture(t);
   const dir = outDir(t);
   const url = `${base}/marks`;
-  const measure = ["#a", "#b", "#nope", "#hidden", "#empty", "[[bad", ".dup"];
+  const measure = ["#a", "#b", "#nope", "#hidden", "#empty", "[[bad", ".dup", "#faded"];
   const a = { x: 10, y: 20, w: 100, h: 50 };
   const b = { x: 200, y: 1500, w: 40, h: 30 };
   const whole = await capture({ url, out: path.join(dir, "f.png"), viewport: "desktop", fullPage: true, measure });
-  assert.deepEqual([whole.height, whole.rects], [2000, [a, b, null, null, null, null, null]]);
+  assert.deepEqual([whole.height, whole.rects], [2000, [a, b, null, null, null, null, null, null]]);
   const phone = await capture({ url, out: path.join(dir, "m.png"), viewport: "mobile", measure: ["#a"] });
   assert.deepEqual([phone.width, phone.rects], [1170, [a]]);
   const plain = await capture({ url, out: path.join(dir, "p.png"), viewport: "desktop" });

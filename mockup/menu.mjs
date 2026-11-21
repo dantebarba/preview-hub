@@ -367,14 +367,19 @@ export function route(url, app) {
     return { url: `${pathname.replace(/%2B/gi, "+").replace(/%40/gi, "@")}${search}` };
   }
   if (pathname.startsWith("/app/")) return { url: `/@fs${app}${pathname.slice(4)}${search}` };
-  const page = (at) => {
-    const slug = SLUG.exec(at ?? "");
-    const file = slug && !path.extname(slug[1]) ? pageFile(slug[1]) : null;
-    return file && existsSync(path.join(scratchDir(app), file)) ? file : null;
-  };
-  if (page(pageOfLive(pathname))) return { live: true };
-  const file = page(pathname);
+  if (pageAt(scratchDir(app), pageOfLive(pathname))) return { live: true };
+  const file = pageAt(scratchDir(app), pathname);
   return file ? { url: `/${file}${search}` } : null;
+}
+
+/**
+ * The page of the scratch dir `scratch` that the path `at` (`/<slug>`, its query and hash left
+ * out) is served from, as `pages/<slug>.html`, or null when no page is there.
+ */
+function pageAt(scratch, at) {
+  const slug = SLUG.exec((at ?? "").split(/[?#]/)[0]);
+  const file = slug && !path.extname(slug[1]) ? pageFile(slug[1]) : null;
+  return file && existsSync(path.join(scratch, file)) ? file : null;
 }
 
 /**
@@ -687,9 +692,9 @@ async function postEvent(req, res, { scratch, stream, who }) {
  * `{x, y}` and `box` `{x, y, w, h}` in CSS pixels, the box from the top left of the viewport;
  * the viewport at most `FREEZE_VIEWPORT.side` CSS pixels a side at a pixel ratio of
  * `FREEZE_VIEWPORT.dpr`; `elements` the marked `{selector, text, html}`, each text and html
- * cut to the target's limits and the list to its first 20, `truncated` then true. The rest is
- * checked as the target its thread carries (see `targetProblem` of the store), so a problem
- * is named by the target's field. Throws a 400 refusal naming the first problem.
+ * cut to the target's limits and the list to its first `TARGET_LIMITS.elements`, `truncated`
+ * then true. The rest is checked as the target its thread carries (see `targetProblem` of the
+ * store), so a problem is named by the target's field. Throws a 400 refusal naming the first problem.
  */
 export function freezeRequest(body) {
   const fields = ["path", "viewport", "tags", "scroll", "box", "elements", "truncated"];
@@ -783,7 +788,7 @@ async function reusableStill(scratch, { page, key, vp, marked }) {
  */
 export function liveName(scratch, page) {
   const slug = page.slice(1).toLowerCase().replace(/[^a-z0-9._]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
-  const name = `live-${slug || "index"}`.slice(0, MAX_NAME_LENGTH);
+  const name = `live-${slug}`.slice(0, MAX_NAME_LENGTH);
   const taken = stills(scratch).some((s) => s.name.toLowerCase() === name && s.source.path !== page);
   const hash = createHash("sha256").update(page).digest("hex").slice(0, 6);
   return taken ? `${name.slice(0, MAX_NAME_LENGTH - hash.length - 1)}-${hash}` : name;
@@ -887,7 +892,7 @@ function oneAtATime(fn) {
  * what the target's limits let its path and elements take (413), and a guest's needs a name in
  * `author` (400), since it writes a still. A bad request is a 400; a shot that failed a 500; a
  * freeze while `MAX_FREEZES_WAITING` are in hand, one shooting and the rest waiting, a 503.
- * A folder source has no pages to mark (404). The page is shot from this server, at
+ * A folder source has no pages to mark, and a path that is no page of the mockup none (404). The page is shot from this server, at
  * `127.0.0.1` on the port the request came to.
  */
 async function postFreeze(req, res, { scratch, stream, who, shoot }) {
@@ -898,6 +903,7 @@ async function postFreeze(req, res, { scratch, stream, who, shoot }) {
     authorOf(who, given);
     if (typeof scratch !== "string") throw refusal(404, "a folder has no pages to mark");
     request = freezeRequest(fields);
+    if (!pageAt(scratch, request.page)) throw refusal(404, `no page of the mockup at ${request.page}`);
   } catch (e) {
     return sendJson(res, e.status ?? 400, { error: e.message });
   }

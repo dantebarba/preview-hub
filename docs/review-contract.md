@@ -455,7 +455,7 @@ It is posted as an event is: JSON only (`415`), from the page's own origin only 
 most 64 KiB besides what the target's limits let its path and elements take, three bytes a
 character (`413`), and a guest's needs a name (`400`, `name required`; see
 [Reviewers](#reviewers)). A bad field is a `400`, named as the target's field when the target
-has it; a shot that failed a `500`; a folder source, which has no pages, a `404`. Freezes are
+has it; a shot that failed a `500`; a folder source, which has no pages, or a `path` that is no page of the mockup (`/<slug>` served from `pages/<slug>.html`) a `404`. Freezes are
 shot one at a time, and one posted while four are in hand (one shooting, three waiting their
 turn) is a `503`. The runtime then shoots `path` from scratch at that
 viewport and tags in its headless browser, measuring each element's selector on the shot, and
@@ -470,13 +470,14 @@ keeps the shot as a revision of a still, under `stills/.lock` as any still is ad
 2. **Otherwise `live-<slug>`**, made with that variant and shot whole: the slug is the path
    with its query, lowercased, each run of characters other than letters, digits, `.` and `_`
    one `-`, those three trimmed from its ends, the name cut to 100 characters
-   (`/checkout?step=2` is `live-checkout-step-2`, `/` is `live-index`). A name a still
+   (`/checkout?step=2` is `live-checkout-step-2`). A name a still
    of another page already has ends with `-` and six hex characters of the SHA-256 of `path`.
    Its title is `<path> (live)`.
 
 It answers `200` with `{still, variant, rev, anchor, state, target}`: the revision the remark
 goes on, its anchor and state, and the `target` its `thread` event carries. A selector is
-found when it matches exactly one visible element with an area on the shot; one that matches
+found when it matches exactly one visible element with an area on the shot, an element left
+with no opacity being hidden as the live shell holds it; one that matches
 none, more than one (which was meant is not known) or does not parse is not. When every
 selector is found on the shot, the anchor is the region around their elements on it and the
 state `reproduced`; otherwise, or with no elements, the anchor is the box sent, moved by the

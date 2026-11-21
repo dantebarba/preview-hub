@@ -801,11 +801,17 @@ function shooter() {
 }
 
 /**
- * The `/_review/` routes on `dir` (a scratch dir or a folder source), served for one test with
- * `shot.shoot` as it is at each request (see `shooter`), as `shot.who`. Returns `{ post, fetchAt }`: `post(body, headers)` posts JSON to
- * `/_review/freeze`.
+ * The `/_review/` routes on `dir` (a scratch dir, given the pages in `FROZEN_PAGES`, or a folder
+ * source), served for one test with `shot.shoot` as it is at each request (see `shooter`), as
+ * `shot.who`. Returns `{ post, fetchAt }`: `post(body, headers)` posts JSON to `/_review/freeze`.
  */
 async function reviewServer(t, dir, shot) {
+  if (typeof dir === "string") {
+    for (const page of FROZEN_PAGES) {
+      mkdirSync(path.join(dir, "pages", path.dirname(page)), { recursive: true });
+      writeFileSync(path.join(dir, "pages", `${page}.html`), "<!doctype html>");
+    }
+  }
   const { who = { name: "Dante", via: "tailnet" } } = shot;
   const stream = { notify() {}, push() {} };
   const shoot = (opts) => shot.shoot(opts);
@@ -827,6 +833,7 @@ function rounded(anchor) {
   return [anchor.x, anchor.y, anchor.w, anchor.h].map((v) => Number(v.toFixed(6)));
 }
 
+const FROZEN_PAGES = ["checkout", "Check_out/Pay", "a-b"];
 const ELEMENT = { selector: "#pay", text: "Pay now", html: "<button id=pay>Pay now</button>" };
 const FREEZE = {
   path: "/checkout",
@@ -987,6 +994,9 @@ test("a freeze follows the rules of posting an event: origin, JSON, a guest's na
     { ...FREEZE, extra: 1 },
   ];
   for (const body of bad) assert.equal((await post(body)).status, 400, JSON.stringify(body));
+  for (const page of ["/", "/stills", "/missing", "/app/package.json", "/checkout.html"]) {
+    assert.equal((await post({ ...FREEZE, path: page })).status, 404, page);
+  }
   assert.equal(shot.calls.length, 0);
   shot.fail = "Chromium is gone";
   const failed = await post(FREEZE);

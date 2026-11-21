@@ -43,6 +43,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   applyThread,
   applyWorking,
+  isPagePath,
   markOf,
   presetSize,
   reviewerOf,
@@ -72,7 +73,8 @@ export const MAX_NAME_LENGTH = 100;
 /** The most tags a variant may have. */
 export const MAX_TAGS = 16;
 
-const NAME = new RegExp(`^[A-Za-z0-9][\\w.-]{0,${MAX_NAME_LENGTH - 1}}$`);
+/** A still's name: a letter or digit, then letters, digits, `_`, `.` or `-`. */
+export const STILL_NAME = new RegExp(`^[A-Za-z0-9][\\w.-]{0,${MAX_NAME_LENGTH - 1}}$`);
 const ID = /^[\w-]{1,64}$/;
 const SIZE = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/;
 const CUSTOM = /^([1-9]\d{0,4})x([1-9]\d{0,4})(?:@([1-9](?:\.\d{1,2})?))?(\+touch)?$/;
@@ -154,7 +156,7 @@ function isRev(v) {
 
 /** Why `name` is not a valid still name, or null when it is. */
 function nameProblem(name) {
-  if (typeof name !== "string" || !NAME.test(name)) {
+  if (typeof name !== "string" || !STILL_NAME.test(name)) {
     return "a still name is 1-100 letters, digits, '.', '_' or '-', starting with a letter or digit";
   }
   return null;
@@ -275,17 +277,6 @@ function isOffset(v) {
   return typeof v === "number" && Number.isFinite(v) && v >= 0;
 }
 
-/**
- * True for a page path of the mockup: starts with one `/` not followed by another `/` or a `\`
- * (which a URL parser reads as another host), no space or control character, and resolves on
- * the host it is given.
- */
-export function isPagePath(v) {
-  if (typeof v !== "string" || v.length > TARGET_LIMITS.page) return false;
-  if (!/^\/(?![/\\])[^\s\0-\x1f\x7f]*$/.test(v)) return false;
-  const base = "http://mockup.invalid";
-  return new URL(v, base).origin === base;
-}
 
 /** Why `element`, a marked element `{selector, text, html}`, is not a valid one, or null. */
 function elementProblem(element) {
