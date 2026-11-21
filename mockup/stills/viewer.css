@@ -293,8 +293,34 @@ header .working { margin: 0; white-space: nowrap; }
 .live #toast a, .live #toast button { flex: none; }
 #spin { flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 2px solid #555; border-top-color: #eee; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.live header .lister { font-size: 14px; }
+.tally:not(:empty) { margin-left: 4px; padding: 0 6px; border-radius: 9px; background: #e11d48; color: #fff; font-size: 11px; font-weight: 600; }
+#side { width: 340px; flex: none; display: flex; flex-direction: column; background: #1b1b1f; border-left: 1px solid #333; }
+#shut { display: none; align-self: flex-end; border-color: transparent; background: none; }
+#cards { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+#cards:empty { display: none; }
+#cards .thread { flex: none; }
+#none { margin: 12px; color: #999; }
+#side .head .by { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#side .by.agent { color: #7dd3fc; }
+#side time { flex: none; color: #999; font-size: 12px; }
+#side .who { display: flex; align-items: baseline; gap: 8px; }
+#side .entries:empty { display: none; }
+#side .answer { display: block; margin-top: 8px; resize: none; cursor: auto; }
+#side .foot a { margin-left: auto; }
+#side .failed { border-color: #e11d48; color: #fda4af; }
+#pins { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+#pins button { position: absolute; z-index: 1; translate: -50% -50%; width: 24px; height: 24px; min-height: 0; box-sizing: border-box; padding: 0; display: grid; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #e11d48; color: #fff; font-size: 12px; font-weight: 600; line-height: 1; box-shadow: 0 1px 4px #000a; pointer-events: auto; }
+#pins button::before { content: ""; position: absolute; inset: -8px; }
+#pins button[aria-pressed="true"] { box-shadow: 0 0 0 3px #e11d48; }
+#pins i { position: absolute; box-sizing: border-box; border: 2px solid #f43f5e; border-radius: 3px; background: rgba(244, 63, 94, .12); }
 @media (max-width: 599.98px), (pointer: coarse) {
-  .live #marking { display: none; }
+  .live #marking, .live #listing { display: none; }
+  .live #side { position: fixed; z-index: 4; left: 0; right: 0; bottom: var(--keyboard, 0px); width: auto; max-height: 60dvh; border: 0; border-top: 1px solid #555; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; padding-bottom: max(0px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); }
+  .live #shut { display: grid; place-items: center; min-width: 44px; height: 44px; }
+  .live #side .foot button, .live #side .foot a { min-height: 44px; }
+  .live #side .foot a { display: grid; place-items: center; }
+  .live #sheet { min-height: 48px; font-size: 16px; }
   .live #composer { left: 0; right: 0; top: auto; bottom: var(--keyboard, 0px); width: auto; padding: 10px 12px max(10px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); border-width: 1px 0 0; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px #000c; }
   .live #composer button, .live #toast button, .live #toast a { min-height: 44px; }
   .live #toast a { display: grid; place-items: center; padding: 0 6px; }
@@ -303,7 +329,7 @@ header .working { margin: 0; white-space: nowrap; }
   .live #who-form { width: auto; border-width: 1px 0 0; border-radius: 14px 14px 0 0; padding-bottom: max(16px, env(safe-area-inset-bottom) - var(--keyboard, 0px)); }
   .live #who-close { min-width: 44px; height: 44px; top: 4px; right: 4px; }
   .live #continue { min-height: 48px; font-size: 16px; }
-  .live #dock { display: flex; justify-content: center; padding: 6px 12px calc(6px + env(safe-area-inset-bottom)); background: #1b1b1f; border-top: 1px solid #333; }
+  .live #dock { display: flex; justify-content: center; gap: 8px; padding: 6px 12px calc(6px + env(safe-area-inset-bottom)); background: #1b1b1f; border-top: 1px solid #333; }
   .live #arm { min-width: 180px; min-height: 48px; font-size: 16px; }
   .live #pick button { min-height: 44px; }
   .live #crumbs { flex-basis: 100%; }

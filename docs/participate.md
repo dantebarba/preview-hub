@@ -252,7 +252,11 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   the runtime shoots the snapshot in the background and posts the thread `id` with its
   `target`, or says `remark-failed` on the event stream (see the
   [review contract](review-contract.md#live-marks)). `/stills#thread=<id>` opens that thread
-  in the viewer.
+  in the viewer. The shell reads `GET /_review/threads` once and follows `GET /_review/events`
+  from its load on: its Remarks panel lists the threads whose `target.page` is the page on
+  screen and posts a `reply`, `resolve` or `reopen` to `POST /_review/events` as the viewer
+  does, and each open one has a numbered pin over the element its first stored selector
+  names, drawn on the shell and never put in the page.
 - `/<slug>`: `.mockup/pages/<slug>.html`. A page links the project's files under `/app/`
   (`/app/web/styles.css`) and may load an entry module, `pages/<slug>.{js,jsx,ts,tsx}`,
   that imports real components. Bare imports resolve from the project's `node_modules`;

@@ -13,16 +13,25 @@
     <span id="devices" class="seg" role="group" aria-label="Device"></span>
     <span id="size"></span>
     <button id="marking" class="marker" aria-pressed="false" aria-keyshortcuts="m">Mark</button>
+    <button id="listing" class="lister" aria-pressed="false" aria-controls="side">Remarks <span class="tally"></span></button>
   </header>
-  <main>
-    <div id="screen">
-      <iframe id="frame" aria-label="The mockup page"></iframe>
-      <div id="layer" hidden>
-        <i id="hover" hidden></i>
-        <div id="draft" class="box" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+  <div id="work">
+    <main>
+      <div id="screen">
+        <iframe id="frame" aria-label="The mockup page"></iframe>
+        <div id="pins"></div>
+        <div id="layer" hidden>
+          <i id="hover" hidden></i>
+          <div id="draft" class="box" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+        </div>
       </div>
-    </div>
-  </main>
+    </main>
+    <aside id="side" aria-label="Remarks on this page" hidden>
+      <button type="button" id="shut" class="x" aria-label="Close"></button>
+      <div id="cards"></div>
+      <p id="none" hidden>No remarks on this page</p>
+    </aside>
+  </div>
   <div id="pick" hidden>
     <div id="crumbs" role="group" aria-label="Widen the mark to a parent" hidden></div>
     <span id="found" role="status"></span>
@@ -31,6 +40,7 @@
   </div>
   <div id="dock">
     <button id="arm" class="marker" aria-pressed="false">Mark</button>
+    <button id="sheet" class="lister" aria-pressed="false" aria-controls="side">Remarks <span class="tally"></span></button>
   </div>
   <form id="composer" aria-label="Remark" hidden>
     <textarea id="say" rows="3" placeholder="What is wrong here?"></textarea>
