@@ -1535,9 +1535,11 @@ function setDraft(anchor, fresh = false) {
 /**
  * Open the draft the live shell left in this tab's session storage (see `liveDraft`), once: go
  * to the still, variant and revision its shot went on, with its box in place and the composer
- * open, as soon as the image is there. Nothing without one, or in a read-only folder.
+ * open, as soon as the image is there. Nothing without one, or in a read-only folder; with no
+ * stills read, as when they could not be, the draft stays for a reload to open.
  */
 function takeLiveDraft() {
+  if (!state.stills.length) return;
   let draft;
   try {
     draft = liveDraft(sessionStorage.getItem(LIVE_DRAFT_KEY));

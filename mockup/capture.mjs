@@ -51,7 +51,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { addStill, isObject, parseTags, parseViewport, variantKey } from "./review.mjs";
+import { addStill, isObject, MAX_NAME_LENGTH, parseTags, parseViewport, variantKey } from "./review.mjs";
 
 const CHROMES = [
   "/usr/bin/chromium-browser",
@@ -71,7 +71,7 @@ const DEFAULT_PARALLEL = 4;
 const MAX_HEIGHT = 6000;
 const COUNTED = new Set(["XHR", "Fetch"]);
 const MODAL = "[role=dialog], [role=alertdialog], [aria-modal=true], dialog[open]";
-const NAME = /^[A-Za-z0-9][\w.-]{0,99}$/;
+const NAME = new RegExp(`^[A-Za-z0-9][\\w.-]{0,${MAX_NAME_LENGTH - 1}}$`);
 
 const KEYS = {
   Enter: { code: "Enter", keyCode: 13, text: "\r" },

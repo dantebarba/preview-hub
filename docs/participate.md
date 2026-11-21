@@ -238,10 +238,10 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   every new one within about a second, plus an event named `stills` when the stills change;
   `POST /_review/events` appends one event from a JSON body and answers 201 with the stored
   one (415 unless `application/json`, 403 from another origin, 400 for an event the store
-  refuses, 413 for an event over 64 KiB). The server sets `author` from the reviewer: the
-  Tailscale user, else the guest's name, refusing a guest write with no name (`400 name
-  required`), a guest's `resolve` or `reopen` (403) and any `working` or `idle` (403), which
-  only the agent's CLI writes. A `thread` on a still may carry `annotated`, the
+  refuses, 413 for an event over 64 KiB, not counting its `target`). The server sets `author`
+  from the reviewer: the Tailscale user, else the guest's name, refusing a guest write with no
+  name (`400 name required`), a guest's `resolve` or `reopen` (403) and any `working` or
+  `idle` (403), which only the agent's CLI writes. A `thread` on a still may carry `annotated`, the
   still with its mark drawn as a `data:image/png;base64,` URL of at most 8 MiB, kept as
   `review/annotated/<id>.png` and not stored in the event.
 - `/live/<slug>`: the live shell around the page `/<slug>`, when that page exists: the page

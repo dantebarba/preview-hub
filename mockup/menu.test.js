@@ -967,7 +967,7 @@ test("a freeze follows the rules of posting an event: origin, JSON, a guest's na
   assert.equal((await post(FREEZE, { "Content-Type": "text/plain" })).status, 415);
   assert.equal((await post("{")).status, 400);
   assert.equal((await post("[]")).status, 400);
-  assert.equal((await post({ ...FREEZE, elements: Array(2000).fill(ELEMENT) })).status, 413);
+  assert.equal((await post({ ...FREEZE, elements: Array(4000).fill(ELEMENT) })).status, 413);
   assert.equal((await fetch(`${base}/_review/freeze`)).status, 405);
   const bad = [
     { ...FREEZE, path: "//evil.example/x" },

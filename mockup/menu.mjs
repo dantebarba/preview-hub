@@ -95,7 +95,10 @@ const REV_IMAGE = /^\/stills\/[^/]+\/(?:[^/]+\/)?\d+\.png$/;
 const SINCE = /^\d{1,15}$/;
 const JSON_TYPE = "application/json";
 const MAX_POST_BYTES = 64 * 1024;
-const MAX_UPLOAD_BYTES = MAX_POST_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
+const ELEMENT_CHARS = TARGET_LIMITS.selector + TARGET_LIMITS.text + TARGET_LIMITS.html;
+const MAX_TARGET_BYTES = 3 * (TARGET_LIMITS.page + TARGET_LIMITS.elements * ELEMENT_CHARS);
+const MAX_UPLOAD_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
+const MAX_FREEZE_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES;
 const POLL_MS = 1000;
 const PING_TICKS = 20;
 const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
@@ -617,7 +620,9 @@ async function jsonPost(req, limit, what) {
  * A `thread` on a still may carry `annotated`, which is not part of the event: the still with
  * the mark drawn, checked before the event is stored (see `annotatedPng`) and kept under the
  * thread's id once it is. A PNG that could not be written leaves the remark stored without it.
- * The rest of the body is at most 64 KiB (413), as it is without the PNG.
+ * The rest of the body is at most 64 KiB (413), as it is without the PNG; a thread's `target`
+ * is not counted in it, since the store holds it to the target's limits, which are characters
+ * and so up to three bytes each.
  */
 async function postEvent(req, res, { scratch, stream, who }) {
   let event;
@@ -628,7 +633,9 @@ async function postEvent(req, res, { scratch, stream, who }) {
     return sendJson(res, e.status ?? 400, { error: e.message });
   }
   const { annotated, author: given, ...fields } = event;
-  if (size - (typeof annotated === "string" ? annotated.length : 0) > MAX_POST_BYTES) {
+  const marked = fields.target === undefined ? 0 : Buffer.byteLength(JSON.stringify(fields.target));
+  const drawn = typeof annotated === "string" ? annotated.length : 0;
+  if (size - drawn - Math.min(marked, MAX_TARGET_BYTES) > MAX_POST_BYTES) {
     return sendJson(res, 413, { error: `an event must be at most ${MAX_POST_BYTES} bytes` });
   }
   if (fields.type === "working" || fields.type === "idle") {
@@ -861,7 +868,7 @@ let waiting = 0;
 
 /**
  * Run `fn` once every freeze before it has ended, so one Chromium shoots at a time. Throws a
- * 503 refusal when `MAX_FREEZES_WAITING` freezes are queued already.
+ * 503 refusal when `MAX_FREEZES_WAITING` freezes are in hand already, the one shooting among them.
  */
 function oneAtATime(fn) {
   if (waiting >= MAX_FREEZES_WAITING) throw refusal(503, "busy shooting other marks; try again shortly");
@@ -876,16 +883,17 @@ function oneAtATime(fn) {
 /**
  * `POST /_review/freeze`: freeze the live mark the JSON body asks for (see `freezeRequest` and
  * `freeze`) and answer 200 with where its remark goes. It takes what `POST /_review/events`
- * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB (413),
- * and a guest's needs a name in `author` (400), since it writes a still. A bad request is a
- * 400; a shot that failed a 500; a freeze while `MAX_FREEZES_WAITING` wait their turn a 503.
+ * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB besides
+ * what the target's limits let its path and elements take (413), and a guest's needs a name in
+ * `author` (400), since it writes a still. A bad request is a 400; a shot that failed a 500; a
+ * freeze while `MAX_FREEZES_WAITING` are in hand, one shooting and the rest waiting, a 503.
  * A folder source has no pages to mark (404). The page is shot from this server, at
  * `127.0.0.1` on the port the request came to.
  */
 async function postFreeze(req, res, { scratch, stream, who, shoot }) {
   let request;
   try {
-    const { value } = await jsonPost(req, MAX_POST_BYTES, "a freeze");
+    const { value } = await jsonPost(req, MAX_FREEZE_BYTES, "a freeze");
     const { author: given, ...fields } = value;
     authorOf(who, given);
     if (typeof scratch !== "string") throw refusal(404, "a folder has no pages to mark");

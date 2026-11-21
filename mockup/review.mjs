@@ -44,12 +44,12 @@ import {
   applyThread,
   applyWorking,
   markOf,
+  presetSize,
   reviewerOf,
   TARGET_LIMITS,
   viewportOf,
   workingAt,
 } from "./stills/state.js";
-
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
@@ -96,10 +96,10 @@ const LOCK_STALE_MS = 10000;
  * `mobile`, which means touch, a mobile user agent and a phone's viewport handling.
  */
 const VIEWPORTS = {
-  mobile: { width: 390, height: 844, dpr: 3, mobile: true },
-  "mobile-s": { width: 375, height: 812, dpr: 3, mobile: true },
-  tablet: { width: 820, height: 1180, dpr: 2, mobile: true },
-  desktop: { width: 1440, height: 900, dpr: 1, mobile: false },
+  mobile: { ...presetSize("mobile"), dpr: 3, mobile: true },
+  "mobile-s": { ...presetSize("mobile-s"), dpr: 3, mobile: true },
+  tablet: { ...presetSize("tablet"), dpr: 2, mobile: true },
+  desktop: { ...presetSize("desktop"), dpr: 1, mobile: false },
 };
 
 const ALIASES = { web: "desktop" };

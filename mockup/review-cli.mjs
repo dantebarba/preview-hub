@@ -162,7 +162,7 @@ function targetLines(target) {
     lines.push(`element ${e.selector}  ${quote(e.text)}`);
     if (e.html.trim()) lines.push(`        ${e.html.trim().replace(/\s*\n\s*/g, " ")}`);
   }
-  if (target.truncated) lines.push("element (more were inside the box; the first 20 are kept)");
+  if (target.truncated) lines.push("element (more were marked than are kept here)");
   return lines;
 }
 
