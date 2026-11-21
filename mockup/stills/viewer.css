@@ -76,7 +76,6 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 #draft i[data-corner="ne"], #draft i[data-corner="sw"] { cursor: nesw-resize; }
 #composer { position: absolute; z-index: 3; left: clamp(0px, var(--x), calc(100% - 300px)); top: calc(var(--y) + 20px); width: 300px; box-sizing: border-box; padding: 10px; background: #1b1b1f; border: 1px solid #555; border-radius: 10px; box-shadow: 0 8px 24px #000a; line-height: 1.4; user-select: text; -webkit-user-select: text; }
 #where { margin-right: auto; color: #999; font-size: 12px; }
-#unshown { margin: 8px 0 0; color: #fcd34d; font-size: 12px; }
 #panel { width: 340px; flex: none; display: flex; flex-direction: column; background: #1b1b1f; border-left: 1px solid #333; }
 #panel-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #333; }
 #close { font-size: 18px; line-height: 1; padding: 4px 10px; }
