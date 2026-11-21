@@ -266,9 +266,16 @@ function isOffset(v) {
   return typeof v === "number" && Number.isFinite(v) && v >= 0;
 }
 
-/** True for a page path of the mockup: starts with one `/`, no space or control character. */
+/**
+ * True for a page path of the mockup: starts with one `/` not followed by another `/` or a `\`
+ * (which a URL parser reads as another host), no space or control character, and resolves on
+ * the host it is given.
+ */
 export function isPagePath(v) {
-  return typeof v === "string" && v.length <= TARGET_LIMITS.page && /^\/(?!\/)[^\s\0-\x1f\x7f]*$/.test(v);
+  if (typeof v !== "string" || v.length > TARGET_LIMITS.page) return false;
+  if (!/^\/(?![/\\])[^\s\0-\x1f\x7f]*$/.test(v)) return false;
+  const base = "http://mockup.invalid";
+  return new URL(v, base).origin === base;
 }
 
 /** Why `element`, a marked element `{selector, text, html}`, is not a valid one, or null. */
@@ -482,7 +489,8 @@ export function stills(dir) {
  * `stills/<name>/<key>/<n>.png`, n one past the variant's last revision (1 for a new one), and
  * recorded in the manifest, written to a temp file and renamed over it; the still's entry is
  * written in v2 shape, the others as they were. A PNG whose bytes equal the variant's latest
- * revision adds no revision, so the reviewed marks on it hold. `title` and `source` (the page
+ * revision adds no revision, so the reviewed marks on it hold, and leaves the manifest
+ * untouched when nothing else of the entry changed either. `title` and `source` (the page
  * path shot) update the entry when given, `fullPage` the variant's viewport. Returns `{ entry,
  * variant, rev, unchanged }`, the still's entry, the variant, the revision added (or the latest
  * one, when `unchanged`) and whether the image was the same as that one.
@@ -539,13 +547,16 @@ export async function addStill(dir, { file, name, title, source, viewport = "des
       rev = { n, file: rel, at: new Date().toISOString() };
       variant.revs.push(rev);
     }
-    const tmp = sideFile(manifestFile, "tmp");
-    try {
-      writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
-      renameSync(tmp, manifestFile);
-    } catch (e) {
-      rmSync(tmp, { force: true });
-      throw e;
+    const text = `${JSON.stringify(manifest, null, 2)}\n`;
+    if (!unchanged || !existsSync(manifestFile) || readFileSync(manifestFile, "utf8") !== text) {
+      const tmp = sideFile(manifestFile, "tmp");
+      try {
+        writeFileSync(tmp, text);
+        renameSync(tmp, manifestFile);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        throw e;
+      }
     }
     return { entry, variant, rev, unchanged };
   });

@@ -304,7 +304,7 @@ for it (see [Live marks](#live-marks)); the target is what the reviewer pointed 
 
 | Field       | Meaning |
 | ----------- | ------- |
-| `page`      | The page's path on the mockup, with its query: starts with one `/`, no space, at most 2000 characters. |
+| `page`      | The page's path on the mockup, with its query: starts with one `/` not followed by `/` or `\`, no space, at most 2000 characters. |
 | `elements`  | Up to 20 marked elements, `{selector, text, html}`: a CSS selector of the element (1 to 500 characters), its visible text (at most 200) and a cut of its HTML (at most 1000). May be empty. |
 | `truncated` | Optional: `true` when more elements were marked than `elements` keeps. |
 | `viewport`  | The viewport the page was seen at, a [preset or custom viewport](#viewports). |

@@ -695,11 +695,13 @@ function shooter() {
 
 /**
  * The `/_review/` routes on `dir` (a scratch dir or a folder source), served for one test with
- * `shoot`, as `who`. Returns `{ post, fetchAt }`: `post(body, headers)` posts JSON to
+ * `shot.shoot` as it is at each request (see `shooter`), as `shot.who`. Returns `{ post, fetchAt }`: `post(body, headers)` posts JSON to
  * `/_review/freeze`.
  */
-async function reviewServer(t, dir, { shoot, who = { name: "Dante", via: "tailnet" } }) {
+async function reviewServer(t, dir, shot) {
+  const { who = { name: "Dante", via: "tailnet" } } = shot;
   const stream = { notify() {}, push() {} };
+  const shoot = (opts) => shot.shoot(opts);
   const server = createServer((req, res) => handleReview(req, res, { scratch: dir, stream, who, shoot }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -796,6 +798,34 @@ test("a freeze of a page without a still of that screen makes live-<slug>, shot 
   assert.deepEqual([unread.still, unread.variant], ["live-checkout", "mobile+dark"]);
 });
 
+test("a freeze shoots a kept still at the maxHeight shots.mjs gives it, and waits its turn", async (t) => {
+  const dir = scratch(t, { "shot.png": Buffer.concat([PNG, Buffer.from("a")]) });
+  await addStill(dir, { file: path.join(dir, "shot.png"), name: "home", source: "/checkout", viewport: "mobile" });
+  writeFileSync(
+    path.join(dir, "shots.mjs"),
+    'export default { defaults: { maxHeight: 3000 }, shots: [{ name: "home", path: "/checkout" }] };\n'
+  );
+  const shot = shooter();
+  const { post } = await reviewServer(t, dir, shot);
+  assert.equal((await post(FREEZE)).status, 200);
+  assert.equal(shot.calls[0].maxHeight, 3000);
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const shoot = shot.shoot;
+  shot.shoot = async (opts) => {
+    await held;
+    return shoot(opts);
+  };
+  const queued = Array.from({ length: 4 }, () => post(FREEZE));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const busy = await post(FREEZE);
+  assert.equal(busy.status, 503);
+  release();
+  assert.deepEqual((await Promise.all(queued)).map((r) => r.status), [200, 200, 200, 200]);
+});
+
 test("a live still's name another page has already ends with a hash of the page", async (t) => {
   const dir = scratch(t, { "shot.png": Buffer.concat([PNG, Buffer.from("a")]) });
   await addStill(dir, { file: path.join(dir, "shot.png"), name: "live-a-b", source: "/a/b", viewport: "desktop" });
@@ -835,6 +865,10 @@ test("a freeze follows the rules of posting an event: origin, JSON, a guest's na
   const bad = [
     { ...FREEZE, path: "//evil.example/x" },
     { ...FREEZE, path: "checkout" },
+    { ...FREEZE, path: "/\\evil.example/x" },
+    { ...FREEZE, viewport: "5000x900" },
+    { ...FREEZE, viewport: "390x844@5" },
+    { ...FREEZE, tags: Array.from({ length: 17 }, (_, i) => `t${i}`) },
     { ...FREEZE, viewport: "huge" },
     { ...FREEZE, viewport: { width: 390 } },
     { ...FREEZE, tags: ["dark", "light"] },

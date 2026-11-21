@@ -28,9 +28,9 @@
  * With a dialog open (`[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`,
  * `dialog[open]`) the viewport is shot as is and the still is not a full page.
  *
- * `capture` can also measure a list of CSS selectors on the shot it takes: where the first
- * visible element each one matches is on the PNG, or null for one not on the page. The live
- * mark's freeze (`menu.mjs`) places a remark's box by them.
+ * `capture` can also measure a list of CSS selectors on the shot it takes: where the one
+ * visible element each one matches is on the PNG, or null for one not on the page or on it
+ * more than once. The live mark's freeze (`menu.mjs`) places a remark's box by them.
  *
  * A batch runs the shots of a recipe (see `loadRecipe`) in one Chromium, `--parallel` tabs at
  * a time (default 4), each in a browser context of its own so cookies and storage never leak
@@ -347,18 +347,19 @@ function pageMeasure(kit, modal) {
 
 /**
  * In the page: where each of `selectors` is on the screenshot, `{x, y, w, h}` in CSS pixels
- * from its top left, for the first visible element it matches; null for a selector that
- * matches none, does not parse, or matches only an element with no area.
+ * from its top left, for the one visible element it matches; null for a selector that matches
+ * none, or more than one so which was meant is not known, does not parse, or matches only an
+ * element with no area.
  */
 function pageRects(kit, selectors) {
   return selectors.map((selector) => {
-    let el;
+    let shown;
     try {
-      el = kit.$$(selector).find(kit.shown);
+      shown = kit.$$(selector).filter(kit.shown);
     } catch {
       return null;
     }
-    const r = el?.getBoundingClientRect();
+    const r = shown.length === 1 ? shown[0].getBoundingClientRect() : null;
     return r && r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
   });
 }
@@ -712,7 +713,7 @@ async function shootOne(browser, { url, vp, tags, fullPage, maxHeight, measure, 
  * `{ file, width, height, fullPage }`, in pixels, `fullPage` false when a dialog was open.
  * With `measure`, a list of CSS selectors, it also has `rects`: where each one is on the PNG,
  * `{x, y, w, h}` in CSS pixels (a pixel of the PNG is one over the pixel ratio), or null for
- * a selector that is not on the page (see `pageRects`).
+ * a selector that is not on the page or matches more than one element (see `pageRects`).
  */
 export async function capture({
   url,

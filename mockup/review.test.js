@@ -15,6 +15,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -178,6 +179,19 @@ test("addStill adds no revision for an image equal to the variant's latest, so i
   assert.deepEqual([back.unchanged, back.rev.n], [false, 3]);
 });
 
+test("an unchanged image leaves the manifest as it was, unless the entry changed", async (t) => {
+  const dir = scratch(t);
+  const add = (opts) => addStill(dir, { file: png(dir, "a"), name: "home", source: "/", ...opts });
+  await add({});
+  const manifest = path.join(dir, "stills/manifest.json");
+  const before = statSync(manifest).ino;
+  assert.equal((await add({})).unchanged, true);
+  assert.equal(statSync(manifest).ino, before);
+  await add({ title: "Home" });
+  assert.notEqual(statSync(manifest).ino, before);
+  assert.equal(stills(dir)[0].title, "Home");
+});
+
 test("addStill rejects bad names, viewports, tags and files that are not PNGs", async (t) => {
   const dir = scratch(t);
   await assert.rejects(addStill(dir, { file: png(dir, "a"), name: "../x" }), /still name/);
@@ -331,6 +345,7 @@ test("a thread carries a target from the live page, checked, and threads fold it
   const bad = [
     [{ ...target, page: "checkout" }, /'target.page'/],
     [{ ...target, page: "//evil.example/x" }, /'target.page'/],
+    [{ ...target, page: "/\\evil.example/x" }, /'target.page'/],
     [{ ...target, page: "/a b" }, /'target.page'/],
     [{ ...target, elements: Array(21).fill(element) }, /at most 20 elements/],
     [{ ...target, elements: [{ selector: "a" }] }, /'target.elements\[0\]': must be/],
