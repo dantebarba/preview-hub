@@ -911,10 +911,14 @@ function reserveId(scratch) {
   return id;
 }
 
-/** Run `job` once every remark before it has ended, so one Chromium shoots at a time. */
+/**
+ * Run `job` once every remark before it has ended, so one Chromium shoots at a time. A job that
+ * rejects is logged and the next one still runs.
+ */
 function inTurn(job) {
   inHand += 1;
-  shooting = shooting.then(job).catch(() => {}).finally(() => {
+  const failed = (e) => console.error(`[mockup] a remark's job failed: ${e?.message ?? e}`);
+  shooting = shooting.then(job).catch(failed).finally(() => {
     inHand -= 1;
   });
 }

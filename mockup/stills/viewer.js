@@ -1538,7 +1538,8 @@ function hashThread() {
  * Open the thread a `#thread=<id>` link asked for: go to its still, on its variant and the
  * revision it was made on, with its conversation unfolded, full screen in the mobile layout.
  * Until the thread is among the threads and its revision among the stills it stays awaited,
- * and this is called again as the stream brings them; a thread on no still is let go of.
+ * and this is called again as the stream brings them; a thread on no still is let go of. A
+ * conversation open full screen gives its step of the history to the one that opens.
  */
 function openAwaited() {
   const t = awaited && state.threads.find((thread) => thread.id === awaited);
@@ -1552,6 +1553,7 @@ function openAwaited() {
   const variant = state.stills[at]?.variants.find((v) => v.key === key);
   if (!variant?.revs.some((r) => r.n === t.rev)) return;
   awaited = null;
+  if (mobile) state.talk = null;
   state.pick = key;
   derive();
   buildStrip();
