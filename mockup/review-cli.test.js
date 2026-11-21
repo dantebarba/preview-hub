@@ -229,6 +229,49 @@ test("review reply, resolve and reopen write agent events, and show prints the t
   assert.equal(shown.replies.length, 1);
 });
 
+test("a remark from the live page shows its target in review show, --json and the watch line", async (t) => {
+  const { dir, remark } = await withRemark(t);
+  const target = {
+    page: "/invite?step=2",
+    elements: [
+      { selector: "#invite > button", text: "Send", html: '<button class="primary">\n  Send\n</button>' },
+      { selector: "h1", text: "Invite a user", html: "" },
+    ],
+    viewport: "390x844@3+touch",
+    scroll: { x: 0, y: 120 },
+    state: "not-reproduced",
+  };
+  const remarkOn = { type: "thread", author: HUMAN, still: "invite", rev: 1 };
+  const live = await appendEvent(dir, { ...remarkOn, body: "Here", target });
+  const lines = (await cli(dir, ["review", "show", live.id])).out.split("\n");
+  assert.deepEqual(lines.slice(1, 10), [
+    "on      invite [desktop] r1 whole",
+    `image   ${path.join(dir, "stills/invite/desktop/1.png")}`,
+    "page    /invite?step=2",
+    "viewport 390x844@3+touch",
+    "scroll  0,120",
+    "state   not-reproduced",
+    'element #invite > button  "Send"',
+    '        <button class="primary"> Send </button>',
+    'element h1  "Invite a user"',
+  ]);
+  assert.equal(lines[10], "");
+  const shown = JSON.parse((await cli(dir, ["review", "show", live.id, "--json"])).out);
+  assert.deepEqual(shown.target, target);
+  const watched = eventLine(live, new Map([["invite", "desktop"]]));
+  assert.equal(watched, `#2 thread ${live.id} invite [desktop] r1 whole 2 elements dante: "Here"`);
+  const one = { ...target, elements: [target.elements[1]] };
+  assert.match(eventLine({ ...live, target: one }), / whole 1 element dante/);
+  assert.match(eventLine({ ...live, target: { ...one, truncated: true } }), / whole 1\+ elements dante/);
+  const truncated = await appendEvent(dir, { ...remarkOn, body: "All", target: { ...target, truncated: true } });
+  const more = (await cli(dir, ["review", "show", truncated.id])).out.split("\n")[10];
+  assert.equal(more, "element (more were inside the box; the first 20 are kept)");
+  const plain = (await cli(dir, ["review", "show", remark.id])).out;
+  assert.doesNotMatch(plain, /^(page|viewport|scroll|state|element) /m);
+  assert.equal(JSON.parse((await cli(dir, ["review", "show", remark.id, "--json"])).out).target, null);
+  assert.doesNotMatch(eventLine(remark), /element/);
+});
+
 test("review commands refuse unknown threads, bad usage and empty replies", async (t) => {
   const { dir, remark } = await withRemark(t);
   let r = await cli(dir, ["review", "reply", "deadbeef", "hi"]);
