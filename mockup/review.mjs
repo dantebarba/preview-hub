@@ -40,7 +40,16 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { applyThread, applyWorking, markOf, reviewerOf, viewportOf, workingAt } from "./stills/state.js";
+import {
+  applyThread,
+  applyWorking,
+  markOf,
+  reviewerOf,
+  TARGET_LIMITS,
+  viewportOf,
+  workingAt,
+} from "./stills/state.js";
+
 
 const EVENT_TYPES = ["thread", "reply", "resolve", "reopen", "viewed", "unviewed", "working", "idle"];
 
@@ -75,12 +84,6 @@ const MAX_BODY = 10000;
 
 /** The most characters an author's name may hold. */
 export const MAX_AUTHOR = 100;
-
-/**
- * The limits of a thread's `target`: the most elements it keeps, and the most characters of a
- * page path, an element's selector, its text and the cut of its HTML.
- */
-export const TARGET_LIMITS = { elements: 20, page: 2000, selector: 500, text: 200, html: 1000 };
 
 /** What a thread's `target` says of the marked elements on the shot, as `state`. */
 export const TARGET_STATES = ["reproduced", "not-reproduced"];

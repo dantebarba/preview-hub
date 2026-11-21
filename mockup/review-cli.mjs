@@ -42,7 +42,7 @@ import {
 } from "./review.mjs";
 import { exportStills } from "./export.mjs";
 import { folder, readSource } from "./source.mjs";
-import { markOf, READ_ONLY } from "./stills/state.js";
+import { elementsLabel, markOf, READ_ONLY } from "./stills/state.js";
 
 const POLL_MS = 200;
 
@@ -144,9 +144,7 @@ function aboutText(event, variant = event.variant) {
 
 /** How many elements a thread's `target` marks, ` 3 elements`, `20+` when it was truncated; empty without one. */
 function elementsText(target) {
-  if (!target) return "";
-  const n = target.elements.length;
-  return ` ${n}${target.truncated ? "+" : ""} ${n === 1 && !target.truncated ? "element" : "elements"}`;
+  return target ? ` ${elementsLabel(target)}` : "";
 }
 
 /**

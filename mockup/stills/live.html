@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" class="live">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Live</title>
+  <link rel="stylesheet" href="/_review/viewer.css">
+</head>
+<body>
+  <header>
+    <a id="menu" href="/" aria-label="Back to the menu" title="Back to the menu">☰</a>
+    <b id="path" title="The page on screen"></b>
+    <span id="mode" role="status" hidden>Marking: taps select, they don't act</span>
+    <span id="devices" class="seg" role="group" aria-label="Device"></span>
+    <span id="size" title="The size the page is shown at"></span>
+    <button id="marking" class="marker" aria-pressed="false" title="Mark what a remark is about on the page (m)">Mark</button>
+  </header>
+  <p id="error" role="alert" hidden></p>
+  <main>
+    <div id="screen">
+      <iframe id="frame" title="The mockup page"></iframe>
+      <div id="layer" hidden>
+        <i id="hover" hidden></i>
+        <div id="draft" class="box" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+      </div>
+    </div>
+  </main>
+  <div id="pick" hidden>
+    <div id="crumbs" role="group" aria-label="Widen the mark to a parent" hidden></div>
+    <span id="found" role="status"></span>
+    <button type="button" id="cancel">Cancel</button>
+    <button type="button" id="comment" class="go">Comment</button>
+  </div>
+  <div id="dock">
+    <button id="arm" class="marker" aria-pressed="false">Mark</button>
+  </div>
+  <div id="who" hidden>
+    <form id="who-form" role="dialog" aria-modal="true" aria-labelledby="who-title">
+      <button type="button" id="who-close" aria-label="Cancel">✕</button>
+      <b id="who-title">What's your name?</b>
+      <p>It goes with what you write here, so remarks can be told apart.</p>
+      <input id="who-name" name="name" autocomplete="name" autocapitalize="words" required
+        aria-label="Your name" placeholder="Your name">
+      <button id="continue" class="go" disabled>Continue</button>
+    </form>
+  </div>
+  <script type="module" src="/_review/live.js"></script>
+</body>
+</html>
