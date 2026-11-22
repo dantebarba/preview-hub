@@ -199,7 +199,9 @@ review_path_ok() {
   esac
 }
 
-## Validate required config, apply defaults, and derive the compose project and state paths.
+## Validate required config, apply defaults, derive the compose project and state paths, and
+## export PREVIEW_MOCKUP_IMAGE, which a mockup's compose file needs to be read at all, by down
+## and ps as much as by up.
 finalize_config() {
   : "${PREVIEW_PROJECT:?PREVIEW_PROJECT must be set in .preview/config.sh}"
   : "${PREVIEW_LABEL_SERVICE:?PREVIEW_LABEL_SERVICE must be set in .preview/config.sh}"
@@ -224,6 +226,7 @@ finalize_config() {
   STATE_DIR="$STATE_ROOT/$PREVIEW_SLUG"
   PREVIEW_STATE_DIR="$STATE_DIR"
   PREVIEW_LABELS_OVERRIDE="$STATE_DIR/labels.yml"
+  export_mockup_image
 }
 
 ## Resolve identity, ports, worktree, config and derived paths for every command. Exports the
@@ -396,7 +399,6 @@ cmd_start() {
   resolve_url
   share_load_config
   export_allowed_hosts
-  export_mockup_image
   mkdir -p "$STATE_DIR"
   local edge_label
   edge_label="$(share_label)"
