@@ -92,6 +92,7 @@ import {
   livePath,
   MAX_ANNOTATED_BYTES,
   MAX_NAME,
+  overlap,
   pageOfLive,
   PNG_URL,
   TARGET_LIMITS,
@@ -797,15 +798,6 @@ export function liveName(scratch, page) {
   return taken ? `${name.slice(0, MAX_NAME_LENGTH - hash.length - 1)}-${hash}` : name;
 }
 
-/** The part of the rect `r` (`{x, y, w, h}`) inside an image of `size` (`{w, h}`), or null. */
-function clip(r, size) {
-  const x = Math.max(0, r.x);
-  const y = Math.max(0, r.y);
-  const right = Math.min(size.w, r.x + r.w);
-  const bottom = Math.min(size.h, r.y + r.h);
-  return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
-}
-
 /**
  * The anchor of a live remark on a shot of `size` CSS pixels, a region normalized to it. With
  * `rects`, where each marked element is on the shot (null for one not found), all on it: the
@@ -813,7 +805,8 @@ function clip(r, size) {
  * the whole shot when that box is not on it either.
  */
 export function placeMark(rects, marked, size) {
-  const found = rects.map((r) => r && clip(r, size));
+  const shot = { x: 0, y: 0, ...size };
+  const found = rects.map((r) => r && overlap(r, shot));
   let region = null;
   if (found.length && found.every(Boolean)) {
     const x = Math.min(...found.map((r) => r.x));
@@ -822,7 +815,7 @@ export function placeMark(rects, marked, size) {
     const bottom = Math.max(...found.map((r) => r.y + r.h));
     region = { x, y, w: right - x, h: bottom - y };
   }
-  const box = region ?? clip(marked, size);
+  const box = region ?? overlap(marked, shot);
   return box ? { x: box.x / size.w, y: box.y / size.h, w: box.w / size.w, h: box.h / size.h } : WHOLE;
 }
 
@@ -830,7 +823,8 @@ export function placeMark(rects, marked, size) {
  * Shoot the page of the remark `request` into the PNG `file`: `{ state, fullPage, rects,
  * marked }`. Its snapshot is rendered with `render` (`renderSnapshot`) at the reviewer's
  * viewport and scroll, the shot the viewport, `reproduced`, `rects` where the elements the
- * snapshot stamped are on it and `marked` the box as drawn. Without a snapshot, or when it
+ * snapshot stamped are on it, one for each of the remark's elements, null for one the render
+ * lacks, and `marked` the box as drawn. Without a snapshot, or when it
  * does not render, the page is loaded again from `base` and shot whole with `shoot`
  * (`capture`), `not-reproduced`: `rects` are then where the elements' selectors are, and
  * `marked` the box moved by the scroll. Rejects when that shot fails too.
@@ -839,7 +833,14 @@ async function shootRemark(request, { file, base, shoot, render }) {
   const { page, viewport, scroll, box, elements, snapshot } = request;
   if (snapshot) {
     try {
-      const { png, rects } = await render({ html: snapshot.html, viewport, scroll, scrollers: snapshot.scrollers, base });
+      const { png, rects } = await render({
+        html: snapshot.html,
+        viewport,
+        scroll,
+        scrollers: snapshot.scrollers,
+        marks: elements.length,
+        base,
+      });
       writeFileSync(file, png);
       return { state: "reproduced", fullPage: false, rects, marked: box };
     } catch (e) {

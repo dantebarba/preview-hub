@@ -10,7 +10,8 @@
  *   without its `src` and `srcdoc`: nothing runs or navigates when it is rendered.
  * - A `<base href>` first in the head, the page's base URL without its origin when it is the
  *   page's own, so assets load from whichever origin the snapshot is rendered on; URLs of an
- *   inlined style sheet are written the same way.
+ *   inlined style sheet are written the same way, as are the page's own absolute URLs in
+ *   `src`, `srcset`, `href`, `poster` and `xlink:href`.
  * - Form state as attributes: `value`, `checked`, `selected`, a `<textarea>`'s text, and
  *   `data-pv-indeterminate` on a checkbox in that state.
  * - Open shadow roots as declarative shadow DOM (`<template shadowrootmode="open">`); a closed
@@ -32,6 +33,7 @@ export const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const DROPPED = new Set(["script", "noscript", "base"]);
 const TOGGLES = new Set(["checkbox", "radio"]);
 const URL_IN_CSS = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)/g;
+const URL_ATTRIBUTES = new Set(["src", "href", "poster", "xlink:href"]);
 
 /** True when `el` matches `selector`; false too where the browser does not know the selector. */
 function matches(el, selector) {
@@ -42,7 +44,10 @@ function matches(el, selector) {
   }
 }
 
-/** `url`, resolved against `from`, without its origin when that is `origin`. */
+/**
+ * `url`, resolved against `from`, without its origin when that is `origin`. Without `from` a
+ * relative `url` is left as it is.
+ */
 function rooted(url, from, origin) {
   let u;
   try {
@@ -51,6 +56,21 @@ function rooted(url, from, origin) {
     return url;
   }
   return u.origin === origin ? `${u.pathname}${u.search}${u.hash}` : u.href;
+}
+
+/**
+ * Write each URL attribute of `clone` (`src`, `href`, `poster`, `xlink:href` and each URL of a
+ * `srcset`) that names the page's own origin without it, so it loads from the origin the
+ * snapshot is rendered on.
+ */
+function localAttributes(clone, origin) {
+  for (const attr of clone.attributes) {
+    if (attr.name === "srcset") {
+      attr.value = attr.value.replace(/(^|,)(\s*)([^\s,]\S*)/g, (all, comma, space, url) => `${comma}${space}${rooted(url, undefined, origin)}`);
+    } else if (URL_ATTRIBUTES.has(attr.name)) {
+      attr.value = rooted(attr.value, undefined, origin);
+    }
+  }
 }
 
 /** `css` with each `url()` resolved against `from`, the sheet it was linked from. */
@@ -172,6 +192,7 @@ function copyOf(ctx, node) {
   for (const { name } of [...clone.attributes]) {
     if (/^on/i.test(name) || name.startsWith("data-pv-")) clone.removeAttribute(name);
   }
+  localAttributes(clone, ctx.origin);
   writeState(ctx, el, clone);
   if (el !== ctx.scroller && (el.scrollLeft || el.scrollTop)) {
     clone.setAttribute("data-pv-scroll", `${el.scrollLeft},${el.scrollTop}`);
@@ -228,7 +249,7 @@ export function snapshot(doc, marked = []) {
   const win = doc.defaultView;
   const ctx = {
     inert: doc.implementation.createHTMLDocument(""),
-    origin: new URL(doc.baseURI).origin,
+    origin: doc.location.origin,
     scroller: doc.scrollingElement,
     marks: new Map(marked.map((el, i) => [el, i])),
     inline: [],
@@ -237,7 +258,7 @@ export function snapshot(doc, marked = []) {
   const root = copyOf(ctx, doc.documentElement);
   const head = headOf(ctx, root);
   const base = ctx.inert.createElement("base");
-  base.setAttribute("href", rooted(doc.baseURI, doc.baseURI, doc.location.origin));
+  base.setAttribute("href", rooted(doc.baseURI, doc.baseURI, ctx.origin));
   head.prepend(base);
   appendAdopted(ctx, doc, head);
   const doctype = doctypeOf(doc.doctype);

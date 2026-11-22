@@ -247,8 +247,9 @@ as the owner of `.mockup/`, so what it writes there stays the host user's. What 
   `review/annotated/<id>.png` and not stored in the event.
 - `/live/<slug>`: the live shell around the page `/<slug>`, when that page exists: the page
   in a frame with a bar outside it, where a reviewer marks what a remark is about on the page
-  itself, in a Mark mode whose taps select and never act. Comment posts the remark, with a
-  snapshot of the page as it is, to `POST /_review/remarks`, which answers `202 {id}` at once;
+  itself, in a Mark mode whose taps select and never act. Comment opens a composer by the
+  mark, and its Post sends the remark, with a snapshot of the page as it is at that instant,
+  to `POST /_review/remarks`, which answers `202 {id}` at once;
   the runtime shoots the snapshot in the background and posts the thread `id` with its
   `target`, or says `remark-failed` on the event stream (see the
   [review contract](review-contract.md#live-marks)). `/stills#thread=<id>` opens that thread

@@ -1,6 +1,6 @@
 /**
  * The state of the stills viewer, which the runtime's tests import: nothing here needs a page
- * to load, and only `stored`, `store`, `place` and `answerOf` touch one when called.
+ * to load, and only `stored`, `store`, `place`, `answerOf` and `node` touch one when called.
  *
  * A still is an entry of `GET /_review/stills`, `{ name, title, source, variants }`, each variant
  * `{ key, viewport, tags, revs }`. `choose` gives every still the variant the reviewer's pick
@@ -31,7 +31,8 @@
  * The live shell (`live.js`) marks on the mockup page itself and shares from here: the size of
  * a device class's preset and the scale that fits it in a room, the page a `/live/<slug>` URL
  * shows, which of the elements inside a drawn box are the marked ones (`markedIn`) and the
- * limits of a remark's `target`.
+ * limits of a remark's `target`. Both write a thread's link (`threadLink`), its Resolve or
+ * Reopen (`statusLabel`) and their elements (`node`) from here.
  */
 
 /** The prefix of the data URL an annotated still is posted as. */
@@ -725,6 +726,36 @@ export function livePath(page) {
 export function pageOfLive(pathname, search = "") {
   const page = pathname.startsWith(`${LIVE}/`) ? pathname.slice(LIVE.length) : "";
   return page.length > 1 && isPagePath(page) ? page + search : null;
+}
+
+/** The viewer's link to the thread `id`, which opens it on its still: `/stills#thread=<id>`. */
+export function threadLink(id) {
+  return `/stills#thread=${encodeURIComponent(id)}`;
+}
+
+/** The hash of a `threadLink`, the thread's id its first group. */
+export const THREAD_HASH = /^#thread=([\w-]{1,64})$/;
+
+/** What the button that resolves thread `t`, or reopens it, says. */
+export function statusLabel(t) {
+  return t.status === "open" ? "Resolve" : "Reopen";
+}
+
+/** What the rects `a` and `b` (`{ x, y, w, h }`) share, null when it has no area. */
+export function overlap(a, b) {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const w = Math.min(a.x + a.w, b.x + b.w) - x;
+  const h = Math.min(a.y + a.h, b.y + b.h) - y;
+  return w > 0 && h > 0 ? { x, y, w, h } : null;
+}
+
+/** A new `tag` element of class `className` holding `text`. */
+export function node(tag, className, text = "") {
+  const made = document.createElement(tag);
+  made.className = className;
+  made.textContent = text;
+  return made;
 }
 
 /** How many elements a `target` marks: "3 elements", "1 element", "20+ elements" when it was truncated. */
