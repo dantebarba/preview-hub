@@ -894,7 +894,7 @@ test("a remark is answered 202 with its thread's id before it is shot, then post
     scroll: { x: 0, y: 120 },
     state: "reproduced",
   });
-  assert.deepEqual(shot.renders, [{ html: SNAPSHOT.html, viewport: "mobile", scroll: { x: 0, y: 120 }, scrollers: 0, base }]);
+  assert.deepEqual(shot.renders, [{ html: SNAPSHOT.html, viewport: "mobile", scroll: { x: 0, y: 120 }, scrollers: 0, marks: 1, base }]);
   assert.equal(shot.calls.length, 0);
   const [live] = stills(dir);
   assert.deepEqual([live.title, live.source.path, live.variants[0].viewport.fullPage], ["/checkout (live)", "/checkout", false]);

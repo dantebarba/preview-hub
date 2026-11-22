@@ -830,7 +830,8 @@ export function placeMark(rects, marked, size) {
  * Shoot the page of the remark `request` into the PNG `file`: `{ state, fullPage, rects,
  * marked }`. Its snapshot is rendered with `render` (`renderSnapshot`) at the reviewer's
  * viewport and scroll, the shot the viewport, `reproduced`, `rects` where the elements the
- * snapshot stamped are on it and `marked` the box as drawn. Without a snapshot, or when it
+ * snapshot stamped are on it, one for each of the remark's elements, null for one the render
+ * lacks, and `marked` the box as drawn. Without a snapshot, or when it
  * does not render, the page is loaded again from `base` and shot whole with `shoot`
  * (`capture`), `not-reproduced`: `rects` are then where the elements' selectors are, and
  * `marked` the box moved by the scroll. Rejects when that shot fails too.
@@ -839,7 +840,14 @@ async function shootRemark(request, { file, base, shoot, render }) {
   const { page, viewport, scroll, box, elements, snapshot } = request;
   if (snapshot) {
     try {
-      const { png, rects } = await render({ html: snapshot.html, viewport, scroll, scrollers: snapshot.scrollers, base });
+      const { png, rects } = await render({
+        html: snapshot.html,
+        viewport,
+        scroll,
+        scrollers: snapshot.scrollers,
+        marks: elements.length,
+        base,
+      });
       writeFileSync(file, png);
       return { state: "reproduced", fullPage: false, rects, marked: box };
     } catch (e) {

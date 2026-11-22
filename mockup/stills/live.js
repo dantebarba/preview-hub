@@ -714,12 +714,15 @@ function clearSel() {
  * Enter Mark mode or go back to Use, with no mark either way. Entering takes the focus out of
  * the page, so keys stop reaching it; a page outside the mockup cannot be marked. Leaving drops
  * what was typed in the composer. On a small or touch screen entering closes the panel, whose
- * sheet would lie over the strip.
+ * sheet would lie over the strip, and lets go of the picked thread, as closing it does.
  */
 function setMarking(on) {
   if (on && state.page === null) return;
   state.marking = on;
-  if (on && SMALL.matches) state.open = false;
+  if (on && SMALL.matches) {
+    state.open = false;
+    state.thread = null;
+  }
   if (!on) el("say").value = "";
   clearSel();
   fingers.clear();
@@ -1146,10 +1149,11 @@ async function post() {
   const body = el("say").value.trim();
   if (!sel?.elements || state.signing || !view || !body) return;
   const there = sel.elements.filter((target) => target.isConnected && target.ownerDocument === doc);
-  const elements = there.map(describe).filter((e) => e.selector);
+  const described = there.map(describe);
+  const elements = described.filter((e) => e.selector);
   let shot = null;
   try {
-    shot = snapshot(doc, there);
+    shot = snapshot(doc, there.filter((target, at) => described[at].selector));
   } catch {
     shot = null;
   }
