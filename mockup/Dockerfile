@@ -25,7 +25,7 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY capture.mjs export.mjs folder.mjs menu.mjs review.mjs review-cli.mjs server.mjs ./
 COPY stills/ ./stills/
 COPY vendor/ ./vendor/
-COPY extras.mjs source.mjs ./
+COPY extras.mjs png.mjs source.mjs ./
 
 ENV APP_DIR=/app \
     PORT=80 \

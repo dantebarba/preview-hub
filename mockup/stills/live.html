@@ -8,23 +8,30 @@
 </head>
 <body>
   <header>
-    <a id="menu" href="/" aria-label="Back to the menu" title="Back to the menu">☰</a>
-    <b id="path" title="The page on screen"></b>
-    <span id="mode" role="status" hidden>Marking: taps select, they don't act</span>
+    <a id="menu" href="/" aria-label="Back to the menu"></a>
+    <b id="path"></b>
     <span id="devices" class="seg" role="group" aria-label="Device"></span>
-    <span id="size" title="The size the page is shown at"></span>
-    <button id="marking" class="marker" aria-pressed="false" title="Mark what a remark is about on the page (m)">Mark</button>
+    <span id="size"></span>
+    <button id="marking" class="marker" aria-pressed="false" aria-keyshortcuts="m">Mark</button>
+    <button id="listing" class="lister" aria-pressed="false" aria-controls="side">Remarks <span class="tally"></span></button>
   </header>
-  <p id="error" role="alert" hidden></p>
-  <main>
-    <div id="screen">
-      <iframe id="frame" title="The mockup page"></iframe>
-      <div id="layer" hidden>
-        <i id="hover" hidden></i>
-        <div id="draft" class="box" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+  <div id="work">
+    <main>
+      <div id="screen">
+        <iframe id="frame" aria-label="The mockup page"></iframe>
+        <div id="pins"></div>
+        <div id="layer" hidden>
+          <i id="hover" hidden></i>
+          <div id="draft" class="box" hidden><i data-corner="nw"></i><i data-corner="ne"></i><i data-corner="sw"></i><i data-corner="se"></i></div>
+        </div>
       </div>
-    </div>
-  </main>
+    </main>
+    <aside id="side" aria-label="Remarks on this page" hidden>
+      <button type="button" id="shut" class="x" aria-label="Close"></button>
+      <div id="cards"></div>
+      <p id="none" hidden>No remarks on this page</p>
+    </aside>
+  </div>
   <div id="pick" hidden>
     <div id="crumbs" role="group" aria-label="Widen the mark to a parent" hidden></div>
     <span id="found" role="status"></span>
@@ -33,14 +40,28 @@
   </div>
   <div id="dock">
     <button id="arm" class="marker" aria-pressed="false">Mark</button>
+    <button id="sheet" class="lister" aria-pressed="false" aria-controls="side">Remarks <span class="tally"></span></button>
+  </div>
+  <form id="composer" aria-label="Remark" hidden>
+    <textarea id="say" rows="3" placeholder="What is wrong here?"></textarea>
+    <div class="row">
+      <button type="button" id="discard">Cancel</button>
+      <button id="post" class="go" disabled>Post</button>
+    </div>
+  </form>
+  <div id="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <i id="spin" hidden></i>
+    <a id="open" target="_blank" rel="noopener" hidden>Open</a>
+    <button type="button" id="retry" hidden>Retry</button>
+    <button type="button" id="dismiss" class="x" aria-label="Dismiss"></button>
   </div>
   <div id="who" hidden>
     <form id="who-form" role="dialog" aria-modal="true" aria-labelledby="who-title">
-      <button type="button" id="who-close" aria-label="Cancel">✕</button>
+      <button type="button" id="who-close" class="x" aria-label="Cancel"></button>
       <b id="who-title">What's your name?</b>
-      <p>It goes with what you write here, so remarks can be told apart.</p>
       <input id="who-name" name="name" autocomplete="name" autocapitalize="words" required
-        aria-label="Your name" placeholder="Your name">
+        aria-label="Your name">
       <button id="continue" class="go" disabled>Continue</button>
     </form>
   </div>

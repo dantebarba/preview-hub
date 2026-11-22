@@ -30,7 +30,15 @@
  *
  * `capture` can also measure a list of CSS selectors on the shot it takes: where the one
  * visible element each one matches is on the PNG, or null for one not on the page or on it
- * more than once. The live mark's freeze (`menu.mjs`) places a remark's box by them.
+ * more than once. A remark made on the live page whose snapshot did not render is placed by
+ * them (`remark` of `menu.mjs`).
+ *
+ * `renderSnapshot` shoots a page from its DOM instead of its URL: the HTML `snapshot` of
+ * `stills/snapshot.js` wrote in the reviewer's browser, served to the tab from memory, once,
+ * at a URL on the mockup's origin so its assets load from there, under a policy that runs no
+ * script. Once loaded, what HTML cannot say is put back: adopted style sheets, modal dialogs
+ * and popovers in the top layer, the scroll of every scroller and of the window. Animations
+ * and transitions are held at their end. It measures the elements the snapshot stamped as marked.
  *
  * A batch runs the shots of a recipe (see `loadRecipe`) in one Chromium, `--parallel` tabs at
  * a time (default 4), each in a browser context of its own so cookies and storage never leak
@@ -45,6 +53,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -71,6 +80,21 @@ const DEFAULT_PARALLEL = 4;
 const MAX_HEIGHT = 6000;
 const COUNTED = new Set(["XHR", "Fetch"]);
 const MODAL = "[role=dialog], [role=alertdialog], [aria-modal=true], dialog[open]";
+const RESTORE_MS = 10000;
+const SNAPSHOT_HEADERS = [
+  { name: "Content-Type", value: "text/html; charset=utf-8" },
+  { name: "Content-Security-Policy", value: "script-src 'none'" },
+];
+
+/** Adopted by a rendered snapshot and its shadow roots: nothing moves, animations at their end. */
+const STILL_CSS = `*, *::before, *::after, *::backdrop {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+  caret-color: transparent !important;
+}`;
 
 const KEYS = {
   Enter: { code: "Enter", keyCode: 13, text: "\r" },
@@ -275,8 +299,9 @@ async function connect(url) {
  * The helpers every in-page lookup uses, and that a string given to `evaluate` sees: `$$(selector,
  * root)` lists the elements a selector matches, `byText(text, root)` the deepest visible
  * elements whose text (or aria-label, value, placeholder or title) is `text`, else contains it,
- * and `find(target, root)` the visible elements a selector matches, else those `byText` finds.
- * Runs in the page, so it uses nothing from this module.
+ * `find(target, root)` the visible elements a selector matches, else those `byText` finds,
+ * `roots()` the document and every open shadow root under it, and `deep(selector)` the elements
+ * a selector matches in any of them. Runs in the page, so it uses nothing from this module.
  */
 function pageKit() {
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -307,7 +332,15 @@ function pageKit() {
     }
     return hits.length ? hits : byText(target, root);
   };
-  return { $$, byText, find, norm, textOf, shown };
+  const roots = () => {
+    const out = [document];
+    for (const root of out) {
+      for (const el of root.querySelectorAll("*")) if (el.shadowRoot) out.push(el.shadowRoot);
+    }
+    return out;
+  };
+  const deep = (selector) => roots().flatMap((root) => $$(selector, root));
+  return { $$, byText, find, norm, textOf, shown, roots, deep };
 }
 
 /**
@@ -368,6 +401,83 @@ function pageRects(kit, selectors) {
   });
 }
 
+/**
+ * In the page, a snapshot just loaded: put back what its HTML cannot say. Each `<style
+ * data-pv-adopted>` becomes an adopted sheet of its root again, followed by one of `css`; a
+ * `data-pv-indeterminate` checkbox is indeterminate; a `data-pv-modal` dialog is shown as a
+ * modal and a `data-pv-popover` element as a popover, focus then dropped; and, once the fonts
+ * and images are in or `wait` ms have passed, every `data-pv-scroll` element and the window
+ * are scrolled to where they were, the window to `scroll`. Resolves to `{ scrollers }`, how
+ * many elements it scrolled.
+ */
+async function pageRestore(kit, { scroll, css, wait }) {
+  const sheetOf = (text) => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(text);
+    return sheet;
+  };
+  const still = sheetOf(css);
+  for (const root of kit.roots()) {
+    const adopted = kit.$$("style[data-pv-adopted]", root);
+    root.adoptedStyleSheets = [...adopted.map((style) => sheetOf(style.textContent)), still];
+    for (const style of adopted) style.remove();
+  }
+  for (const el of kit.deep("[data-pv-indeterminate]")) el.indeterminate = true;
+  for (const el of kit.deep("dialog[data-pv-modal]")) {
+    try {
+      el.removeAttribute("open");
+      el.showModal();
+    } catch {
+      el.setAttribute("open", "");
+    }
+  }
+  for (const el of kit.deep("[data-pv-popover]")) {
+    try {
+      el.showPopover();
+    } catch {
+      el.removeAttribute("data-pv-popover");
+    }
+  }
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  active?.blur?.();
+  const loading = kit
+    .deep("img")
+    .filter((img) => !img.complete)
+    .map((img) => new Promise((done) => {
+      img.addEventListener("load", done, { once: true });
+      img.addEventListener("error", done, { once: true });
+    }));
+  await Promise.race([
+    Promise.all([document.fonts.ready, ...loading]),
+    new Promise((done) => setTimeout(done, wait)),
+  ]);
+  const scrollers = kit.deep("[data-pv-scroll]");
+  for (const el of scrollers) {
+    const [left, top] = el.getAttribute("data-pv-scroll").split(",").map(Number);
+    el.scrollTo({ left, top, behavior: "instant" });
+  }
+  window.scrollTo({ left: scroll.x, top: scroll.y, behavior: "instant" });
+  return { scrollers: scrollers.length };
+}
+
+/**
+ * In the page: where the elements a snapshot stamped as marked are on the screenshot, a list
+ * of `marks` entries (as many as the highest stamp found without it), the i-th `{x, y, w, h}`
+ * in CSS pixels from its top left for the element with `data-pv-mark="<i>"`, or null for one
+ * that is not in the page or has no box.
+ */
+function pageMarks(kit, { marks }) {
+  const found = new Map(kit.deep("[data-pv-mark]").map((el) => [Number(el.getAttribute("data-pv-mark")), el]));
+  const count = marks ?? Math.max(-1, ...found.keys()) + 1;
+  return Array.from({ length: count }, (_, i) => {
+    const el = found.get(i);
+    if (!el || !el.getClientRects().length) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  });
+}
+
 /** The expression that runs the in-page function `fn` with the kit and `args`. */
 function inPage(fn, args) {
   return `(${fn})((${pageKit})(), ${JSON.stringify(args)})`;
@@ -402,9 +512,10 @@ function keyFields(key) {
  * Open a tab in a browser context of its own on the connection `cdp`, set up as a device at the
  * parsed viewport `vp` with the colour `scheme` and the user agent from the browser's `product`.
  * `wait` caps each wait for the page to settle; console errors and exceptions matching a
- * pattern of `ignore` are not kept. Returns `{ page, goto, settle, shoot, problems, close }`:
- * `page` is what steps drive (see `steps`), `shoot` takes the still, `problems()` the page
- * exceptions and console errors so far.
+ * pattern of `ignore` are not kept. Returns `{ page, goto, serve, run, settle, shoot, problems,
+ * close }`: `page` is what steps drive (see `steps`), `serve(url, html)` goes to `url` answering
+ * it with `html` from memory, once, with no script allowed, `run` evaluates an expression in the
+ * page, `shoot` takes the still, `problems()` the page exceptions and console errors so far.
  */
 async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
   const { browserContextId } = await cdp.send("Target.createBrowserContext", { disposeOnDetach: true });
@@ -414,6 +525,7 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
   const inFlight = new Set();
   let netChanged = Date.now();
   let loading = false;
+  let served = null;
   const exceptions = [];
   const consoleErrors = [];
   const keep = (list, text) => {
@@ -439,6 +551,15 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
       case "Page.frameStoppedLoading":
         if (p.frameId === targetId) loading = false;
         break;
+      case "Fetch.requestPaused": {
+        const body = served?.url === p.request.url ? served.body : null;
+        if (body !== null) served = null;
+        const answer = body === null
+          ? send("Fetch.continueRequest", { requestId: p.requestId })
+          : send("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 200, responseHeaders: SNAPSHOT_HEADERS, body });
+        answer.catch(() => {});
+        break;
+      }
       case "Page.javascriptDialogOpening":
         send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
         break;
@@ -521,6 +642,17 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
     const { errorText } = await send("Page.navigate", { url });
     if (errorText) throw new Error(`${url}: ${errorText}`);
     return settle(wait, Date.now());
+  }
+
+  async function serve(url, html) {
+    served = { url, body: Buffer.from(html).toString("base64") };
+    await send("Fetch.enable", { patterns: [{ urlPattern: url, resourceType: "Document" }] });
+    try {
+      return await goto(url);
+    } finally {
+      served = null;
+      await send("Fetch.disable").catch(() => {});
+    }
   }
 
   async function poll(target, opts, timeout, done, fail) {
@@ -650,6 +782,8 @@ async function openTab(cdp, product, { vp, scheme, wait, ignore = [] }) {
   return {
     page,
     goto,
+    serve,
+    run,
     settle,
     shoot,
     problems: () => ({ exceptions: [...exceptions], consoleErrors: [...consoleErrors] }),
@@ -739,6 +873,64 @@ export async function capture({
     writeFileSync(out, shot.png);
     const rects = measure ? { rects: shot.rects } : {};
     return { file: out, width: shot.width, height: shot.height, fullPage: shot.fullPage, ...rects };
+  });
+}
+
+/**
+ * The parsed viewport a snapshot is rendered at: `viewport` a preset or `WxH[@dpr][+touch]`, as
+ * `capture` takes, or `{ width, height, dpr, mobile }` as a snapshot gives its own, `dpr` 1 and
+ * `mobile` false when left out.
+ */
+function snapshotViewport(viewport) {
+  if (!isObject(viewport)) return parseViewport(viewport);
+  const { width, height, dpr = 1, mobile = false } = viewport;
+  return parseViewport(`${width}x${height}@${dpr}${mobile ? "+touch" : ""}`);
+}
+
+/**
+ * Shoot the snapshot `html` of a page (see `snapshot` of `stills/snapshot.js`) as the reviewer
+ * had it: at `viewport` (see `snapshotViewport`) with `tags`, the window scrolled to `scroll`
+ * `{x, y}` and every scroller the snapshot stamped to where it was, with animations and
+ * transitions held, once its fonts and images are in, each wait capped at `waitMs`. `base` is
+ * a URL of the mockup as this machine reaches it: the HTML is served from memory at a one-shot
+ * URL on its origin, so what the page loads by a relative URL comes from the mockup. Resolves
+ * to `{ png, rects }`: the PNG of the viewport, and for each marked element, `marks` of them
+ * (as many as the highest `data-pv-mark` found without it), where it is on the PNG, `{x, y, w,
+ * h}` in CSS pixels, or null for one that is not in the render or has no box. Rejects when the
+ * HTML cannot be loaded, or when `scrollers` is given and is not how many scrollers the render
+ * found, so the HTML did not parse back into the page it was written from.
+ */
+export async function renderSnapshot({
+  html,
+  viewport,
+  scroll = { x: 0, y: 0 },
+  scrollers,
+  marks,
+  base,
+  tags = [],
+  waitMs,
+  chrome,
+}) {
+  const vp = snapshotViewport(viewport);
+  const scheme = colorScheme(shotTags(tags));
+  const wait = waitCap(waitMs);
+  const url = new URL(`/_review/snapshot/${randomUUID()}`, base).href;
+  return withBrowser(chrome, async (browser) => {
+    const tab = await openTab(browser.cdp, browser.product, { vp, scheme, wait });
+    try {
+      await tab.serve(url, html);
+      const args = { scroll: { x: scroll.x, y: scroll.y }, css: STILL_CSS, wait: Math.min(wait, RESTORE_MS) };
+      const restored = await tab.run(inPage(pageRestore, args));
+      if (scrollers !== undefined && restored.scrollers !== scrollers) {
+        throw new Error(`the snapshot rendered ${restored.scrollers} of its ${scrollers} scrollers`);
+      }
+      await tab.settle(wait, Date.now());
+      const rects = await tab.run(inPage(pageMarks, { marks }));
+      const { png } = await tab.shoot();
+      return { png, rects };
+    } finally {
+      await tab.close();
+    }
   });
 }
 

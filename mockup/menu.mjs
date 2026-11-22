@@ -25,9 +25,9 @@
  *                                      a `thread` may carry `annotated`, its still with the mark
  *                                      drawn as a `data:image/png;base64,` URL of at most 8 MiB,
  *                                      kept as `review/annotated/<id>.png`
- *   POST /_review/freeze               shoot a page the way a live mark saw it and keep the shot as
- *                                      a still for the remark: `{ still, variant, rev, anchor, state,
- *                                      target }` (see `freeze`)
+ *   POST /_review/remarks              post a remark made on the live page, with the snapshot of
+ *                                      the page as it was: answered `202 { id }` at once, shot and
+ *                                      posted as the thread `id` in the background (see `remark`)
  *
  * The review routes take the scratch dir or, for any folder of images, the handle `folder(dir)`
  * of `source.mjs` returns. A folder adds to them (see `extras.mjs`): `groups`, `notes`,
@@ -42,28 +42,38 @@
  * write and may not resolve or reopen a remark.
  *
  * Every response is `Cache-Control: no-store` but a still's revision, which never changes. An
- * edit to the manifest or a still reloads the open tabs, as Vite does for a page.
+ * edit to the manifest or a bare shot reloads the open tabs, as Vite does for a page; a change
+ * to the stills reloads the menu alone, so a remark never reloads the page it is made on.
  */
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { capture, colorScheme, expandRecipe, loadRecipe } from "./capture.mjs";
-import { SHOTS_FILE } from "./export.mjs";
+import { capture, pngSize, renderSnapshot } from "./capture.mjs";
 import { aboutPage, sourceExtras, sourceFile, watchSource } from "./extras.mjs";
+import { markedPng } from "./png.mjs";
 import {
   addStill,
   appendEvent,
+  eventProblem,
   EVENTS_FILE,
   isObject,
   isPng,
   MANIFEST_FILE,
   MAX_AUTHOR,
   MAX_NAME_LENGTH,
-  MAX_TAGS,
-  parseTags,
+  newId,
   parseViewport,
   readEvents,
   reviewed,
@@ -72,16 +82,17 @@ import {
   stills,
   storeAnnotated,
   storePaths,
-  targetProblem,
   threads,
   variantKey,
   working,
 } from "./review.mjs";
+import { MAX_SNAPSHOT_BYTES } from "./stills/snapshot.js";
 import {
   fileUrl,
   livePath,
   MAX_ANNOTATED_BYTES,
   MAX_NAME,
+  overlap,
   pageOfLive,
   PNG_URL,
   TARGET_LIMITS,
@@ -98,20 +109,24 @@ const MAX_POST_BYTES = 64 * 1024;
 const ELEMENT_CHARS = TARGET_LIMITS.selector + TARGET_LIMITS.text + TARGET_LIMITS.html;
 const MAX_TARGET_BYTES = 3 * (TARGET_LIMITS.page + TARGET_LIMITS.elements * ELEMENT_CHARS);
 const MAX_UPLOAD_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES + Math.ceil(MAX_ANNOTATED_BYTES / 3) * 4;
-const MAX_FREEZE_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES;
+const MAX_REMARK_BYTES = MAX_POST_BYTES + MAX_TARGET_BYTES + 2 * MAX_SNAPSHOT_BYTES;
 const POLL_MS = 1000;
 const PING_TICKS = 20;
 const ENCODED_WORD = /=\?utf-8\?([bq])\?([^?]*)\?=/gi;
 const BETWEEN_WORDS = /(\?=)\s+(?==\?utf-8\?[bq]\?)/gi;
 const OWNER_ONLY = ["resolve", "reopen"];
-const FREEZE_VIEWPORT = { side: 4096, dpr: 4 };
-const MAX_FREEZES_WAITING = 4;
+const REMARK_VIEWPORT = { side: 4096, dpr: 4 };
+const MAX_REMARKS_WAITING = 4;
+const WHOLE = { x: 0, y: 0, w: 1, h: 1 };
+const PUBLISHED_MS = 10 * 60 * 1000;
+const MAX_PUBLISHED = 20;
 const VIEWER_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "stills");
 const VIEWER_PAGE = { file: "index.html", type: "text/html; charset=utf-8" };
 const LIVE_PAGE = { file: "live.html", type: "text/html; charset=utf-8" };
 const VIEWER_ASSETS = {
   "viewer.js": { file: "viewer.js", type: "text/javascript; charset=utf-8" },
   "live.js": { file: "live.js", type: "text/javascript; charset=utf-8" },
+  "snapshot.js": { file: "snapshot.js", type: "text/javascript; charset=utf-8" },
   "state.js": { file: "state.js", type: "text/javascript; charset=utf-8" },
   "who.js": { file: "who.js", type: "text/javascript; charset=utf-8" },
   "annotate.js": { file: "annotate.js", type: "text/javascript; charset=utf-8" },
@@ -283,14 +298,15 @@ export function reviewStills(scratch, by = null) {
 }
 
 /**
- * `reviewStills` for the menu, as the reviewer named `by`: `{ stills, error }`, an unreadable
- * store reported in `error`.
+ * `reviewStills` for the menu, as the reviewer named `by`: `{ stills, cursor, error }`, an
+ * unreadable store reported in `error`.
  */
 function readReview(scratch, by) {
   try {
-    return { stills: reviewStills(scratch, by).stills, error: null };
+    const { stills: list, cursor } = reviewStills(scratch, by);
+    return { stills: list, cursor, error: null };
   } catch (e) {
-    return { stills: [], error: e.message };
+    return { stills: [], cursor: 0, error: e.message };
   }
 }
 
@@ -298,7 +314,8 @@ function readReview(scratch, by) {
  * The menu's HTML: every page and variant as a link, with a "Live" link beside it to the live
  * shell on it, where a remark is marked on the page itself; then the stills of `review` (as
  * `readReview` returns them) with a link to the viewer, or, for a mockup that has none, the
- * bare `shots`.
+ * bare `shots`. With the review's `cursor`, the menu follows the event stream from it and
+ * loads again when the stills change, so only the menu does.
  */
 export function renderMenu({ manifest, error }, shots, review = { stills: [], error: null }) {
   const title = manifest.title || "Mockup";
@@ -343,6 +360,10 @@ export function renderMenu({ manifest, error }, shots, review = { stills: [], er
       out.push(`<figcaption>${escapeHtml(f)}</figcaption></figure>`);
     }
     out.push("</div>");
+  }
+  if (Number.isInteger(review.cursor)) {
+    out.push(`<script>new EventSource("/_review/events?since=${review.cursor}")`);
+    out.push(`.addEventListener("stills",()=>location.reload())</script>`);
   }
   out.push("</body></html>");
   return out.join("");
@@ -478,7 +499,10 @@ function readBody(req, limit) {
  * cursor, and is safe to call at any time; while a client is connected the log's size is also
  * checked every second, for a write no watcher reported, and a read that failed is tried again.
  * `open(res, since)` adds a response, until it closes; `notify(name)` sends a named event
- * without data, and `close()` ends every response. A folder source, `scratch` as the handle
+ * without data; `publish(event)` sends `event`, which is not in the log, as an event named by
+ * its `type` with it as data, to every client and, for ten minutes, to one that connects
+ * later, so a client that was away hears of it, the last twenty of them at most; and `close()`
+ * ends every response. A folder source, `scratch` as the handle
  * `folder(dir)` returns, is watched as well until `close()`, connected client or not, so a
  * change is kept as its next revision when it happens, and sends `stills` (see `watchSource`).
  */
@@ -486,6 +510,7 @@ export function eventStream(scratch) {
   const folder = typeof scratch === "string" ? null : scratch;
   const file = storePaths(scratch).events;
   const clients = new Set();
+  const published = [];
   let timer = null;
   let size = -1;
   let ticks = 0;
@@ -527,11 +552,18 @@ export function eventStream(scratch) {
   const notify = (name) => {
     for (const client of clients) client.res.write(`event: ${name}\ndata: {}\n\n`);
   };
+  const said = (res, event) => res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  const publish = (event) => {
+    published.push({ until: Date.now() + PUBLISHED_MS, event });
+    if (published.length > MAX_PUBLISHED) published.shift();
+    for (const client of clients) said(client.res, event);
+  };
   const unwatch = folder ? watchSource(folder.dir, () => notify("stills")) : null;
 
   return {
     push,
     notify,
+    publish,
     open(res, since) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "X-Accel-Buffering": "no" });
       res.write("retry: 2000\n\n");
@@ -546,6 +578,7 @@ export function eventStream(scratch) {
         if (!clients.size) stop();
       });
       push();
+      for (const { until, event } of published) if (until > Date.now()) said(res, event);
     },
     close() {
       stop();
@@ -686,105 +719,76 @@ async function postEvent(req, res, { scratch, stream, who }) {
 }
 
 /**
- * The freeze asked for in `body`, the JSON of a `POST /_review/freeze` without its `author`:
- * `{ page, viewport, vp, tags, key, scroll, box, elements, truncated }`. `path` is the page's
- * path; `viewport` a preset or `WxH[@dpr][+touch]`; `tags` optional, as a still's; `scroll`
- * `{x, y}` and `box` `{x, y, w, h}` in CSS pixels, the box from the top left of the viewport;
- * the viewport at most `FREEZE_VIEWPORT.side` CSS pixels a side at a pixel ratio of
- * `FREEZE_VIEWPORT.dpr`; `elements` the marked `{selector, text, html}`, each text and html
- * cut to the target's limits and the list to its first `TARGET_LIMITS.elements`, `truncated`
- * then true. The rest is checked as the target its thread carries (see `targetProblem` of the
- * store), so a problem is named by the target's field. Throws a 400 refusal naming the first problem.
+ * The snapshot a remark carries as `given`, `{ html, scrollers }`, or null without one: what
+ * `snapshot` of `stills/snapshot.js` returns, of which the HTML and the count of its scrollers
+ * are read, its own `viewport` and `scroll` being the remark's. Throws a refusal for one that
+ * is not that (400) or whose HTML is over `MAX_SNAPSHOT_BYTES` (413).
  */
-export function freezeRequest(body) {
-  const fields = ["path", "viewport", "tags", "scroll", "box", "elements", "truncated"];
+function snapshotOf(given) {
+  if (given === undefined || given === null) return null;
+  const fields = ["html", "viewport", "scroll", "scrollers"];
+  if (!isObject(given) || Object.keys(given).some((k) => !fields.includes(k))) {
+    throw refusal(400, "'snapshot' must be {html, scrollers}, as the page's snapshot gives them");
+  }
+  const { html, scrollers } = given;
+  if (typeof html !== "string" || !html) throw refusal(400, "'snapshot.html' must be the page's HTML");
+  if (Buffer.byteLength(html) > MAX_SNAPSHOT_BYTES) {
+    throw refusal(413, `'snapshot.html' must be at most ${MAX_SNAPSHOT_BYTES} bytes`);
+  }
+  if (scrollers !== undefined && !(Number.isInteger(scrollers) && scrollers >= 0)) {
+    throw refusal(400, "'snapshot.scrollers' must be how many scrollers the snapshot stamped");
+  }
+  return { html, ...(scrollers === undefined ? {} : { scrollers }) };
+}
+
+/**
+ * The remark asked for in `body`, the JSON of a `POST /_review/remarks` without its `author`,
+ * to be written by `author`: `{ page, viewport, vp, key, scroll, box, elements, truncated,
+ * body, snapshot }`. `page` is the page's path; `viewport` a preset or `WxH[@dpr][+touch]`, at
+ * most `REMARK_VIEWPORT.side` CSS pixels a side at a pixel ratio of `REMARK_VIEWPORT.dpr`,
+ * `vp` it parsed and `key` the variant it names; `scroll` `{x, y}` and `box` `{x, y, w, h}` in
+ * CSS pixels, the box from the top left of the viewport; `elements` the marked `{selector,
+ * text, html}`, each text and html cut to the target's limits and the list to its first
+ * `TARGET_LIMITS.elements`, `truncated` then true; `body` the remark's text; `snapshot` the
+ * page as it was (see `snapshotOf`), null when the browser could not write one. The rest is
+ * checked as the thread the remark becomes (see `eventProblem` of the store), so a problem is
+ * named by the event's field. Throws a refusal naming the first problem, a 400 but for a
+ * snapshot that is too large.
+ */
+export function remarkRequest(body, author) {
+  const fields = ["page", "viewport", "scroll", "box", "elements", "truncated", "snapshot", "body"];
   const extra = Object.keys(body).find((k) => !fields.includes(k));
-  if (extra) throw refusal(400, `'${extra}' is not a field of a freeze`);
-  const { path: page, viewport, tags: given = [], scroll, box, elements, truncated = false } = body;
+  if (extra) throw refusal(400, `'${extra}' is not a field of a remark`);
+  const { page, viewport, scroll, box, elements, truncated = false, snapshot: given, body: text } = body;
   if (!Array.isArray(elements)) throw refusal(400, "'elements' must be a list of {selector, text, html}");
   const cut = (v, most) => (typeof v === "string" ? v.slice(0, most) : v);
   const kept = elements.slice(0, TARGET_LIMITS.elements).map((e) => {
     if (!isObject(e)) return e;
-    const { selector, text = "", html = "" } = e;
-    return { selector, text: cut(text, TARGET_LIMITS.text), html: cut(html, TARGET_LIMITS.html) };
+    const { selector, text: shown = "", html = "" } = e;
+    return { selector, text: cut(shown, TARGET_LIMITS.text), html: cut(html, TARGET_LIMITS.html) };
   });
   const target = { page, elements: kept, truncated: truncated || elements.length > kept.length, viewport, scroll };
-  const problem = targetProblem({ ...target, state: "reproduced" });
+  const thread = { type: "thread", author, still: "live", rev: 1, body: text, target: { ...target, state: "reproduced" } };
+  const problem = eventProblem(thread);
   if (problem) throw refusal(400, problem);
   const vp = parseViewport(viewport);
-  if (vp.width > FREEZE_VIEWPORT.side || vp.height > FREEZE_VIEWPORT.side || vp.dpr > FREEZE_VIEWPORT.dpr) {
-    const { side, dpr } = FREEZE_VIEWPORT;
-    throw refusal(400, `a freeze's viewport is at most ${side}x${side}@${dpr}`);
-  }
-  let tags;
-  try {
-    if (!Array.isArray(given)) throw new Error("'tags' must be a list");
-    tags = parseTags(given);
-    if (tags.length > MAX_TAGS) throw new Error(`a variant has at most ${MAX_TAGS} tags`);
-    colorScheme(tags);
-  } catch (e) {
-    throw refusal(400, e.message);
+  if (vp.width > REMARK_VIEWPORT.side || vp.height > REMARK_VIEWPORT.side || vp.dpr > REMARK_VIEWPORT.dpr) {
+    const { side, dpr } = REMARK_VIEWPORT;
+    throw refusal(400, `a remark's viewport is at most ${side}x${side}@${dpr}`);
   }
   const sides = isObject(box) ? [box.x, box.y, box.w, box.h] : [];
   if (sides.length !== 4 || !sides.every(Number.isFinite) || !(box.w > 0 && box.h > 0)) {
     throw refusal(400, "'box' must be {x, y, w, h} in CSS pixels, w and h above 0");
   }
   const [x, y, w, h] = sides;
-  return { ...target, vp, tags, key: variantKey(vp, tags), scroll: { x: scroll.x, y: scroll.y }, box: { x, y, w, h } };
-}
-
-let recipeLoaded = null;
-
-/**
- * The recipe the shots module `file` exports, imported again only when the file's size or
- * mtime changed, so a server that freezes often does not keep a module per freeze.
- */
-async function recipeOf(file) {
-  const { size, mtimeMs } = statSync(file);
-  const stamp = `${file}:${size}:${mtimeMs}`;
-  if (recipeLoaded?.stamp !== stamp) recipeLoaded = { stamp, recipe: await loadRecipe(file) };
-  return recipeLoaded.recipe;
+  const snapshot = snapshotOf(given);
+  return { ...target, vp, key: variantKey(vp), scroll: { x: scroll.x, y: scroll.y }, box: { x, y, w, h }, body: text, snapshot };
 }
 
 /**
- * The shots of the mockup's `shots.mjs`, by `<name> <variant key>` (see `expandRecipe`): with
- * the steps that drive the page before its still is shot and the `maxHeight` it is shot whole
- * at. Empty without the file, null when it cannot be read.
- */
-async function recipeShots(scratch) {
-  const file = path.join(scratch, SHOTS_FILE);
-  if (!existsSync(file)) return new Map();
-  try {
-    return new Map(expandRecipe(await recipeOf(file)).map((shot) => [`${shot.name} ${shot.key}`, shot]));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The still of `scratch` a freeze of `page` at the variant `key` keeps its shot on, `{ still,
- * variant, maxHeight }`, or null: the first whose source is `page`, that has that variant shot,
- * and whose variant `shots.mjs` does not shoot after steps (none when the file cannot be read),
- * `maxHeight` the one `shots.mjs` shoots it whole at, if it shoots it. One shot only at its viewport `vp` is
- * taken only when the box `marked`, in CSS pixels of the page, is inside it.
- */
-async function reusableStill(scratch, { page, key, vp, marked }) {
-  const recipe = await recipeShots(scratch);
-  if (!recipe) return null;
-  for (const still of stills(scratch)) {
-    const shot = recipe.get(`${still.name} ${key}`);
-    if (still.source.path !== page || shot?.steps) continue;
-    const variant = still.variants.find((v) => v.key === key && v.revs.length);
-    const inside = marked.x + marked.w <= vp.width && marked.y + marked.h <= vp.height;
-    if (variant && (variant.viewport?.fullPage || inside)) return { still, variant, maxHeight: shot?.maxHeight };
-  }
-  return null;
-}
-
-/**
- * The name of the still a freeze of `page` makes when no still is kept for it: `live-<slug>`,
- * the slug its path and query lowercased, with a run of anything but letters, digits, `.` and
- * `_` as one `-`. A name another page's still has already ends with a hash of `page`.
+ * The name of the still a remark on the live page `page` keeps its shot on: `live-<slug>`, the
+ * slug its path and query lowercased, with a run of anything but letters, digits, `.` and `_`
+ * as one `-`. A name another page's still has already ends with a hash of `page`.
  */
 export function liveName(scratch, page) {
   const slug = page.slice(1).toLowerCase().replace(/[^a-z0-9._]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
@@ -794,24 +798,15 @@ export function liveName(scratch, page) {
   return taken ? `${name.slice(0, MAX_NAME_LENGTH - hash.length - 1)}-${hash}` : name;
 }
 
-/** The part of the rect `r` (`{x, y, w, h}`) inside an image of `size` (`{w, h}`), or null. */
-function clip(r, size) {
-  const x = Math.max(0, r.x);
-  const y = Math.max(0, r.y);
-  const right = Math.min(size.w, r.x + r.w);
-  const bottom = Math.min(size.h, r.y + r.h);
-  return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
-}
-
 /**
- * Where a live mark lands on a shot of `size` CSS pixels, `{ anchor, state }`. With `rects`,
- * where each marked element is on the shot (null for one not found), all on it: the region
- * around them, `reproduced`. Else the box `marked` the browser sent, in CSS pixels of the page,
- * `not-reproduced`, and no anchor when that box is not on the shot either. A mark of no
- * element is never reproduced.
+ * The anchor of a live remark on a shot of `size` CSS pixels, a region normalized to it. With
+ * `rects`, where each marked element is on the shot (null for one not found), all on it: the
+ * region around them. Else the box `marked` the reviewer drew, in CSS pixels of the shot, and
+ * the whole shot when that box is not on it either.
  */
 export function placeMark(rects, marked, size) {
-  const found = rects.map((r) => r && clip(r, size));
+  const shot = { x: 0, y: 0, ...size };
+  const found = rects.map((r) => r && overlap(r, shot));
   let region = null;
   if (found.length && found.every(Boolean)) {
     const x = Math.min(...found.map((r) => r.x));
@@ -820,104 +815,169 @@ export function placeMark(rects, marked, size) {
     const bottom = Math.max(...found.map((r) => r.y + r.h));
     region = { x, y, w: right - x, h: bottom - y };
   }
-  const box = region ?? clip(marked, size);
-  const anchor = box && { x: box.x / size.w, y: box.y / size.h, w: box.w / size.w, h: box.h / size.h };
-  return { anchor, state: region ? "reproduced" : "not-reproduced" };
+  const box = region ?? overlap(marked, shot);
+  return box ? { x: box.x / size.w, y: box.y / size.h, w: box.w / size.w, h: box.h / size.h } : WHOLE;
 }
 
 /**
- * Freeze a live mark of the scratch dir `scratch`: shoot the page `request` names (see
- * `freezeRequest`) from scratch at its viewport and tags with `shoot` (`capture`), measuring the
- * marked elements' selectors, from the server at `base`, and keep the shot as a revision of a
- * still. That is the still of that screen when one is kept (see `reusableStill`), shot as it
- * was, whole or not, so an image equal to its latest revision adds none; else `live-<slug>`
- * (see `liveName`), shot whole, with that variant. Resolves to `{ still, variant, rev, anchor,
- * state, target }`: the revision the remark goes on, its anchor and state (see `placeMark`),
- * and the `target` its thread carries.
+ * Shoot the page of the remark `request` into the PNG `file`: `{ state, fullPage, rects,
+ * marked }`. Its snapshot is rendered with `render` (`renderSnapshot`) at the reviewer's
+ * viewport and scroll, the shot the viewport, `reproduced`, `rects` where the elements the
+ * snapshot stamped are on it, one for each of the remark's elements, null for one the render
+ * lacks, and `marked` the box as drawn. Without a snapshot, or when it
+ * does not render, the page is loaded again from `base` and shot whole with `shoot`
+ * (`capture`), `not-reproduced`: `rects` are then where the elements' selectors are, and
+ * `marked` the box moved by the scroll. Rejects when that shot fails too.
  */
-export async function freeze(scratch, request, { shoot = capture, base }) {
-  const { page, viewport, vp, tags, key, scroll, box, elements, truncated } = request;
+async function shootRemark(request, { file, base, shoot, render }) {
+  const { page, viewport, scroll, box, elements, snapshot } = request;
+  if (snapshot) {
+    try {
+      const { png, rects } = await render({
+        html: snapshot.html,
+        viewport,
+        scroll,
+        scrollers: snapshot.scrollers,
+        marks: elements.length,
+        base,
+      });
+      writeFileSync(file, png);
+      return { state: "reproduced", fullPage: false, rects, marked: box };
+    } catch (e) {
+      console.error(`[mockup] the snapshot of ${page} did not render, shooting it loaded again: ${e.message}`);
+    }
+  }
+  const shot = await shoot({
+    url: new URL(page, base).href,
+    out: file,
+    viewport,
+    fullPage: true,
+    measure: elements.map((e) => e.selector),
+  });
   const marked = { x: box.x + scroll.x, y: box.y + scroll.y, w: box.w, h: box.h };
-  const kept = await reusableStill(scratch, { page, key, vp, marked });
-  const tmp = mkdtempSync(path.join(tmpdir(), "freeze-"));
+  return { state: "not-reproduced", fullPage: shot.fullPage, rects: shot.rects ?? [], marked };
+}
+
+/**
+ * Post the live remark `request` (see `remarkRequest`) of the scratch dir `scratch` as the
+ * thread `id` by `author`: shoot its page (see `shootRemark`), keep the shot as a revision of
+ * the still `live-<slug>` (see `liveName`) at the variant of its viewport, an image equal to
+ * the variant's latest adding none; draw the anchor on the shot (see `placeMark`) as
+ * `review/annotated/<id>.png`; and append the `thread` event with that still, variant,
+ * revision and anchor, the remark's body and its `target`. Resolves to `{ event, added }`, the
+ * stored event and whether the shot added a revision. Rejects when any of it fails, the log
+ * then left as it was and no annotated still kept.
+ */
+export async function remark(scratch, request, { id, author, base, shoot = capture, render = renderSnapshot }) {
+  const { page, viewport, vp, key, scroll, elements, truncated, body } = request;
+  const tmp = mkdtempSync(path.join(tmpdir(), "remark-"));
   try {
-    const shot = await shoot({
-      url: new URL(page, base).href,
-      out: path.join(tmp, "shot.png"),
-      viewport,
-      tags,
-      fullPage: kept ? Boolean(kept.variant.viewport?.fullPage) : true,
-      maxHeight: kept?.maxHeight,
-      measure: elements.map((e) => e.selector),
-    });
-    const { entry, rev } = await addStill(scratch, {
-      file: shot.file,
-      name: kept?.still.name ?? liveName(scratch, page),
-      title: kept ? undefined : `${page} (live)`,
+    const file = path.join(tmp, "shot.png");
+    const shot = await shootRemark(request, { file, base, shoot, render });
+    const { entry, rev, unchanged } = await addStill(scratch, {
+      file,
+      name: liveName(scratch, page),
+      title: `${page} (live)`,
       source: page,
       viewport,
-      tags,
       fullPage: shot.fullPage,
     });
-    const size = { w: shot.width / vp.dpr, h: shot.height / vp.dpr };
-    const { anchor, state } = placeMark(shot.rects ?? [], marked, size);
-    const target = { page, elements, ...(truncated ? { truncated } : {}), viewport, scroll, state };
-    return { still: entry.name, variant: key, rev: rev.n, anchor, state, target };
+    const png = readFileSync(file);
+    const { width, height } = pngSize(png);
+    const anchor = placeMark(shot.rects, shot.marked, { w: width / vp.dpr, h: height / vp.dpr });
+    const target = { page, elements, ...(truncated ? { truncated } : {}), viewport, scroll, state: shot.state };
+    const drawn = storeAnnotated(scratch, id, await markedPng(png, anchor));
+    try {
+      const thread = { type: "thread", still: entry.name, variant: key, rev: rev.n, anchor, body, target, author };
+      return { event: await appendEvent(scratch, thread, { id }), added: !unchanged };
+    } catch (e) {
+      rmSync(drawn, { force: true });
+      throw e;
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-let freezing = Promise.resolve();
-let waiting = 0;
+const reserved = new Set();
+let shooting = Promise.resolve();
+let inHand = 0;
 
-/**
- * Run `fn` once every freeze before it has ended, so one Chromium shoots at a time. Throws a
- * 503 refusal when `MAX_FREEZES_WAITING` freezes are in hand already, the one shooting among them.
- */
-function oneAtATime(fn) {
-  if (waiting >= MAX_FREEZES_WAITING) throw refusal(503, "busy shooting other marks; try again shortly");
-  waiting += 1;
-  const run = freezing.then(fn).finally(() => {
-    waiting -= 1;
-  });
-  freezing = run.catch(() => {});
-  return run;
+/** An id no event of `scratch` has and no remark in hand was promised, kept for one until `reserved` lets go of it. */
+function reserveId(scratch) {
+  const taken = new Set(readEvents(scratch).events.map((e) => e.id));
+  let id = newId();
+  while (taken.has(id) || reserved.has(id)) id = newId();
+  reserved.add(id);
+  return id;
 }
 
 /**
- * `POST /_review/freeze`: freeze the live mark the JSON body asks for (see `freezeRequest` and
- * `freeze`) and answer 200 with where its remark goes. It takes what `POST /_review/events`
- * takes: JSON only (415), from this host's origin only (403), a body of at most 64 KiB besides
- * what the target's limits let its path and elements take (413), and a guest's needs a name in
- * `author` (400), since it writes a still. A bad request is a 400; a shot that failed a 500; a
- * freeze while `MAX_FREEZES_WAITING` are in hand, one shooting and the rest waiting, a 503.
- * A folder source has no pages to mark, and a path that is no page of the mockup none (404). The page is shot from this server, at
- * `127.0.0.1` on the port the request came to.
+ * Run `job` once every remark before it has ended, so one Chromium shoots at a time. A job that
+ * rejects is logged and the next one still runs.
  */
-async function postFreeze(req, res, { scratch, stream, who, shoot }) {
+function inTurn(job) {
+  inHand += 1;
+  const failed = (e) => console.error(`[mockup] a remark's job failed: ${e?.message ?? e}`);
+  shooting = shooting.then(job).catch(failed).finally(() => {
+    inHand -= 1;
+  });
+}
+
+/**
+ * `POST /_review/remarks`: take the remark made on the live page that the JSON body holds (see
+ * `remarkRequest`), answer 202 with `{ id }`, the id its thread will have, and post it in the
+ * background (see `remark`), one remark at a time. When it is posted the stream sends its
+ * `thread` event, after `stills` when the shot added a revision; when it could not be, the
+ * stream alone, not the log, says `{ type: "remark-failed", id, error }` (see `publish` of
+ * `eventStream`).
+ *
+ * It takes what `POST /_review/events` takes: JSON only (415), from this host's origin only
+ * (403), and a guest's needs a name in `author` (400). The snapshot's HTML is at most 8 MiB
+ * and the rest of the body 64 KiB besides what the target's limits let its path and elements
+ * take (413). A bad request is a 400; a remark while `MAX_REMARKS_WAITING` are in hand, one
+ * shooting and the rest waiting, a 503. A folder source has no pages to mark, and a path that
+ * is no page of the mockup none (404). The page is shot from this server, at `127.0.0.1` on
+ * the port the request came to.
+ */
+async function postRemark(req, res, { scratch, stream, who, shoot, render }) {
   let request;
+  let author;
+  let id;
   try {
-    const { value } = await jsonPost(req, MAX_FREEZE_BYTES, "a freeze");
+    const { value } = await jsonPost(req, MAX_REMARK_BYTES, "a remark");
     const { author: given, ...fields } = value;
-    authorOf(who, given);
+    author = authorOf(who, given);
     if (typeof scratch !== "string") throw refusal(404, "a folder has no pages to mark");
-    request = freezeRequest(fields);
+    if (Buffer.byteLength(JSON.stringify({ ...fields, snapshot: null })) > MAX_POST_BYTES + MAX_TARGET_BYTES) {
+      throw refusal(413, `a remark must be at most ${MAX_POST_BYTES} bytes besides its snapshot and its target`);
+    }
+    request = remarkRequest(fields, author);
     if (!pageAt(scratch, request.page)) throw refusal(404, `no page of the mockup at ${request.page}`);
+    if (inHand >= MAX_REMARKS_WAITING) throw refusal(503, "busy shooting other remarks; try again shortly");
   } catch (e) {
     return sendJson(res, e.status ?? 400, { error: e.message });
   }
-  const base = `http://127.0.0.1:${req.socket.localPort}`;
-  let frozen;
   try {
-    frozen = await oneAtATime(() => freeze(scratch, request, { shoot, base }));
+    id = reserveId(scratch);
   } catch (e) {
-    if (e.status) return sendJson(res, e.status, { error: e.message });
-    console.error(`[mockup] freeze of ${request.page} failed: ${e.message}`);
     return sendJson(res, 500, { error: e.message });
   }
-  stream.notify("stills");
-  return sendJson(res, 200, frozen);
+  const base = `http://127.0.0.1:${req.socket.localPort}`;
+  inTurn(async () => {
+    let posted;
+    try {
+      posted = await remark(scratch, request, { id, author, base, shoot, render });
+    } catch (e) {
+      console.error(`[mockup] remark ${id} on ${request.page} not posted: ${e.message}`);
+      return stream.publish({ type: "remark-failed", id, error: e.message });
+    } finally {
+      reserved.delete(id);
+    }
+    if (posted.added) stream.notify("stills");
+    return stream.push();
+  });
+  return sendJson(res, 202, { id });
 }
 
 /**
@@ -946,9 +1006,10 @@ function sendSource(req, res, scratch, name) {
 /**
  * Answer a request under `/_review/`, sent by `who` (see `reviewer`); false when the URL is not
  * one, so the caller goes on. `scratch` is the scratch dir, or the handle of a folder source;
- * `shoot` is what a freeze shoots with, `capture` unless given.
+ * `render` is what shoots the snapshot of a remark made on the live page and `shoot` what
+ * shoots its page loaded again, `renderSnapshot` and `capture` unless given.
  */
-export async function handleReview(req, res, { scratch, stream, who, shoot = capture }) {
+export async function handleReview(req, res, { scratch, stream, who, shoot = capture, render = renderSnapshot }) {
   if (!req.url.startsWith("/_review/")) return false;
   const { pathname, searchParams } = new URL(req.url, "http://mockup");
   const name = pathname.slice("/_review/".length);
@@ -973,9 +1034,9 @@ export async function handleReview(req, res, { scratch, stream, who, shoot = cap
     await postEvent(req, res, { scratch, stream, who });
   } else if (name === "events") {
     methodNotAllowed(res, "GET, POST");
-  } else if (name === "freeze" && req.method === "POST") {
-    await postFreeze(req, res, { scratch, stream, who, shoot });
-  } else if (name === "freeze") {
+  } else if (name === "remarks" && req.method === "POST") {
+    await postRemark(req, res, { scratch, stream, who, shoot, render });
+  } else if (name === "remarks") {
     methodNotAllowed(res, "POST");
   } else {
     sendJson(res, 404, { error: "no such route" });
@@ -1026,7 +1087,7 @@ export function menuPlugin({ app, hosts = [] }) {
         const rel = path.relative(scratch, file).split(path.sep).join("/");
         if (rel === EVENTS_FILE) stream.push();
         if (rel === MANIFEST_FILE) stream.notify("stills");
-        if (rel === "manifest.json" || rel === MANIFEST_FILE || rel.startsWith("shots/")) {
+        if (rel === "manifest.json" || rel.startsWith("shots/")) {
           server.ws.send({ type: "full-reload", path: "*" });
         }
       };

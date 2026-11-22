@@ -309,7 +309,7 @@ for it (see [Live marks](#live-marks)); the target is what the reviewer pointed 
 | `truncated` | Optional: `true` when more elements were marked than `elements` keeps. |
 | `viewport`  | The viewport the page was seen at, a [preset or custom viewport](#viewports). |
 | `scroll`    | `{x, y}`: how far the page was scrolled, in CSS pixels, 0 or more. |
-| `state`     | `reproduced` when the shot shows every marked element, so the anchor is the region around them on it; `not-reproduced` when it does not (the reviewer reached them by acting on the page, such as opening a dialog, which a page loaded from scratch does not show), so the anchor is the box the reviewer drew and the elements' HTML is what is left of them. |
+| `state`     | `reproduced` when the shot is the page's snapshot rendered, so it shows the page as the reviewer had it; `not-reproduced` when the snapshot did not render and the shot is the page loaded again from scratch, which lacks what the reviewer did on it (a dialog opened, a tab switched, text typed): the elements' HTML is then what is left of them. |
 
 Every other field makes the line malformed. The threads fold carries it as `target`, null on a
 thread without one; `preview review show` prints it under the thread's image and mark, and the
@@ -322,7 +322,9 @@ thread without one; `preview review show` prints it under the thread's image and
 revision's image with the anchor drawn on it, a red frame for a region and a red ring for a
 pin, so an agent reads one image instead of drawing the mark itself. The viewer draws it when
 the remark is posted and the runtime writes it right after the `thread` event, whole (written
-beside its name, then renamed). It is a convenience, not part of the log:
+beside its name, then renamed). For a remark made on the [live page](#live-marks) no viewer is
+open, so the runtime draws it itself, before it appends the event. It is a convenience, not
+part of the log:
 
 - It may be missing: the thread has no anchor, the browser could not draw it, or the event was
   read in the instant before the file landed. The event's `still`, `rev` and `anchor` always
@@ -431,67 +433,87 @@ reviewer's marked revisions as `{reviewer: {still: {variant key: rev}}}`, `worki
 
 ## Live marks
 
-A reviewer can mark the live mockup page instead of a still, in the live shell the runtime
-serves at `/live/<slug>` for the page `/<slug>`. The page shows what was marked, a still
-keeps it: the runtime shoots the page again for the remark, and the remark goes on that shot
-with the marked elements as its [target](#targets). The shell sends the device class the page
-was shown at as the viewport (`mobile`, `tablet` or `desktop`), a selector for each element
-that matches it alone on the page, and the elements in a drawn box outermost first.
+A reviewer can remark on the live mockup page instead of a still, in the live shell the
+runtime serves at `/live/<slug>` for the page `/<slug>`. The remark is made and posted there,
+and nothing reloads or leaves the page for it. With the remark the shell sends a **snapshot**:
+the page's document as the reviewer has it (form state, open dialogs, the scroll of every
+scroller, canvas pixels; see [`mockup/stills/snapshot.js`](../mockup/stills/snapshot.js)),
+each marked element stamped `data-pv-mark="<i>"`. The runtime renders that snapshot in its
+headless browser, shoots it, keeps the shot as a still and posts the remark as a `thread` on
+it, with the marked elements as its [target](#targets). The shell sends the device class the
+page was shown at as the viewport (`mobile`, `tablet` or `desktop`), a selector for each
+element that matches it alone on the page, and the elements in a drawn box outermost first.
 
-`POST /_review/freeze` asks for that shot, a JSON body:
+`POST /_review/remarks` posts the remark, a JSON body:
 
 | Field       | Meaning |
 | ----------- | ------- |
-| `path`      | The page's path, as `target.page`. |
+| `page`      | The page's path, as `target.page`. |
 | `viewport`  | The viewport it was seen at, a preset or `WxH[@dpr][+touch]`, at most 4096 CSS pixels a side at a pixel ratio of at most 4. |
-| `tags`      | Optional [tags](#tags) of the variant to shoot, at most 16, `dark` or `light` setting the colour scheme. |
 | `scroll`    | `{x, y}`, as `target.scroll`. |
 | `box`       | `{x, y, w, h}`: the box drawn, in CSS pixels from the top left of the viewport, `w` and `h` above 0. |
 | `elements`  | The marked `{selector, text, html}`; text and HTML are cut and the list kept to its first 20, `truncated` then true. |
 | `truncated` | Optional: `true` when the browser kept fewer elements than were marked. |
+| `snapshot`  | `{html, scrollers}`: the snapshot's HTML, at most 8 MiB as UTF-8, and how many elements it stamped `data-pv-scroll` (optional). The `viewport` and `scroll` that `snapshot()` returns beside them may be sent and are not read: the remark's own are used. Null or left out when the browser could not write one. |
+| `body`      | The remark's text, as a `thread`'s. |
 | `author`    | A guest's `{name}`, as on an event. |
 
-It is posted as an event is: JSON only (`415`), from the page's own origin only (`403`), at
-most 64 KiB besides what the target's limits let its path and elements take, three bytes a
-character (`413`), and a guest's needs a name (`400`, `name required`; see
-[Reviewers](#reviewers)). A bad field is a `400`, named as the target's field when the target
-has it; a shot that failed a `500`; a folder source, which has no pages, or a `path` that is no page of the mockup (`/<slug>` served from `pages/<slug>.html`) a `404`. Freezes are
-shot one at a time, and one posted while four are in hand (one shooting, three waiting their
-turn) is a `503`. The runtime then shoots `path` from scratch at that
-viewport and tags in its headless browser, measuring each element's selector on the shot, and
-keeps the shot as a revision of a still, under `stills/.lock` as any still is added:
+It is posted as an event is: JSON only (`415`), from the page's own origin only (`403`), and
+a guest's needs a name (`400`, `name required`; see [Reviewers](#reviewers)). The snapshot's
+HTML is at most 8 MiB and the rest of the body at most 64 KiB besides what the target's limits
+let its path and elements take, three bytes a character (`413`). A bad field is a `400`,
+named as the thread's or the target's field when they have it; a folder source, which has no
+pages, or a `page` that is no page of the mockup (`/<slug>` served from `pages/<slug>.html`)
+a `404`. Remarks are shot one at a time, and one posted while four are in hand (one shooting,
+three waiting their turn) is a `503`.
 
-1. **The still of that screen**, when there is one: the first still whose `source.path` is
-   `path`, that has the variant of that viewport and tags, and whose variant `shots.mjs` does
-   not shoot after steps (none when `shots.mjs` cannot be read). It is shot as that variant
-   was, whole or not, and at the `maxHeight` `shots.mjs` gives it; one shot only at its
-   viewport is taken only when the box, moved by the scroll, is inside it. An image equal to the variant's latest revision adds none, so a new revision
-   appears only when the still was stale.
-2. **Otherwise `live-<slug>`**, made with that variant and shot whole: the slug is the path
-   with its query, lowercased, each run of characters other than letters, digits, `.` and `_`
-   one `-`, those three trimmed from its ends, the name cut to 100 characters
-   (`/checkout?step=2` is `live-checkout-step-2`). A name a still
-   of another page already has ends with `-` and six hex characters of the SHA-256 of `path`.
-   Its title is `<path> (live)`.
+The answer is `202` with `{id}`, **the id the thread will have**, sent at once: nothing has
+been shot yet. The runtime then, in the background:
 
-It answers `200` with `{still, variant, rev, anchor, state, target}`: the revision the remark
-goes on, its anchor and state, and the `target` its `thread` event carries. A selector is
-found when it matches exactly one visible element with an area on the shot, an element left
-with no opacity being hidden as the live shell holds it; one that matches
-none, more than one (which was meant is not known) or does not parse is not. When every
-selector is found on the shot, the anchor is the region around their elements on it and the
-state `reproduced`; otherwise, or with no elements, the anchor is the box sent, moved by the
-scroll and cut to the shot, and the state `not-reproduced` (no anchor when that box is not on
-the shot). The reviewer then posts the remark as a `thread` on that still, variant and rev,
-with the anchor and the target, through `POST /_review/events`.
+1. **Shoots the page.** It renders the snapshot at that viewport, with the window and every
+   scroller where they were, and shoots the viewport: the target's `state` is `reproduced`.
+   When there is no snapshot or it does not render (the browser failed, or the HTML did not
+   parse back into as many scrollers as it stamped), it loads `page` again from scratch and
+   shoots it whole, as a remark's shot was before snapshots: `state` is `not-reproduced`.
+2. **Keeps the shot** as a revision of the still `live-<slug>`, at the variant of the
+   viewport, under `stills/.lock` as any still is added. An image equal to the variant's
+   latest revision adds none, so two remarks on a page that did not change share a revision.
+   The slug is the path with its query, lowercased, each run of characters other than
+   letters, digits, `.` and `_` one `-`, those three trimmed from its ends, the name cut to
+   100 characters (`/checkout?step=2` is `live-checkout-step-2`). A name a still of another
+   page already has ends with `-` and six hex characters of the SHA-256 of `page`. Its title
+   is `<page> (live)`. The stills `shots.mjs` shoots are never given a live remark's shot.
+3. **Places the anchor.** On a rendered snapshot the marked elements are the stamped ones;
+   on a page loaded again, the one visible element each selector matches (none for a selector
+   that matches no element, more than one, or does not parse). When every marked element is on
+   the shot the anchor is the region around them; otherwise, or with no elements, it is the
+   box drawn (moved by the scroll on a page shot whole), cut to the shot, and the whole shot
+   when that box is not on it.
+4. **Draws the [annotated still](#annotated-stills)**, `review/annotated/<id>.png`: the shot
+   with the anchor framed.
+5. **Appends the `thread` event** with that `id`, the still, variant, revision and anchor,
+   the body and the target, authored as the request was.
+
+The event then goes out on `GET /_review/events` as any other, after a `stills` event when the
+shot added a revision. When the remark could not be posted (no shot could be taken, or the
+store could not be written), nothing is appended and no annotated still is kept; the stream
+sends an event named `remark-failed` with the data `{"type": "remark-failed", "id", "error"}`.
+It is **not in the log** and has no `seq`: a client connected at the time gets it, one that
+connects in the ten minutes after gets it again on connecting (the last twenty at most), and
+no later reader ever sees it. A client that posted a remark keeps its draft until the `thread`
+event with its `id` lands, and offers it again on a `remark-failed` with that `id`.
+
+`/stills#thread=<id>` opens the viewer on a thread: its still, on its variant and the revision
+it was made on, with the conversation unfolded. A thread that is not there yet, as one whose
+shot is still being taken, is opened when the stream brings it.
 
 ## Who writes what
 
 | File                        | Written by | Read by |
 | --------------------------- | ---------- | ------- |
-| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, `preview stills shoot`, the `/mockup` skill's `mockup.sh shot`, the runtime for a [live mark](#live-marks) | the viewer, `preview stills ls`, the agent |
-| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `viewed`, `unviewed`, and for a tailnet user `resolve`, `reopen`; see [Reviewers](#reviewers)), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
-| `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`: the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
+| `stills/manifest.json`, `stills/<name>/<key>/<n>.png` | whoever shoots stills, through `addStill`: `preview stills add`, `preview stills shoot`, the `/mockup` skill's `mockup.sh shot`, the runtime for a [live remark](#live-marks) | the viewer, `preview stills ls`, the agent |
+| `review/events.jsonl`       | the viewer for the human (`thread`, `reply`, `viewed`, `unviewed`, and for a tailnet user `resolve`, `reopen`; see [Reviewers](#reviewers)), the runtime for the `thread` of a [live remark](#live-marks), `preview review reply\|resolve\|reopen\|working\|idle` for the agent | the viewer (live, over SSE), `preview review ls\|show\|watch`, any later reader |
+| `review/annotated/<id>.png` | the viewer, when it posts thread `<id>`, or the runtime for a [live remark](#live-marks): the revision's PNG with the anchor drawn on it | the agent, to see the remark without redrawing it |
 
 Readers need no lock. Writers go through the reference implementation or follow its
 protocol exactly, because the runtime (in a container) and the CLI (on the host) write the
@@ -505,7 +527,7 @@ same files at once:
 2. **Validate** the event against the schema, and that its thread exists in the log and its
    still, variant (the first when it names none) and rev in the manifest.
 3. **Assign** `seq` (one above the log's last good `seq`, 1 for an empty log), a fresh `id`
-   and `at`.
+   (or, for a live remark, the id its `202` gave, refused when the log holds it) and `at`.
 4. **Append** the line, `\n`-terminated, with a single `write` on a descriptor opened with
    `O_APPEND`, preceded by a `\n` when the file does not end with one.
 5. **Release** the lock by removing it, only if it is still the file you created (same inode).

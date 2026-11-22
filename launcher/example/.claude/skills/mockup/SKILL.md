@@ -118,16 +118,19 @@ card's **Review**), that it is on the hub under "<project> mockup" and stops in 
 that was the question.
 
 With a mockup live, start `preview review watch` under Monitor before reporting, stills or
-not, so no remark is missed: one marked on a live page makes its own still (`live-<slug>`). Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05-invite
+not, so no remark is missed: one marked on a live page (`<url>/live/<slug>`, the menu's
+**Live** links) is posted from that page, shot from its DOM as the reviewer had it, onto a
+still of its own (`live-<slug>`), and your reply shows in that page's Remarks panel, beside a
+numbered pin on the element. Answer its `thread`, `reply` and `reopen` lines (`#13 thread 3f9a0c1e 05-invite
 [mobile+dark] r1 box ... Ana (guest): "..."`); skip the rest. Resolving is the human's.
 
 For each: `preview review working <id> --note "<what>"` first, so the reviewer sees you on it;
 `preview review show <id>` and Read its `marked` PNG (else `image`); when it prints a `page`,
-the remark was marked on the live page (`<url>/live/<slug>`, the menu's **Live** links): its
-`element` lines are what was marked, each a selector, its text and its HTML, so find those
-elements in the page's source and fix them, not what the box happens to cover; with `state
-not-reproduced` the PNG shows the page as it loads, without the state the reviewer marked it
-in (an open dialog), so go by the elements' HTML and get to that state yourself; fix the page; re-shoot
+the remark was marked on the live page: the PNG is the page as the reviewer had it (their
+tab, toggles, open dialog, scroll) and its `element` lines are what was marked, each a
+selector, its text and its HTML, so find those elements in the page's source and fix them,
+not what the box happens to cover; only when `state` is not `reproduced` go by the elements'
+HTML instead of the PNG; fix the page; re-shoot
 that still, same name, same variant (`mobile+dark` is `--viewport mobile --tag dark`,
 `custom-390x700` is `--viewport 390x700`; `source.path`, `viewport.fullPage` and `tags` are in
 `preview stills ls --json`), so the viewer flags it "changed since reviewed"; then `preview
