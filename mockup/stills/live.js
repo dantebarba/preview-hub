@@ -67,17 +67,21 @@ import {
   livePath,
   markedIn,
   moved,
+  node,
   opposite,
+  overlap,
   pageOfLive,
   place,
   presetSize,
   region,
   scaleToFit,
   SMALL_SCREEN,
+  statusLabel,
   store,
   stored,
   TAP_PX,
   TARGET_LIMITS,
+  threadLink,
 } from "./state.js";
 import { snapshot } from "./snapshot.js";
 import { asking, askName, closeWho, keptName } from "./who.js";
@@ -323,15 +327,6 @@ function write(target, key, value) {
   if (target[key] !== value) target[key] = value;
 }
 
-/** What the rects `a` and `b` share, null when it has no area. */
-function cut(a, b) {
-  const x = Math.max(a.x, b.x);
-  const y = Math.max(a.y, b.y);
-  const w = Math.min(a.x + a.w, b.x + b.w) - x;
-  const h = Math.min(a.y + a.h, b.y + b.h) - y;
-  return w > 0 && h > 0 ? { x, y, w, h } : null;
-}
-
 /**
  * What shows of the element `target` in the page's viewport, as a rect of it, or null when
  * nothing does: it is not in the page, a style hides it, it is out of the viewport or of an
@@ -348,11 +343,11 @@ function spot(target) {
     : style.visibility !== "hidden";
   if (!shows) return null;
   const { width, height } = presetSize(state.device);
-  let seen = cut(rectOf(target), { x: 0, y: 0, w: width, h: height });
+  let seen = overlap(rectOf(target), { x: 0, y: 0, w: width, h: height });
   const fixed = style.position === "fixed";
   for (let at = target.parentElement; seen && !fixed && at && at !== doc.body; at = at.parentElement) {
     const { overflowX, overflowY, position } = view.getComputedStyle(at);
-    if (overflowX !== "visible" || overflowY !== "visible") seen = cut(seen, rectOf(at));
+    if (overflowX !== "visible" || overflowY !== "visible") seen = overlap(seen, rectOf(at));
     if (position === "fixed") break;
   }
   if (!seen) return null;
@@ -437,17 +432,9 @@ function timeOf(at) {
   return time;
 }
 
-/** A new element `tag` of the class `name` that says `text`. */
-function make(tag, name, text = "") {
-  const made = document.createElement(tag);
-  made.className = name;
-  made.textContent = text;
-  return made;
-}
-
 /** The name of `author` as the panel writes it, an agent's told apart by its colour. */
 function byline(author) {
-  return make("b", author.kind === "agent" ? "by agent" : "by", author.name);
+  return node("b", author.kind === "agent" ? "by agent" : "by", author.name);
 }
 
 /**
@@ -458,24 +445,24 @@ function byline(author) {
  */
 function cardOf(thread) {
   if (cards.has(thread.id)) return cards.get(thread.id);
-  const card = make("article", "thread");
-  const head = make("div", "head");
-  head.append(make("span", "n"), byline(thread.author), timeOf(thread.at));
-  if (thread.target.state === "not-reproduced") head.append(make("span", "chip", "not reproduced"));
-  const field = make("textarea", "answer");
+  const card = node("article", "thread");
+  const head = node("div", "head");
+  head.append(node("span", "n"), byline(thread.author), timeOf(thread.at));
+  if (thread.target.state === "not-reproduced") head.append(node("span", "chip", "not reproduced"));
+  const field = node("textarea", "answer");
   field.rows = 2;
   field.hidden = true;
   field.setAttribute("aria-label", "Reply");
-  const foot = make("div", "foot");
-  const reply = make("button", "send", "Reply");
-  const status = make("button", "settle");
-  const link = make("a", "", "Open");
+  const foot = node("div", "foot");
+  const reply = node("button", "send", "Reply");
+  const status = node("button", "settle");
+  const link = node("a", "", "Open");
   link.target = "_blank";
   link.rel = "noopener";
-  link.href = `/stills#thread=${encodeURIComponent(thread.id)}`;
+  link.href = threadLink(thread.id);
   status.hidden = state.me?.via !== "tailnet";
   foot.append(reply, status, link);
-  card.append(head, make("p", "text", thread.body), make("div", "entries"), field, foot);
+  card.append(head, node("p", "text", thread.body), node("div", "entries"), field, foot);
   reply.onclick = () => answer(thread, reply, field);
   status.onclick = () => {
     const now = threads.find((one) => one.id === thread.id) ?? thread;
@@ -505,12 +492,12 @@ function fill(thread, n) {
   write(card.querySelector(".n"), "textContent", String(n));
   card.classList.toggle("resolved", thread.status !== "open");
   card.classList.toggle("on", thread.id === state.thread);
-  write(card.querySelector(".settle"), "textContent", thread.status === "open" ? "Resolve" : "Reopen");
+  write(card.querySelector(".settle"), "textContent", statusLabel(thread));
   for (const reply of thread.replies.slice(entries.children.length)) {
-    const entry = make("div", "entry");
-    const who = make("div", "who");
+    const entry = node("div", "entry");
+    const who = node("div", "who");
     who.append(byline(reply.author), timeOf(reply.at));
-    entry.append(who, make("p", "text", reply.body));
+    entry.append(who, node("p", "text", reply.body));
     entries.append(entry);
   }
   return card;
@@ -985,7 +972,7 @@ function drawToast() {
   el("toast-text").textContent = failed ? `Not posted: ${shown.error}` : "Posted";
   el("spin").hidden = shown.status !== "shooting";
   el("open").hidden = shown.status !== "posted";
-  if (shown.status === "posted") el("open").href = `/stills#thread=${encodeURIComponent(shown.id)}`;
+  if (shown.status === "posted") el("open").href = threadLink(shown.id);
   el("retry").hidden = !failed;
 }
 

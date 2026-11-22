@@ -98,6 +98,7 @@ import {
   linkedKey,
   livePath,
   moved,
+  node,
   notesLine,
   opposite,
   pickOf,
@@ -115,12 +116,14 @@ import {
   sizeLabel,
   sizesOf,
   SMALL_SCREEN,
+  statusLabel,
   step,
   store,
   stored,
   tagsLabel,
   tagsOf,
   TAP_PX,
+  THREAD_HASH,
   title,
   unread,
   viewOn,
@@ -135,7 +138,6 @@ import { asking, askName as askForName, closeWho, keptName } from "./who.js";
 const SHOW_REVIEWED_KEY = "stills.showReviewed";
 const LAYOUT_KEY = "stills.layout";
 const SEEN_KEY = "stills.seen";
-const THREAD_HASH = /^#thread=([\w-]{1,64})$/;
 const SWIPE_PX = 60;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_PX = 30;
@@ -348,14 +350,6 @@ function buildStrip() {
   });
 }
 
-/** A new `tag` element of class `className` holding `text`. */
-function node(tag, className, text = "") {
-  const made = document.createElement(tag);
-  made.className = className;
-  made.textContent = text;
-  return made;
-}
-
 /**
  * The threads of the variant on screen, in the order they were opened: a thread's number is its
  * place. A thread that names no variant is on its still's first.
@@ -392,11 +386,6 @@ function entry({ author, at, body }) {
   who.append(new Date(at).toLocaleString([], WHEN));
   made.append(who, node("p", "text", body));
   return made;
-}
-
-/** What the button that resolves thread `t`, or reopens it, says. */
-function statusLabel(t) {
-  return t.status === "open" ? "Resolve" : "Reopen";
 }
 
 /** True when the image element `image` has its picture. */

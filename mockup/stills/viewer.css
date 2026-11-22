@@ -76,7 +76,7 @@ textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #1
 #draft i[data-corner="ne"], #draft i[data-corner="sw"] { cursor: nesw-resize; }
 #composer { position: absolute; z-index: 3; left: clamp(0px, var(--x), calc(100% - 300px)); top: calc(var(--y) + 20px); width: 300px; box-sizing: border-box; padding: 10px; background: #1b1b1f; border: 1px solid #555; border-radius: 10px; box-shadow: 0 8px 24px #000a; line-height: 1.4; user-select: text; -webkit-user-select: text; }
 #where { margin-right: auto; color: #999; font-size: 12px; }
-#panel { width: 340px; flex: none; display: flex; flex-direction: column; background: #1b1b1f; border-left: 1px solid #333; }
+#panel, #side { width: 340px; flex: none; display: flex; flex-direction: column; background: #1b1b1f; border-left: 1px solid #333; }
 #panel-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #333; }
 #close { font-size: 18px; line-height: 1; padding: 4px 10px; }
 #threads { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
@@ -295,7 +295,6 @@ header .working { margin: 0; white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .live header .lister { font-size: 14px; }
 .tally:not(:empty) { margin-left: 4px; padding: 0 6px; border-radius: 9px; background: #e11d48; color: #fff; font-size: 11px; font-weight: 600; }
-#side { width: 340px; flex: none; display: flex; flex-direction: column; background: #1b1b1f; border-left: 1px solid #333; }
 #shut { display: none; align-self: flex-end; border-color: transparent; background: none; }
 #cards { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 #cards:empty { display: none; }
